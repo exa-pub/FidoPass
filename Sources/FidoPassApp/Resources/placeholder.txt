@@ -1,0 +1,1 @@
+(Resource folder created for app icon and Info.plist)
