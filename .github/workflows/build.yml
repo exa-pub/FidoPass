@@ -1,0 +1,111 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: macOS Build (App + DMG)
+    runs-on: macos-13
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        # Adjust if you need a specific version
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swift-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            swift-${{ runner.os }}-
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Homebrew/Library/Taps
+          key: brew-${{ runner.os }}-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            brew-${{ runner.os }}-
+
+      - name: Install libfido2 (Homebrew)
+        run: |
+          brew update --preinstall
+          brew install libfido2 || brew upgrade libfido2 || true
+
+      - name: Resolve Swift dependencies
+        run: swift package resolve
+
+      - name: Run Tests (if any)
+        run: swift test --parallel
+        continue-on-error: true # Remove if you add tests and want to fail build
+
+      - name: Build release binaries
+        run: swift build -c release
+
+      - name: Build .app bundle
+        run: bash ./build_app.sh
+
+      - name: Create DMG
+        run: bash ./create_dmg.sh
+
+      - name: List outputs
+        run: |
+          ls -R .build/release | head -100
+          ls -lh FidoPass.dmg
+
+      - name: Upload App Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: FidoPass-app-bundle
+          path: .build/release/FidoPass.app
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: FidoPass-dmg
+          path: FidoPass.dmg
+          if-no-files-found: error
+
+  release:
+    name: Release (tag)
+    needs: build-macos
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-13
+    permissions:
+      contents: write
+    steps:
+      - name: Download DMG Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FidoPass-dmg
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          shasum -a 256 FidoPass.dmg > FidoPass.dmg.sha256
+          cat FidoPass.dmg.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/FidoPass.dmg
+            dist/FidoPass.dmg.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
