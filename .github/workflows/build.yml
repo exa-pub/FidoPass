@@ -19,7 +19,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select Xcode
-        # Adjust if you need a specific version
         run: |
           sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
@@ -44,15 +43,20 @@ jobs:
 
       - name: Install libfido2 (Homebrew)
         run: |
-          brew update --preinstall
-          brew install libfido2 || brew upgrade libfido2 || true
+          brew update -q
+          if ! brew list libfido2 >/dev/null 2>&1; then
+            brew install libfido2
+          else
+            brew upgrade libfido2 || true
+          fi
+          brew info libfido2
 
       - name: Resolve Swift dependencies
         run: swift package resolve
 
       - name: Run Tests (if any)
         run: swift test --parallel
-        continue-on-error: true # Remove if you add tests and want to fail build
+        continue-on-error: true
 
       - name: Build release binaries
         run: swift build -c release
