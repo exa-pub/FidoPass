@@ -2,3 +2,6 @@
 .build/
 *.dmg
 .DS_Store
+*.log
+libfido2/
+*.tmp/
