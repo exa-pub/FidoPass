@@ -30,6 +30,26 @@ final class AccountsViewModel: ObservableObject {
     @Published var showPlainPassword: Bool = false // reveal generated password
     @Published var lastCopiedPasswordAt: Date? = nil // ephemeral toast timestamp
     @Published var focusSearchFieldToken: Int = 0
+    @Published var reloading: Bool = false
+    @Published var toastMessage: ToastMessage? = nil
+    @Published var enrollmentPhase: EnrollmentPhase = .idle
+
+    enum EnrollmentPhase: Equatable {
+        case idle
+        case waiting(message: String)
+        case success(message: String)
+        case failure(message: String)
+
+        static func ==(lhs: EnrollmentPhase, rhs: EnrollmentPhase) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle): return true
+            case let (.waiting(l), .waiting(r)): return l == r
+            case let (.success(l), .success(r)): return l == r
+            case let (.failure(l), .failure(r)): return l == r
+            default: return false
+            }
+        }
+    }
 
     struct DeviceState: Identifiable, Hashable {
         let device: FidoPassCore.FidoDevice
@@ -39,11 +59,22 @@ final class AccountsViewModel: ObservableObject {
     }
     @Published var deviceStates: [String: DeviceState] = [:]
 
+    struct ToastMessage: Identifiable, Equatable {
+        enum Style { case info, success, warning, error }
+
+        let id = UUID()
+        let icon: String?
+        let title: String
+        let subtitle: String?
+        let style: Style
+    }
+
     private let core = FidoPassCore.shared
     private let userDefaultsKey = "recentLabels"
     private let ubiquitousKey = "recentLabels"
     private let ubiStore = NSUbiquitousKeyValueStore.default
     private var ubiObserver: NSObjectProtocol?
+    private var toastTask: Task<Void, Never>? = nil
 
     init() {
         loadRecentLabels()
@@ -54,9 +85,15 @@ final class AccountsViewModel: ObservableObject {
         }
     }
 
-    deinit { if let o = ubiObserver { NotificationCenter.default.removeObserver(o) } }
+    deinit {
+        if let o = ubiObserver { NotificationCenter.default.removeObserver(o) }
+        toastTask?.cancel()
+    }
 
     func reload() {
+        if reloading { return }
+        reloading = true
+        defer { reloading = false }
         do {
             let list = try core.listDevices()
             applyDeviceList(list)
@@ -121,6 +158,7 @@ final class AccountsViewModel: ObservableObject {
                     state.pin = pin
                     state.unlocked = true
                     self.deviceStates[device.path] = state
+                    self.showToast("Device unlocked", icon: "lock.open", style: .success)
                 }
                 await MainActor.run { self.reload() }
             } catch {
@@ -138,31 +176,57 @@ final class AccountsViewModel: ObservableObject {
     func enroll(accountId: String, rpId: String = "fidopass.local", requireUV: Bool = true) {
         guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Unlock the device first"; return }
         let pin = st.pin
-        Task {
+        enrollmentPhase = .waiting(message: "Touch your security key to confirm")
+        let core = self.core
+        let account = accountId
+        weak var weakSelf = self
+        Task.detached(priority: .userInitiated) {
             do {
-                let acc = try core.enroll(accountId: accountId, rpId: rpId, userName: "", requireUV: requireUV, residentKey: true, devicePath: path, askPIN: { pin })
+                let acc = try core.enroll(accountId: account, rpId: rpId, userName: "", requireUV: requireUV, residentKey: true, devicePath: path, askPIN: { pin })
                 await MainActor.run {
+                    guard let self = weakSelf else { return }
                     self.accounts.append(acc)
                     self.accounts.sort { $0.id < $1.id }
+                    self.showToast("Account added", icon: "plus", style: .success)
+                    self.enrollmentPhase = .idle
                     self.showNewAccountSheet = false
                 }
-            } catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
+            } catch {
+                await MainActor.run {
+                    guard let self = weakSelf else { return }
+                    self.errorMessage = error.localizedDescription
+                    self.enrollmentPhase = .failure(message: error.localizedDescription)
+                }
+            }
         }
     }
 
     func enrollPortable(accountId: String, importedKeyB64: String?) {
         guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Unlock the device first"; return }
         let pin = st.pin
-        Task {
+        enrollmentPhase = .waiting(message: "Touch your security key to confirm portable enrollment")
+        let core = self.core
+        let account = accountId
+        weak var weakSelf = self
+        Task.detached(priority: .userInitiated) {
             do {
-                let (acc, generated) = try core.enrollPortable(accountId: accountId, requireUV: true, devicePath: path, askPIN: { pin }, importedKeyB64: importedKeyB64)
+                let (acc, generated) = try core.enrollPortable(accountId: account, requireUV: true, devicePath: path, askPIN: { pin }, importedKeyB64: importedKeyB64)
                 await MainActor.run {
+                    guard let self = weakSelf else { return }
                     self.accounts.append(acc)
                     self.accounts.sort { $0.id < $1.id }
-                    if let g = generated { self.generatedPassword = "IMPORTED:" + g } // temporary place to show generated key
+                    if let g = generated { self.generatedPassword = "IMPORTED:" + g }
+                    self.showToast("Portable account ready", icon: "key.horizontal", style: .success)
+                    self.enrollmentPhase = .idle
                     self.showNewAccountSheet = false
                 }
-            } catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
+            } catch {
+                await MainActor.run {
+                    guard let self = weakSelf else { return }
+                    self.errorMessage = error.localizedDescription
+                    self.enrollmentPhase = .failure(message: error.localizedDescription)
+                }
+            }
         }
     }
 
@@ -177,6 +241,7 @@ final class AccountsViewModel: ObservableObject {
                 await MainActor.run {
                     self.generatedPassword = pwd
                     if !label.isEmpty { self.addRecentLabel(label) }
+                    self.showToast("Password generated", icon: "wand.and.stars", style: .success)
                 }
             } catch {
                 await MainActor.run { self.errorMessage = error.localizedDescription }
@@ -188,7 +253,10 @@ final class AccountsViewModel: ObservableObject {
         }
     }
 
-    func markPasswordCopied() { lastCopiedPasswordAt = Date() }
+    func markPasswordCopied() {
+        lastCopiedPasswordAt = Date()
+        showToast("Password copied", icon: "doc.on.doc.fill", style: .success)
+    }
 
     func deleteAccount(_ account: Account) {
         guard let path = account.devicePath, let st = deviceStates[path], st.unlocked else { return }
@@ -199,6 +267,7 @@ final class AccountsViewModel: ObservableObject {
                 await MainActor.run {
                     accounts.removeAll { $0.id == account.id && $0.devicePath == path }
                     if selected?.id == account.id { selected = nil }
+                    self.showToast("Account deleted", icon: "trash", style: .warning)
                 }
                 // Reload to ensure device view stays in sync (credential removed on token)
                 await MainActor.run { self.reload() }
@@ -206,6 +275,10 @@ final class AccountsViewModel: ObservableObject {
                 await MainActor.run { self.errorMessage = error.localizedDescription }
             }
         }
+    }
+
+    func resetEnrollmentState() {
+        enrollmentPhase = .idle
     }
 
     // MARK: - Recent Labels Persistence
@@ -263,6 +336,24 @@ final class AccountsViewModel: ObservableObject {
         guard selected == nil, let path, deviceStates[path]?.unlocked == true else { return }
         if let first = accounts.first(where: { $0.devicePath == path }) {
             selected = first
+        }
+    }
+
+    func showToast(_ title: String,
+                   icon: String? = nil,
+                   style: ToastMessage.Style = .info,
+                   subtitle: String? = nil,
+                   duration: TimeInterval = 3.0) {
+        toastTask?.cancel()
+        let toast = ToastMessage(icon: icon, title: title, subtitle: subtitle, style: style)
+        toastMessage = toast
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            await MainActor.run {
+                if self?.toastMessage?.id == toast.id {
+                    self?.toastMessage = nil
+                }
+            }
         }
     }
 }

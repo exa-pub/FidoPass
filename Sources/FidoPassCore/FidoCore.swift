@@ -123,9 +123,86 @@ public final class FidoPassCore {
         public let path: String
         public let product: String
         public let manufacturer: String
+        public let vendorId: Int
+        public let productId: Int
 
         public var displayName: String {
-            manufacturer.isEmpty ? product : "\(manufacturer) \(product)"
+            let combined = manufacturer.isEmpty ? product : "\(manufacturer) \(product)"
+            let fallback = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+            return fallback.isEmpty ? path : fallback
+        }
+
+        public var conciseName: String {
+            let shortProduct = FidoDevice.primaryModelName(from: product)
+            if manufacturer.isEmpty {
+                return shortProduct ?? product
+            }
+            if let shortProduct, !shortProduct.isEmpty {
+                if shortProduct.compare(manufacturer, options: .caseInsensitive) == .orderedSame {
+                    return manufacturer
+                }
+                return "\(manufacturer) \(shortProduct)"
+            }
+            return "\(manufacturer) \(product)"
+        }
+
+        private static func primaryModelName(from product: String) -> String? {
+            let trimmed = product.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let delimiters = CharacterSet(charactersIn: " /-+")
+            if let range = trimmed.rangeOfCharacter(from: delimiters) {
+                let segment = trimmed[..<range.lowerBound]
+                if !segment.isEmpty { return String(segment) }
+            }
+            if let first = trimmed.split(whereSeparator: { $0.isWhitespace }).first {
+                return String(first)
+            }
+            return trimmed
+        }
+
+        public var identityLabel: String {
+            FidoDevice.identityLabel(path: path, vendorId: vendorId, productId: productId)
+        }
+
+        public var identitySeed: String {
+            FidoDevice.identitySeed(path: path, vendorId: vendorId, productId: productId)
+        }
+
+        private static func identityLabel(path: String, vendorId: Int, productId: Int) -> String {
+            let vidHex = String(format: "%04X", vendorId)
+            let pidHex = String(format: "%04X", productId)
+            if let location = locationId(from: path) {
+                let locationHex = String(format: "%08X", location)
+                return "VID \(vidHex) PID \(pidHex) @\(locationHex)"
+            }
+            let hash = shortHash(from: path)
+            return "VID \(vidHex) PID \(pidHex) #\(hash)"
+        }
+
+        private static func identitySeed(path: String, vendorId: Int, productId: Int) -> String {
+            if let location = locationId(from: path) {
+                return String(format: "%08X", location)
+            }
+            return "\(vendorId):\(productId):\(path)"
+        }
+
+        private static func locationId(from path: String) -> Int? {
+            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let range = trimmed.range(of: "@0x") {
+                let hexSlice = trimmed[range.upperBound...].prefix { $0.isHexDigit }
+                if !hexSlice.isEmpty { return Int(hexSlice, radix: 16) }
+            }
+            if let range = trimmed.range(of: "@") {
+                let decimalSlice = trimmed[range.upperBound...].prefix { $0.isNumber }
+                if !decimalSlice.isEmpty { return Int(decimalSlice, radix: 10) }
+            }
+            return nil
+        }
+
+        private static func shortHash(from string: String) -> String {
+            let digest = SHA256.hash(data: Data(string.utf8))
+            let prefix = digest.prefix(3)
+            return prefix.map { String(format: "%02X", $0) }.joined()
         }
     }
     public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
@@ -140,7 +217,13 @@ public final class FidoPassCore {
             let path = String(cString: cpath)
             let prod = fido_dev_info_product_string(di).map { String(cString: $0) } ?? "Unknown"
             let manu = fido_dev_info_manufacturer_string(di).map { String(cString: $0) } ?? ""
-            out.append(FidoDevice(path: path, product: prod, manufacturer: manu))
+            let vendorId = Int(fido_dev_info_vendor(di))
+            let productId = Int(fido_dev_info_product(di))
+            out.append(FidoDevice(path: path,
+                                  product: prod,
+                                  manufacturer: manu,
+                                  vendorId: vendorId,
+                                  productId: productId))
         }
         return out
     }
@@ -443,3 +526,4 @@ public final class FidoPassCore {
 }
 
 // (legacy decoding removed)
+

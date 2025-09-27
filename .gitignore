@@ -3,3 +3,4 @@
 *.dmg
 .DS_Store
 *.log
+libfido2/

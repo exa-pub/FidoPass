@@ -24,7 +24,11 @@ let package = Package(
         .target(
             name: "FidoPassCore",
             dependencies: ["CLibfido2"],
-            swiftSettings: [.define("SWIFT_PACKAGE")]
+            swiftSettings: [.define("SWIFT_PACKAGE")],
+            linkerSettings: [
+                .linkedFramework("IOKit", .when(platforms: [.macOS])),
+                .linkedFramework("CoreFoundation", .when(platforms: [.macOS]))
+            ]
         ),
         .executableTarget(
             name: "FidoPassApp",
