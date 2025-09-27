@@ -29,6 +29,7 @@ final class AccountsViewModel: ObservableObject {
     @Published var accountSearch: String = "" // live search filter
     @Published var showPlainPassword: Bool = false // reveal generated password
     @Published var lastCopiedPasswordAt: Date? = nil // ephemeral toast timestamp
+    @Published var focusSearchFieldToken: Int = 0
 
     struct DeviceState: Identifiable, Hashable {
         let device: FidoPassCore.FidoDevice
@@ -63,6 +64,7 @@ final class AccountsViewModel: ObservableObject {
             if let current = selected, !accounts.contains(where: { $0.id == current.id && $0.devicePath == current.devicePath }) {
                 selected = nil
             }
+            autoSelectFirstAccountIfPossible(for: selectedDevicePath)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -240,6 +242,27 @@ final class AccountsViewModel: ObservableObject {
             // For simplicity, reorder by first appearance across both preserving existing front order
             recentLabels = Array(merged.prefix(10))
             if Set(recentLabels) != before { UserDefaults.standard.set(recentLabels, forKey: userDefaultsKey) }
+        }
+    }
+
+    func requestSearchFocus() {
+        focusSearchFieldToken &+= 1
+    }
+
+    func requestDeleteSelectedAccount() {
+        guard let current = selected else { return }
+        accountPendingDeletion = current
+        showDeleteConfirm = true
+    }
+
+    func selectDefaultAccount(for path: String?) {
+        autoSelectFirstAccountIfPossible(for: path)
+    }
+
+    private func autoSelectFirstAccountIfPossible(for path: String?) {
+        guard selected == nil, let path, deviceStates[path]?.unlocked == true else { return }
+        if let first = accounts.first(where: { $0.devicePath == path }) {
+            selected = first
         }
     }
 }

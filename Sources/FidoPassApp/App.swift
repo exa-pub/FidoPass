@@ -24,10 +24,20 @@ struct FidoPassApp: App {
                     #endif
                 }
         }
-        .commands { // basic commands for refresh
+        .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New account") { accountsVM.showNewAccountSheet = true }
                     .keyboardShortcut("n", modifiers: [.command])
+            }
+            CommandGroup(after: .newItem) {
+                Button("Reload data") { accountsVM.reload() }
+                    .keyboardShortcut("r", modifiers: [.command])
+                Button("Search accounts") { accountsVM.requestSearchFocus() }
+                    .keyboardShortcut("f", modifiers: [.command])
+                    .disabled(accountsVM.devices.isEmpty)
+                Button("Delete selected account") { accountsVM.requestDeleteSelectedAccount() }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .disabled(accountsVM.selected == nil)
             }
         }
     }

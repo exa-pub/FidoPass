@@ -2,6 +2,9 @@ import SwiftUI
 import FidoPassCore
 #if canImport(AppKit)
 import AppKit
+import Carbon.HIToolbox
+#elseif canImport(UIKit)
+import UIKit
 #endif
 
 struct ContentView: View {
@@ -18,6 +21,7 @@ struct ContentView: View {
             AccountColumnView(viewModel: vm)
             AccountDetailContainerView(viewModel: vm)
         }
+        .navigationViewStyle(.columns)
         .sheet(isPresented: $vm.showNewAccountSheet) { NewAccountView() }
         .alert("Delete account?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { _ in
             Button("Cancel", role: .cancel) { vm.accountPendingDeletion = nil }
@@ -38,8 +42,10 @@ struct ContentView: View {
             if vm.labelInput.isEmpty { vm.labelInput = "default" }
         }
         .onChange(of: vm.selectedDevicePath) { newValue in
-            guard let selected = vm.selected else { return }
-            if selected.devicePath != newValue { vm.selected = nil }
+            if vm.selected?.devicePath != newValue {
+                vm.selected = nil
+                vm.selectDefaultAccount(for: newValue)
+            }
         }
         .toolbar {
             ToolbarButtons(onNewAccount: { vm.showNewAccountSheet = true }, onReload: vm.reload)
@@ -56,6 +62,52 @@ struct ContentView: View {
         NSPasteboard.general.setString(string, forType: .string)
     #endif
     }
+
+    static func preferEnglishKeyboardLayoutIfNeeded() {
+    #if canImport(AppKit)
+        guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
+        if languages(for: current).contains(where: { $0.hasPrefix("en") }) {
+            return
+        }
+
+        let filter = [
+            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource,
+            kTISPropertyInputSourceType: kTISTypeKeyboardLayout
+        ] as CFDictionary
+
+        guard let cfArray = TISCreateInputSourceList(filter, false)?.takeRetainedValue() else { return }
+        var englishSource: TISInputSource?
+        let preferredIDs: Set<String> = ["com.apple.keylayout.ABC", "com.apple.keylayout.US", "com.apple.keylayout.British"]
+        let count = CFArrayGetCount(cfArray)
+        for index in 0..<count {
+            let raw = unsafeBitCast(CFArrayGetValueAtIndex(cfArray, index), to: TISInputSource.self)
+            let languages = languages(for: raw)
+            guard languages.contains(where: { $0.hasPrefix("en") }) else { continue }
+            if englishSource == nil { englishSource = raw }
+            if let id = inputSourceID(for: raw),
+               preferredIDs.contains(id) {
+                englishSource = raw
+                break
+            }
+        }
+        if let englishSource, englishSource != current {
+            TISSelectInputSource(englishSource)
+        }
+    #endif
+    }
+
+    #if canImport(AppKit)
+    private static func languages(for source: TISInputSource) -> [String] {
+        guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) else { return [] }
+        let array = Unmanaged<CFArray>.fromOpaque(raw).takeUnretainedValue() as NSArray
+        return array.compactMap { $0 as? String }
+    }
+
+    private static func inputSourceID(for source: TISInputSource) -> String? {
+        guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
+        return Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+    }
+    #endif
 }
 
 private struct ToolbarButtons: ToolbarContent {
@@ -66,8 +118,10 @@ private struct ToolbarButtons: ToolbarContent {
         ToolbarItemGroup(placement: .automatic) {
             Button(action: onNewAccount) { Image(systemName: "plus") }
                 .help("New account")
+                .keyboardShortcut("n", modifiers: [.command])
             Button(action: onReload) { Image(systemName: "arrow.clockwise") }
                 .help("Refresh list")
+                .keyboardShortcut("r", modifiers: [.command])
         }
     }
 }
@@ -197,6 +251,7 @@ private struct AccountColumnView: View {
 
 private struct AccountColumnHeader: View {
     @ObservedObject var viewModel: AccountsViewModel
+    @FocusState private var searchFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -221,13 +276,17 @@ private struct AccountColumnHeader: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+                    .keyboardShortcut("n", modifiers: [.command])
                 }
             }
-            SearchField(text: $viewModel.accountSearch)
+            SearchField(text: $viewModel.accountSearch, focus: $searchFieldFocused)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(Color.primary.opacity(0.03))
+        .onReceive(viewModel.$focusSearchFieldToken) { _ in
+            searchFieldFocused = true
+        }
     }
 
     private var headerSubtitle: String? {
@@ -266,6 +325,7 @@ private struct AccountColumnHeader: View {
 
 private struct SearchField: View {
     @Binding var text: String
+    var focus: FocusState<Bool>.Binding
 
     var body: some View {
         HStack(spacing: 6) {
@@ -273,6 +333,7 @@ private struct SearchField: View {
             TextField("Search accounts", text: $text)
                 .textFieldStyle(.plain)
                 .disableAutocorrection(true)
+                .focused(focus)
             if !text.isEmpty {
                 Button {
                     withAnimation { text = "" }
@@ -280,6 +341,7 @@ private struct SearchField: View {
                     Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .keyboardShortcut(.escape, modifiers: [])
             }
         }
         .padding(8)
@@ -309,6 +371,7 @@ private struct AccountListView: View {
             }
         }
         .listStyle(.inset)
+        .onDeleteCommand(perform: viewModel.requestDeleteSelectedAccount)
     }
 
     private var filteredAccounts: [Account] {
@@ -355,10 +418,11 @@ private struct AccountRowView: View {
 
     var body: some View {
         let isPortable = account.rpId == "fidopass.portable"
+        let isSelected = viewModel.selected?.id == account.id && viewModel.selected?.devicePath == account.devicePath
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isPortable ? Color.yellow.opacity(0.18) : Color.blue.opacity(0.16))
+                    .fill(isPortable ? Color.yellow.opacity(isSelected ? 0.26 : 0.18) : Color.blue.opacity(isSelected ? 0.28 : 0.16))
                     .frame(width: 40, height: 40)
                 Image(systemName: isPortable ? "key.horizontal.fill" : "key.fill")
                     .foregroundColor(isPortable ? .orange : .blue)
@@ -367,10 +431,10 @@ private struct AccountRowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(account.id)
                     .font(.body.weight(.medium))
-                    .foregroundColor(.primary)
+                    .foregroundColor(isSelected ? .accentColor : .primary)
                 Text(isPortable ? "Portable" : (account.rpId.isEmpty ? "No RP" : account.rpId))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(isSelected ? .accentColor.opacity(0.75) : .secondary)
             }
             Spacer()
             if viewModel.generatingAccountId == account.id {
@@ -383,7 +447,19 @@ private struct AccountRowView: View {
             }
         }
         .padding(.vertical, 6)
+        .padding(.horizontal, 6)
         .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.clear, lineWidth: 1)
+        )
+        .animation(.easeInOut(duration: 0.15), value: isSelected)
+        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+        .listRowBackground(Color.clear)
         .onTapGesture { viewModel.selected = account }
         .contextMenu {
             Button(role: .destructive) {
@@ -424,6 +500,7 @@ private struct UnlockPromptView: View {
 private struct PinUnlockRow: View {
     @ObservedObject var viewModel: AccountsViewModel
     let device: FidoPassCore.FidoDevice
+    @FocusState private var pinFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -436,11 +513,11 @@ private struct PinUnlockRow: View {
             }))
             .textFieldStyle(.roundedBorder)
             .frame(width: 160)
+            .onSubmit(attemptUnlock)
+            .focused($pinFocused)
 
             Button {
-                if let pin = viewModel.deviceStates[device.path]?.pin, !pin.isEmpty {
-                    viewModel.unlockDevice(device, pin: pin)
-                }
+                attemptUnlock()
             } label: {
                 Label("Unlock", systemImage: "lock.open")
             }
@@ -448,6 +525,29 @@ private struct PinUnlockRow: View {
             .controlSize(.small)
             .help("Unlock the device with the provided PIN")
             .disabled((viewModel.deviceStates[device.path]?.pin ?? "").isEmpty)
+        }
+        .onChange(of: pinFocused) { isFocused in
+            if isFocused {
+                ContentView.preferEnglishKeyboardLayoutIfNeeded()
+            }
+        }
+        .onChange(of: device.path) { _ in
+            DispatchQueue.main.async {
+                pinFocused = true
+                ContentView.preferEnglishKeyboardLayoutIfNeeded()
+            }
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                pinFocused = true
+                ContentView.preferEnglishKeyboardLayoutIfNeeded()
+            }
+        }
+    }
+
+    private func attemptUnlock() {
+        if let pin = viewModel.deviceStates[device.path]?.pin, !pin.isEmpty {
+            viewModel.unlockDevice(device, pin: pin)
         }
     }
 }
@@ -494,11 +594,31 @@ private struct AccountDetailContainerView: View {
             if let account = viewModel.selected, let path = account.devicePath, viewModel.deviceStates[path]?.unlocked == true {
                 ScrollView {
                     AccountDetailView(viewModel: viewModel, account: account)
+                        .frame(maxWidth: 560, alignment: .leading)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 24)
+                        .frame(maxWidth: .infinity)
                 }
             } else {
                 AccountDetailPlaceholderView()
+                    .frame(maxWidth: 480)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(detailBackground)
+    }
+
+    private var detailBackground: Color {
+    #if canImport(AppKit)
+        return Color(nsColor: .underPageBackgroundColor)
+    #elseif canImport(UIKit)
+        return Color(UIColor.systemGroupedBackground)
+    #else
+        return Color.secondary.opacity(0.05)
+    #endif
     }
 }
 
@@ -524,7 +644,7 @@ private struct AccountDetailView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(24)
+        .padding(.bottom, 12)
     }
 
     private var deviceName: String {
@@ -591,7 +711,10 @@ private struct AccountDetailView: View {
                     Text("Use labels to produce different passwords for one account. Recent labels are available from the menu on the right.")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    LabelInputView(text: $viewModel.labelInput, recentLabels: $viewModel.recentLabels)
+                    LabelInputView(text: $viewModel.labelInput,
+                                    recentLabels: $viewModel.recentLabels,
+                                    canSubmit: canSubmit,
+                                    onSubmit: onGenerate)
                     PasswordActionsView(isGenerating: viewModel.generating,
                                          canSubmit: canSubmit,
                                          onGenerate: onGenerate,
@@ -633,11 +756,18 @@ private struct AccountDetailView: View {
 private struct LabelInputView: View {
     @Binding var text: String
     @Binding var recentLabels: [String]
+    let canSubmit: Bool
+    let onSubmit: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 6) {
             TextField("Label", text: $text)
                 .textFieldStyle(.roundedBorder)
+                .submitLabel(.done)
+                .onSubmit {
+                    guard canSubmit else { return }
+                    onSubmit?()
+                }
             Menu("⌄") {
                 ForEach(recentLabels, id: \.self) { label in
                     Button(label) { text = label }
@@ -669,6 +799,7 @@ private struct PasswordActionsView: View {
             .controlSize(.small)
             .help("Generate password")
             .disabled(!canSubmit)
+            .keyboardShortcut(.return, modifiers: [.command])
 
             Button(action: onGenerateAndCopy) {
                 Label("Generate and copy", systemImage: "doc.on.doc")
@@ -677,6 +808,7 @@ private struct PasswordActionsView: View {
             .controlSize(.small)
             .help("Generate and copy immediately (hidden)")
             .disabled(!canSubmit)
+            .keyboardShortcut("c", modifiers: [.command, .shift])
 
             if isGenerating { ProgressView().controlSize(.small) }
         }
@@ -831,7 +963,6 @@ private struct AccountDetailPlaceholderView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -878,6 +1009,7 @@ struct NewAccountView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Create") {
                     if isPortable {
                         vm.enrollPortable(accountId: accountId, importedKeyB64: importedKeyB64.isEmpty ? nil : importedKeyB64)
@@ -886,6 +1018,7 @@ struct NewAccountView: View {
                     }
                 }
                 .disabled(!canCreate)
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
