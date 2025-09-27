@@ -123,6 +123,10 @@ public final class FidoPassCore {
         public let path: String
         public let product: String
         public let manufacturer: String
+
+        public var displayName: String {
+            manufacturer.isEmpty ? product : "\(manufacturer) \(product)"
+        }
     }
     public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
         guard let rawList = fido_dev_info_new(limit) else { throw FidoPassError.noDevices }
@@ -218,8 +222,8 @@ public final class FidoPassCore {
     // if nil -> generate a new ImportedKey (random 32 bytes), persist the external value and return the ImportedKey for display/export
     public func enrollPortable(accountId: String, requireUV: Bool = true, devicePath: String? = nil, askPIN: (() -> String?)? = nil, importedKeyB64: String?) throws -> (Account, generatedImportedKeyB64: String?) {
         let rpId = "fidopass.portable"
-    // Enroll with empty user.name; user.id (metadata) immutable. Later we only set user.name to external base64.
-    let account = try enroll(accountId: accountId, rpId: rpId, userName: "", requireUV: requireUV, residentKey: true, devicePath: devicePath, askPIN: askPIN)
+        // Enroll with empty user.name; user.id (metadata) immutable. Later we only set user.name to external base64.
+        let account = try enroll(accountId: accountId, rpId: rpId, userName: "", requireUV: requireUV, residentKey: true, devicePath: devicePath, askPIN: askPIN)
         // derive A
         let a = try deriveFixedComponent(account: account, requireUV: requireUV, pinProvider: askPIN)
         let importedKey: Data
@@ -233,46 +237,15 @@ public final class FidoPassCore {
         guard a.count == 32 else { throw FidoPassError.invalidState("Fixed component !=32") }
         let external = Data(zip(importedKey, a).map { $0 ^ $1 })
         var acc2 = account
-    acc2.userName = external.base64EncodedString() // store external in model
-    // Best-effort: set authenticator user.name (NOT user.id) to external base64; user_id stays immutable.
-    try? setCredentialUserName(account: acc2, newUserName: acc2.userName, requireUV: requireUV, pinProvider: askPIN)
+        acc2.userName = external.base64EncodedString() // store external in model
+        // Best-effort: set authenticator user.name (NOT user.id) to external base64; user_id stays immutable.
+        try? setCredentialUserName(account: acc2, newUserName: acc2.userName, requireUV: requireUV, pinProvider: askPIN)
         return (acc2, importedKeyB64 == nil ? importedKey.base64EncodedString() : nil)
     }
 
     private func deriveFixedComponent(account: Account, requireUV: Bool, pinProvider: (() -> String?)?) throws -> Data {
-        // Salt = SHA256("fidopass|fixed-challenge|v1")
-        var hasher = SHA256()
-        hasher.update(data: Data("fidopass|fixed-challenge|v1".utf8))
-        let fixed = Data(hasher.finalize()) // 32 bytes
-        return try withOpenedDevice(path: account.devicePath) { dev, _ in
-            try ensureHmacSecretSupported(dev)
-            guard let rawAssert = fido_assert_new() else { throw FidoPassError.invalidState("assert_new") }
-            var assert: OpaquePointer? = rawAssert
-            defer { fido_assert_free(&assert) }
-            try check(fido_assert_set_rp(assert, account.rpId), "assert_set_rp")
-            let credId = Data(base64Encoded: account.credentialIdB64)!
-            try credId.withUnsafeBytes { ptr in
-                try check(fido_assert_allow_cred(assert, ptr.bindMemory(to: UInt8.self).baseAddress, credId.count), "assert_allow_cred")
-            }
-            try check(fido_assert_set_extensions(assert, Int32(FIDO_EXT_HMAC_SECRET)), "assert_set_extensions(hmac-secret)")
-            try fixed.withUnsafeBytes { ptr in
-                try check(fido_assert_set_hmac_salt(assert, ptr.bindMemory(to: UInt8.self).baseAddress, fixed.count), "assert_set_hmac_salt")
-            }
-            try check(fido_assert_set_up(assert, FIDO_OPT_TRUE), "assert_set_up")
-            try check(fido_assert_set_uv(assert, requireUV ? FIDO_OPT_TRUE : FIDO_OPT_OMIT), "assert_set_uv")
-            let challenge = randomBytes(32)
-            try challenge.withUnsafeBytes { ptr in
-                try check(fido_assert_set_clientdata_hash(assert, ptr.bindMemory(to: UInt8.self).baseAddress, challenge.count), "assert_set_clientdata_hash")
-            }
-            var pinCString: UnsafePointer<CChar>? = nil
-            if requireUV, let pin = pinProvider?() { pinCString = UnsafePointer(strdup(pin)) }
-            defer { if pinCString != nil { free(UnsafeMutableRawPointer(mutating: pinCString)) } }
-            try check(fido_dev_get_assert(dev, assert, pinCString), "dev_get_assert")
-            guard let hptr = fido_assert_hmac_secret_ptr(assert, 0) else { throw FidoPassError.invalidState("assert_hmac_secret_ptr=NULL") }
-            let hlen = fido_assert_hmac_secret_len(assert, 0)
-            let secret = Data(bytes: hptr, count: hlen)
-            return secret
-        }
+        let salt = Data(SHA256.hash(data: Data("fidopass|fixed-challenge|v1".utf8)))
+        return try performHmacSecret(account: account, salt: salt, requireUV: requireUV, pinProvider: pinProvider)
     }
 
     // Use Credential Management to set user.name (display name left unchanged -> account.id)
@@ -304,49 +277,72 @@ public final class FidoPassCore {
         }
     }
 
-    // MARK: Derive hmac-secret
-    public func deriveSecret(account: Account, label: String, requireUV: Bool = true, pinProvider: (() -> String?)? = nil) throws -> Data {
-        let salt = salt32(label: label, rpId: account.rpId, accountId: account.id, revision: account.revision)
+    private func performHmacSecret(account: Account, salt: Data, requireUV: Bool, pinProvider: (() -> String?)?) throws -> Data {
         return try withOpenedDevice(path: account.devicePath) { dev, _ in
             try ensureHmacSecretSupported(dev)
             guard let rawAssert = fido_assert_new() else { throw FidoPassError.invalidState("assert_new") }
-            var assert: OpaquePointer? = rawAssert
-            defer { fido_assert_free(&assert) }
-            try check(fido_assert_set_rp(assert, account.rpId), "assert_set_rp")
+            var assertion: OpaquePointer? = rawAssert
+            defer { fido_assert_free(&assertion) }
+
+            try check(fido_assert_set_rp(assertion, account.rpId), "assert_set_rp")
+
             let credId = Data(base64Encoded: account.credentialIdB64)!
             try credId.withUnsafeBytes { ptr in
-                try check(fido_assert_allow_cred(assert, ptr.bindMemory(to: UInt8.self).baseAddress, credId.count), "assert_allow_cred")
+                try check(fido_assert_allow_cred(assertion,
+                                                 ptr.bindMemory(to: UInt8.self).baseAddress,
+                                                 credId.count),
+                          "assert_allow_cred")
             }
-            try check(fido_assert_set_extensions(assert, Int32(FIDO_EXT_HMAC_SECRET)), "assert_set_extensions(hmac-secret)")
+
+            try check(fido_assert_set_extensions(assertion, Int32(FIDO_EXT_HMAC_SECRET)), "assert_set_extensions(hmac-secret)")
             try salt.withUnsafeBytes { ptr in
-                try check(fido_assert_set_hmac_salt(assert, ptr.bindMemory(to: UInt8.self).baseAddress, salt.count), "assert_set_hmac_salt")
+                try check(fido_assert_set_hmac_salt(assertion,
+                                                    ptr.bindMemory(to: UInt8.self).baseAddress,
+                                                    salt.count),
+                          "assert_set_hmac_salt")
             }
-            try check(fido_assert_set_up(assert, FIDO_OPT_TRUE), "assert_set_up")
-            try check(fido_assert_set_uv(assert, requireUV ? FIDO_OPT_TRUE : FIDO_OPT_OMIT), "assert_set_uv")
+
+            try check(fido_assert_set_up(assertion, FIDO_OPT_TRUE), "assert_set_up")
+            try check(fido_assert_set_uv(assertion, requireUV ? FIDO_OPT_TRUE : FIDO_OPT_OMIT), "assert_set_uv")
+
             let challenge = randomBytes(32)
             try challenge.withUnsafeBytes { ptr in
-                try check(fido_assert_set_clientdata_hash(assert, ptr.bindMemory(to: UInt8.self).baseAddress, challenge.count), "assert_set_clientdata_hash")
+                try check(fido_assert_set_clientdata_hash(assertion,
+                                                          ptr.bindMemory(to: UInt8.self).baseAddress,
+                                                          challenge.count),
+                          "assert_set_clientdata_hash")
             }
+
             var pinCString: UnsafePointer<CChar>? = nil
-            if requireUV, let pin = pinProvider?() { pinCString = UnsafePointer(strdup(pin)) }
+            if requireUV, let pin = pinProvider?() {
+                pinCString = UnsafePointer(strdup(pin))
+            }
             defer { if pinCString != nil { free(UnsafeMutableRawPointer(mutating: pinCString)) } }
-            try check(fido_dev_get_assert(dev, assert, pinCString), "dev_get_assert")
-            let idx = 0
-            guard let hptr = fido_assert_hmac_secret_ptr(assert, idx) else { throw FidoPassError.invalidState("assert_hmac_secret_ptr=NULL") }
-            let hlen = fido_assert_hmac_secret_len(assert, idx)
-            let secret = Data(bytes: hptr, count: hlen)
-            return secret
+
+            try check(fido_dev_get_assert(dev, assertion, pinCString), "dev_get_assert")
+
+            guard let hmacPtr = fido_assert_hmac_secret_ptr(assertion, 0) else {
+                throw FidoPassError.invalidState("assert_hmac_secret_ptr=NULL")
+            }
+            let length = fido_assert_hmac_secret_len(assertion, 0)
+            return Data(bytes: hmacPtr, count: length)
         }
+    }
+
+    // MARK: Derive hmac-secret
+    public func deriveSecret(account: Account, label: String, requireUV: Bool = true, pinProvider: (() -> String?)? = nil) throws -> Data {
+        let salt = salt32(label: label, rpId: account.rpId, accountId: account.id, revision: account.revision)
+        return try performHmacSecret(account: account, salt: salt, requireUV: requireUV, pinProvider: pinProvider)
     }
 
     // MARK: Password generation
     // Portable passwords must depend only on ImportedKey, label, and policy.
     // Use a dedicated salt portableLabelSalt(label) = SHA256("fidopass|portable|" + label)
     private func portableLabelSalt(_ label: String) -> Data {
-        var h = SHA256()
-        h.update(data: Data("fidopass|portable|".utf8))
-        h.update(data: Data(label.utf8))
-        return Data(h.finalize())
+        var hasher = SHA256()
+        hasher.update(data: Data("fidopass|portable|".utf8))
+        hasher.update(data: Data(label.utf8))
+        return Data(hasher.finalize())
     }
     public func generatePassword(account: Account, label: String, policy override: PasswordPolicy? = nil, requireUV: Bool = true, pinProvider: (() -> String?)? = nil) throws -> String {
         let policy = override ?? account.policy

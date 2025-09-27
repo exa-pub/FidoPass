@@ -1,32 +1,38 @@
 import SwiftUI
 import FidoPassCore
+#if canImport(AppKit)
 import AppKit
+#endif
 
 struct ContentView: View {
     @EnvironmentObject var vm: AccountsViewModel
     private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
     }()
 
     var body: some View {
         NavigationView {
-            deviceSidebar
-            accountColumn
-            detailPane
+            DeviceSidebarView(viewModel: vm)
+            AccountColumnView(viewModel: vm)
+            AccountDetailContainerView(viewModel: vm)
         }
         .sheet(isPresented: $vm.showNewAccountSheet) { NewAccountView() }
-        .alert("Delete account?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { acc in
+        .alert("Delete account?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { _ in
             Button("Cancel", role: .cancel) { vm.accountPendingDeletion = nil }
             Button("Delete", role: .destructive) {
-                if let a = vm.accountPendingDeletion { vm.deleteAccount(a) }
+                if let account = vm.accountPendingDeletion { vm.deleteAccount(account) }
                 vm.accountPendingDeletion = nil
             }
-        } message: { acc in
-            Text("Are you sure you want to delete ‘\(acc.id)’?")
+        } message: { account in
+            Text("Are you sure you want to delete ‘\(account.id)’?")
         }
-        .alert("Error", isPresented: Binding(get: { vm.errorMessage != nil }, set: { _ in vm.errorMessage = nil })) { Button("OK", role: .cancel) {} } message: { Text(vm.errorMessage ?? "") }
+        .alert("Error", isPresented: Binding(get: { vm.errorMessage != nil }, set: { _ in vm.errorMessage = nil })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(vm.errorMessage ?? "")
+        }
         .onAppear {
             vm.reload()
             if vm.labelInput.isEmpty { vm.labelInput = "default" }
@@ -35,26 +41,53 @@ struct ContentView: View {
             guard let selected = vm.selected else { return }
             if selected.devicePath != newValue { vm.selected = nil }
         }
-        .toolbar { toolbarButtons }
+        .toolbar {
+            ToolbarButtons(onNewAccount: { vm.showNewAccountSheet = true }, onReload: vm.reload)
+        }
     }
 
-    // MARK: - Sidebar
-    private var deviceSidebar: some View {
-        List(selection: Binding(get: { vm.selectedDevicePath }, set: { vm.selectedDevicePath = $0 })) {
+    static func relativeTime(from date: Date) -> String {
+        relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    static func copyToPasteboard(_ string: String) {
+    #if canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+    #endif
+    }
+}
+
+private struct ToolbarButtons: ToolbarContent {
+    let onNewAccount: () -> Void
+    let onReload: () -> Void
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .automatic) {
+            Button(action: onNewAccount) { Image(systemName: "plus") }
+                .help("New account")
+            Button(action: onReload) { Image(systemName: "arrow.clockwise") }
+                .help("Refresh list")
+        }
+    }
+}
+
+private struct DeviceSidebarView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+
+    var body: some View {
+        List(selection: Binding(get: { viewModel.selectedDevicePath }, set: { viewModel.selectedDevicePath = $0 })) {
             Section {
-                if vm.devices.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("No devices")
-                            .font(.headline)
-                        Text("Connect a FIDO key to manage accounts.")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 24)
+                if viewModel.devices.isEmpty {
+                    DeviceSidebarEmptyState()
                 } else {
-                    ForEach(vm.devices, id: \.path) { dev in
-                        deviceSidebarRow(for: dev, state: vm.deviceStates[dev.path])
-                            .tag(dev.path as String?)
+                    ForEach(viewModel.devices, id: \.path) { device in
+                        DeviceSidebarRow(device: device,
+                                         state: viewModel.deviceStates[device.path],
+                                         accountCount: accountCount(for: device),
+                                         onReload: viewModel.reload,
+                                         onLock: { viewModel.lockDevice(device) })
+                        .tag(device.path as String?)
                     }
                 }
             } header: {
@@ -68,12 +101,36 @@ struct ContentView: View {
         .listStyle(.sidebar)
     }
 
-    private func deviceSidebarRow(for device: FidoPassCore.FidoDevice, state: AccountsViewModel.DeviceState?) -> some View {
+    private func accountCount(for device: FidoPassCore.FidoDevice) -> Int {
+        viewModel.accounts.filter { $0.devicePath == device.path }.count
+    }
+}
+
+private struct DeviceSidebarEmptyState: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No devices")
+                .font(.headline)
+            Text("Connect a FIDO key to manage accounts.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 24)
+    }
+}
+
+private struct DeviceSidebarRow: View {
+    let device: FidoPassCore.FidoDevice
+    let state: AccountsViewModel.DeviceState?
+    let accountCount: Int
+    let onReload: () -> Void
+    let onLock: () -> Void
+
+    var body: some View {
         let unlocked = state?.unlocked == true
-        let accountCount = vm.accounts.filter { $0.devicePath == device.path }.count
         let statusText = unlocked ? (accountCount == 0 ? "Ready, no accounts" : "Ready, \(accountCount)") : "PIN required"
 
-        return HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             ZStack {
                 Circle()
                     .fill(unlocked ? Color.green.opacity(0.16) : Color.secondary.opacity(0.12))
@@ -83,7 +140,7 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(deviceLabel(device))
+                Text(device.displayName)
                     .font(.body)
                     .foregroundColor(.primary)
                 Text(statusText)
@@ -104,41 +161,51 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .padding(.vertical, 6)
         .contextMenu {
-            Button("Refresh") { vm.reload() }
-            if unlocked { Button("Lock") { vm.lockDevice(device) } }
+            Button("Refresh", action: onReload)
+            if unlocked { Button("Lock", action: onLock) }
         }
     }
+}
 
-    // MARK: - Accounts column
-    private var accountColumn: some View {
+private struct AccountColumnView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+
+    var body: some View {
         VStack(spacing: 0) {
-            accountColumnHeader
+            AccountColumnHeader(viewModel: viewModel)
             Divider()
-            Group {
-                if vm.devices.isEmpty {
-                    noDevicesState
-                } else if let path = vm.selectedDevicePath, let state = vm.deviceStates[path] {
-                    if state.unlocked {
-                        accountList(for: path)
-                    } else {
-                        unlockPrompt(for: deviceLabel(state.device), device: state.device)
-                    }
-                } else {
-                    selectDeviceState
-                }
-            }
+            content
         }
         .frame(minWidth: 320)
     }
 
-    private var accountColumnHeader: some View {
+    @ViewBuilder
+    private var content: some View {
+        if viewModel.devices.isEmpty {
+            NoDevicesState()
+        } else if let path = viewModel.selectedDevicePath, let state = viewModel.deviceStates[path] {
+            if state.unlocked {
+                AccountListView(viewModel: viewModel, devicePath: path)
+            } else {
+                UnlockPromptView(viewModel: viewModel, device: state.device)
+            }
+        } else {
+            SelectDeviceState()
+        }
+    }
+}
+
+private struct AccountColumnHeader: View {
+    @ObservedObject var viewModel: AccountsViewModel
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Accounts")
                         .font(.title3)
                         .fontWeight(.semibold)
-                    if let subtitle = accountHeaderSubtitle {
+                    if let subtitle = headerSubtitle {
                         Text(subtitle)
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -147,7 +214,7 @@ struct ContentView: View {
                 Spacer()
                 if canCreateAccount {
                     Button {
-                        vm.showNewAccountSheet = true
+                        viewModel.showNewAccountSheet = true
                     } label: {
                         Label("Add", systemImage: "plus")
                             .labelStyle(.titleAndIcon)
@@ -156,63 +223,87 @@ struct ContentView: View {
                     .controlSize(.small)
                 }
             }
-            searchField
+            SearchField(text: $viewModel.accountSearch)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(Color.primary.opacity(0.03))
     }
 
-    private var accountHeaderSubtitle: String? {
-        guard !vm.devices.isEmpty else { return "Connect a device to view accounts" }
-        guard let path = vm.selectedDevicePath, let state = vm.deviceStates[path] else { return "Select a device on the left" }
+    private var headerSubtitle: String? {
+        guard !viewModel.devices.isEmpty else { return "Connect a device to view accounts" }
+        guard let path = viewModel.selectedDevicePath, let state = viewModel.deviceStates[path] else { return "Select a device on the left" }
         if !state.unlocked { return "Device is locked — enter the PIN" }
-        let total = vm.accounts.filter { $0.devicePath == path }.count
-        let filtered = filteredAccounts(for: path).count
+
+        let total = viewModel.accounts.filter { $0.devicePath == path }.count
+        let filtered = filteredAccountsCount(for: path)
+
         if total == 0 { return "No accounts on this device yet" }
-        if vm.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Total: \(total)" }
+        if viewModel.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Total: \(total)"
+        }
         return "Found: \(filtered) of \(total)"
     }
 
-    private var canCreateAccount: Bool {
-        guard let path = vm.selectedDevicePath, let state = vm.deviceStates[path] else { return false }
-        return state.unlocked
+    private func filteredAccountsCount(for path: String) -> Int {
+        filteredAccounts(for: path).count
     }
 
-    @ViewBuilder
-    private func accountList(for path: String) -> some View {
-        let filtered = filteredAccounts(for: path)
-        List(selection: $vm.selected) {
-            if filtered.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "person.crop.circle.badge.plus")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary)
-                    Text("No accounts found")
-                        .font(.headline)
-                    Text("Create a new account or clear the search.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                    Button {
-                        withAnimation { vm.accountSearch = "" }
-                    } label: {
-                        Label("Clear search", systemImage: "xmark.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    Button {
-                        vm.showNewAccountSheet = true
-                    } label: {
-                        Label("Create account", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+    private func filteredAccounts(for path: String) -> [Account] {
+        let query = viewModel.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return viewModel.accounts.filter { account in
+            guard account.devicePath == path else { return false }
+            guard !query.isEmpty else { return true }
+            return account.id.localizedCaseInsensitiveContains(query) || account.rpId.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var canCreateAccount: Bool {
+        guard let path = viewModel.selectedDevicePath, let state = viewModel.deviceStates[path] else { return false }
+        return state.unlocked
+    }
+}
+
+private struct SearchField: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+            TextField("Search accounts", text: $text)
+                .textFieldStyle(.plain)
+                .disableAutocorrection(true)
+            if !text.isEmpty {
+                Button {
+                    withAnimation { text = "" }
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
                 }
-                .padding(.vertical, 40)
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.08)))
+        .accessibilityLabel("Search accounts")
+        .frame(maxWidth: 420)
+    }
+}
+
+private struct AccountListView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+    let devicePath: String
+
+    var body: some View {
+        let accounts = filteredAccounts
+        List(selection: $viewModel.selected) {
+            if accounts.isEmpty {
+                AccountEmptyStateView(onCreate: { viewModel.showNewAccountSheet = true }, onClearSearch: { withAnimation { viewModel.accountSearch = "" } })
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
             } else {
-                ForEach(filtered) { account in
-                    accountRow(account)
+                ForEach(accounts) { account in
+                    AccountRowView(viewModel: viewModel, account: account)
                         .tag(account as Account?)
                 }
             }
@@ -220,9 +311,51 @@ struct ContentView: View {
         .listStyle(.inset)
     }
 
-    private func accountRow(_ account: Account) -> some View {
+    private var filteredAccounts: [Account] {
+        let query = viewModel.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return viewModel.accounts.filter { account in
+            guard account.devicePath == devicePath else { return false }
+            guard !query.isEmpty else { return true }
+            return account.id.localizedCaseInsensitiveContains(query) || account.rpId.localizedCaseInsensitiveContains(query)
+        }
+    }
+}
+
+private struct AccountEmptyStateView: View {
+    let onCreate: () -> Void
+    let onClearSearch: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "person.crop.circle.badge.plus")
+                .font(.system(size: 32))
+                .foregroundColor(.secondary)
+            Text("No accounts found")
+                .font(.headline)
+            Text("Create a new account or clear the search.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+            Button(action: onClearSearch) {
+                Label("Clear search", systemImage: "xmark.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button(action: onCreate) {
+                Label("Create account", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+    }
+}
+
+private struct AccountRowView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+    let account: Account
+
+    var body: some View {
         let isPortable = account.rpId == "fidopass.portable"
-        return HStack(spacing: 12) {
+        HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isPortable ? Color.yellow.opacity(0.18) : Color.blue.opacity(0.16))
@@ -240,8 +373,10 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if vm.generatingAccountId == account.id { ProgressView().controlSize(.small) }
-            if vm.selected?.id == account.id {
+            if viewModel.generatingAccountId == account.id {
+                ProgressView().controlSize(.small)
+            }
+            if viewModel.selected?.id == account.id {
                 Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -249,30 +384,76 @@ struct ContentView: View {
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-        .onTapGesture { vm.selected = account }
+        .onTapGesture { viewModel.selected = account }
         .contextMenu {
             Button(role: .destructive) {
-                vm.accountPendingDeletion = account
-                vm.showDeleteConfirm = true
+                viewModel.accountPendingDeletion = account
+                viewModel.showDeleteConfirm = true
             } label: {
                 Label("Delete", systemImage: "trash")
             }
             Button("Generate password") {
-                vm.generatePassword(for: account, label: vm.labelInput)
+                viewModel.generatePassword(for: account, label: viewModel.labelInput)
             }
         }
     }
+}
 
-    private func filteredAccounts(for path: String) -> [Account] {
-        let query = vm.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return vm.accounts.filter { acc in
-            guard acc.devicePath == path else { return false }
-            guard !query.isEmpty else { return true }
-            return acc.id.localizedCaseInsensitiveContains(query) || acc.rpId.localizedCaseInsensitiveContains(query)
+private struct UnlockPromptView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+    let device: FidoPassCore.FidoDevice
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 40))
+                .foregroundColor(.secondary)
+            Text("\(device.displayName) is locked")
+                .font(.headline)
+            Text("Enter the PIN to unlock the device and view accounts.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            PinUnlockRow(viewModel: viewModel, device: device)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct PinUnlockRow: View {
+    @ObservedObject var viewModel: AccountsViewModel
+    let device: FidoPassCore.FidoDevice
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SecureField("PIN", text: Binding(get: {
+                viewModel.deviceStates[device.path]?.pin ?? ""
+            }, set: { pin in
+                var state = viewModel.deviceStates[device.path] ?? AccountsViewModel.DeviceState(device: device)
+                state.pin = pin
+                viewModel.deviceStates[device.path] = state
+            }))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 160)
+
+            Button {
+                if let pin = viewModel.deviceStates[device.path]?.pin, !pin.isEmpty {
+                    viewModel.unlockDevice(device, pin: pin)
+                }
+            } label: {
+                Label("Unlock", systemImage: "lock.open")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .help("Unlock the device with the provided PIN")
+            .disabled((viewModel.deviceStates[device.path]?.pin ?? "").isEmpty)
         }
     }
+}
 
-    private var noDevicesState: some View {
+private struct NoDevicesState: View {
+    var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "usb.cable")
                 .font(.system(size: 42))
@@ -286,8 +467,10 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private var selectDeviceState: some View {
+private struct SelectDeviceState: View {
+    var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "hand.point.left.fill")
                 .font(.system(size: 40))
@@ -301,75 +484,285 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private func unlockPrompt(for label: String, device: FidoPassCore.FidoDevice) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            Text("\(label) is locked")
-                .font(.headline)
-            Text("Enter the PIN to unlock the device and view accounts.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            pinUnlockRow(dev: device)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
+private struct AccountDetailContainerView: View {
+    @ObservedObject var viewModel: AccountsViewModel
 
-    // MARK: - Detail pane
-    private var detailPane: some View {
+    var body: some View {
         Group {
-            if let account = vm.selected, let path = account.devicePath, vm.deviceStates[path]?.unlocked == true {
+            if let account = viewModel.selected, let path = account.devicePath, viewModel.deviceStates[path]?.unlocked == true {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        accountSummaryCard(for: account)
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Password generation")
-                                    .font(.headline)
-                                Text("Use labels to produce different passwords for one account. Recent labels are available from the menu on the right.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                labelInputBlock
-                                generateBlock(acc: account)
-                            }
-                        }
-                        if account.rpId == "fidopass.portable" {
-                            portableSection(for: account)
-                        }
-                        if let password = vm.generatedPassword {
-                            passwordSection(password)
-                        } else {
-                            noPasswordHint
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(24)
+                    AccountDetailView(viewModel: viewModel, account: account)
                 }
             } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "person.crop.circle")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.secondary)
-                    Text("Select an account")
-                        .font(.title3)
-                    Text("The sidebar lists accounts available on the selected device.")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                AccountDetailPlaceholderView()
+            }
+        }
+    }
+}
+
+private struct AccountDetailView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+    let account: Account
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            AccountSummaryCard(account: account,
+                               deviceName: deviceName,
+                               lastCopied: viewModel.lastCopiedPasswordAt)
+            PasswordGenerationSection(viewModel: viewModel,
+                                      onGenerate: generatePassword,
+                                      onGenerateAndCopy: generateAndCopy)
+            if account.rpId == "fidopass.portable" {
+                PortableAccountSection(onExport: exportMasterKey)
+            }
+            if let password = viewModel.generatedPassword {
+                PasswordDisplayView(viewModel: viewModel, password: password)
+            } else {
+                PasswordPlaceholderView()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+    }
+
+    private var deviceName: String {
+        guard let path = account.devicePath, let device = viewModel.deviceStates[path]?.device else { return "—" }
+        return device.displayName
+    }
+
+    private func generatePassword() {
+        viewModel.generatePassword(for: account, label: viewModel.labelInput)
+    }
+
+    private func generateAndCopy() {
+        guard !viewModel.generating, !viewModel.labelInput.isEmpty else { return }
+        viewModel.generating = true
+        viewModel.generatingAccountId = account.id
+        viewModel.generatedPassword = nil
+        viewModel.showPlainPassword = false
+        let pin = viewModel.deviceStates[account.devicePath ?? ""]?.pin
+        Task {
+            do {
+                let password = try FidoPassCore.shared.generatePassword(account: account,
+                                                                         label: viewModel.labelInput,
+                                                                         requireUV: true,
+                                                                         pinProvider: { pin })
+                ContentView.copyToPasteboard(password)
+                await MainActor.run { viewModel.markPasswordCopied() }
+            } catch {
+                await MainActor.run { viewModel.errorMessage = error.localizedDescription }
+            }
+            await MainActor.run {
+                viewModel.generating = false
+                viewModel.generatingAccountId = nil
             }
         }
     }
 
-    private func accountSummaryCard(for account: Account) -> some View {
-        let deviceName = account.devicePath.flatMap { vm.deviceStates[$0]?.device }.map(deviceLabel) ?? "—"
-        let rp = account.rpId.isEmpty ? "—" : account.rpId
+    private func exportMasterKey() {
+        Task {
+            do {
+                let pin = viewModel.deviceStates[account.devicePath ?? ""]?.pin
+                let imported = try FidoPassCore.shared.exportImportedKey(account,
+                                                                         requireUV: true,
+                                                                         pinProvider: { pin })
+                await MainActor.run {
+                    viewModel.generatedPassword = imported
+                    viewModel.showPlainPassword = false
+                }
+            } catch {
+                await MainActor.run { viewModel.errorMessage = error.localizedDescription }
+            }
+        }
+    }
 
-        return VStack(alignment: .leading, spacing: 16) {
+    private struct PasswordGenerationSection: View {
+        @ObservedObject var viewModel: AccountsViewModel
+        let onGenerate: () -> Void
+        let onGenerateAndCopy: () -> Void
+
+        var body: some View {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Password generation")
+                        .font(.headline)
+                    Text("Use labels to produce different passwords for one account. Recent labels are available from the menu on the right.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    LabelInputView(text: $viewModel.labelInput, recentLabels: $viewModel.recentLabels)
+                    PasswordActionsView(isGenerating: viewModel.generating,
+                                         canSubmit: canSubmit,
+                                         onGenerate: onGenerate,
+                                         onGenerateAndCopy: onGenerateAndCopy)
+                }
+            }
+        }
+
+        private var canSubmit: Bool {
+            !viewModel.generating && !viewModel.labelInput.isEmpty
+        }
+    }
+
+    private struct PortableAccountSection: View {
+        let onExport: () -> Void
+
+        var body: some View {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Portable account")
+                        .font(.headline)
+                    Text("Export the master key to move the account to another password manager or device.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        Button(action: onExport) {
+                            Label("Export master key", systemImage: "square.and.arrow.down")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Export the master key into the hidden password field")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LabelInputView: View {
+    @Binding var text: String
+    @Binding var recentLabels: [String]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("Label", text: $text)
+                .textFieldStyle(.roundedBorder)
+            Menu("⌄") {
+                ForEach(recentLabels, id: \.self) { label in
+                    Button(label) { text = label }
+                }
+                if !recentLabels.isEmpty {
+                    Divider()
+                    Button("Clear") { recentLabels.removeAll() }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .frame(maxWidth: 360)
+    }
+}
+
+private struct PasswordActionsView: View {
+    let isGenerating: Bool
+    let canSubmit: Bool
+    let onGenerate: () -> Void
+    let onGenerateAndCopy: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onGenerate) {
+                Label("Generate", systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .help("Generate password")
+            .disabled(!canSubmit)
+
+            Button(action: onGenerateAndCopy) {
+                Label("Generate and copy", systemImage: "doc.on.doc")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Generate and copy immediately (hidden)")
+            .disabled(!canSubmit)
+
+            if isGenerating { ProgressView().controlSize(.small) }
+        }
+    }
+}
+
+private struct PasswordDisplayView: View {
+    @ObservedObject var viewModel: AccountsViewModel
+    let password: String
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Generated password")
+                    .font(.headline)
+                PasswordField(showPlainPassword: viewModel.showPlainPassword,
+                              password: password,
+                              onToggleVisibility: { withAnimation { viewModel.showPlainPassword.toggle() } },
+                              onCopy: {
+                                  ContentView.copyToPasteboard(password)
+                                  viewModel.markPasswordCopied()
+                              })
+                if let copied = viewModel.lastCopiedPasswordAt {
+                    Text("Copied \(ContentView.relativeTime(from: copied))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct PasswordField: View {
+    let showPlainPassword: Bool
+    let password: String
+    let onToggleVisibility: () -> Void
+    let onCopy: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Group {
+                if showPlainPassword {
+                    TextField("Password", text: .constant(password))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                } else {
+                    SecureField("Password", text: .constant(password))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                }
+            }
+            Button(action: onToggleVisibility) {
+                Image(systemName: showPlainPassword ? "eye.slash" : "eye")
+            }
+            .help(showPlainPassword ? "Hide" : "Show")
+            Button(action: onCopy) {
+                Image(systemName: "doc.on.doc")
+            }
+            .help("Copy password")
+        }
+        .transition(.opacity)
+        .frame(maxWidth: 420)
+    }
+}
+
+private struct PasswordPlaceholderView: View {
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Password has not been generated yet")
+                    .font(.headline)
+                Text("Use the buttons above to generate a password — it will appear here and be ready to copy.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
+private struct AccountSummaryCard: View {
+    let account: Account
+    let deviceName: String
+    let lastCopied: Date?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .center) {
                 Label(account.id, systemImage: "key.fill")
                     .font(.title3.weight(.semibold))
@@ -384,10 +777,10 @@ struct ContentView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 12) {
-                infoRow(icon: "globe", title: "RP ID", value: rp)
-                infoRow(icon: "usb.cable", title: "Device", value: deviceName)
-                if let copied = vm.lastCopiedPasswordAt {
-                    infoRow(icon: "clock", title: "Last copied", value: relativeTime(from: copied), accent: .secondary)
+                InfoRow(icon: "globe", title: "RP ID", value: account.rpId.isEmpty ? "—" : account.rpId)
+                InfoRow(icon: "usb.cable", title: "Device", value: deviceName)
+                if let copied = lastCopied {
+                    InfoRow(icon: "clock", title: "Last copied", value: ContentView.relativeTime(from: copied), accent: .secondary)
                 }
             }
         }
@@ -395,8 +788,22 @@ struct ContentView: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.primary.opacity(0.04)))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.primary.opacity(0.08)))
     }
+}
 
-    private func infoRow(icon: String, title: String, value: String, accent: Color = .accentColor) -> some View {
+private struct InfoRow: View {
+    let icon: String
+    let title: String
+    let value: String
+    let accent: Color
+
+    init(icon: String, title: String, value: String, accent: Color = .accentColor) {
+        self.icon = icon
+        self.title = title
+        self.value = value
+        self.accent = accent
+    }
+
+    var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .foregroundColor(accent)
@@ -410,200 +817,21 @@ struct ContentView: View {
             }
         }
     }
+}
 
-    private func portableSection(for account: Account) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Portable account")
-                    .font(.headline)
-                Text("Export the master key to move the account to another password manager or device.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 10) {
-                    Button(action: { exportImportedKey(account) }) {
-                        Label("Export master key", systemImage: "square.and.arrow.down")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Export the master key into the hidden password field")
-                }
-            }
+private struct AccountDetailPlaceholderView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("Select an account")
+                .font(.title3)
+            Text("The sidebar lists accounts available on the selected device.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
-    }
-
-    private func passwordSection(_ password: String) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Generated password")
-                    .font(.headline)
-                passwordBlock(password)
-                if let copied = vm.lastCopiedPasswordAt {
-                    Text("Copied \(relativeTime(from: copied))")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-    }
-
-    private var noPasswordHint: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Password has not been generated yet")
-                    .font(.headline)
-                Text("Use the buttons above to generate a password — it will appear here and be ready to copy.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private func relativeTime(from date: Date) -> String {
-        ContentView.relativeFormatter.localizedString(for: date, relativeTo: Date())
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-            TextField("Search accounts", text: $vm.accountSearch)
-                .textFieldStyle(.plain)
-                .disableAutocorrection(true)
-            if !vm.accountSearch.isEmpty {
-                Button {
-                    withAnimation { vm.accountSearch = "" }
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.08)))
-        .accessibilityLabel("Search accounts")
-        .frame(maxWidth: 420)
-    }
-
-    private var labelInputBlock: some View {
-        HStack(spacing: 6) {
-            TextField("Label", text: $vm.labelInput)
-                .textFieldStyle(.roundedBorder)
-            Menu("⌄") {
-                ForEach(vm.recentLabels, id: \.self) { l in Button(l) { vm.labelInput = l } }
-                if !vm.recentLabels.isEmpty { Divider(); Button("Clear") { vm.recentLabels.removeAll() } }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-        }
-        .frame(maxWidth: 360)
-    }
-
-    private func generateBlock(acc: Account) -> some View {
-        HStack(spacing: 12) {
-            Button(action: { vm.generatePassword(for: acc, label: vm.labelInput) }) {
-                Label("Generate", systemImage: "wand.and.stars")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .help("Generate password")
-            .disabled(vm.generating || vm.labelInput.isEmpty)
-
-            Button(action: {
-                guard !vm.generating, !vm.labelInput.isEmpty else { return }
-                vm.generating = true
-                let pin = vm.deviceStates[acc.devicePath ?? ""]?.pin
-                Task {
-                    defer { vm.generating = false }
-                    do {
-                        let pwd = try FidoPassCore.shared.generatePassword(account: acc, label: vm.labelInput, requireUV: true, pinProvider: { pin })
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(pwd, forType: .string)
-                        await MainActor.run { vm.markPasswordCopied() }
-                    } catch { await MainActor.run { vm.errorMessage = error.localizedDescription } }
-                }
-            }) {
-                Label("Generate and copy", systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Generate and copy immediately (hidden)")
-            .disabled(vm.generating || vm.labelInput.isEmpty)
-
-            if vm.generating { ProgressView().controlSize(.small) }
-        }
-    }
-
-    private func exportImportedKey(_ acc: Account) {
-        Task {
-            do {
-                let pin = vm.deviceStates[acc.devicePath ?? ""]?.pin
-                let imported = try FidoPassCore.shared.exportImportedKey(acc, requireUV: true, pinProvider: { pin })
-                await MainActor.run {
-                    vm.generatedPassword = imported
-                    vm.showPlainPassword = false
-                }
-            } catch { await MainActor.run { vm.errorMessage = error.localizedDescription } }
-        }
-    }
-
-    private func passwordBlock(_ pwd: String) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            Group {
-                if vm.showPlainPassword {
-                    TextField("Password", text: .constant(pwd))
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                } else {
-                    SecureField("Password", text: .constant(pwd))
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                }
-            }
-            Button(action: { withAnimation { vm.showPlainPassword.toggle() } }) {
-                Image(systemName: vm.showPlainPassword ? "eye.slash" : "eye")
-            }
-            .help(vm.showPlainPassword ? "Hide" : "Show")
-            Button(action: {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(pwd, forType: .string)
-                vm.markPasswordCopied()
-            }) { Image(systemName: "doc.on.doc") }
-            .help("Copy password")
-        }
-        .transition(.opacity)
-        .frame(maxWidth: 420)
-    }
-
-    private func pinUnlockRow(dev: FidoPassCore.FidoDevice) -> some View {
-        HStack(spacing: 8) {
-            SecureField("PIN", text: Binding(get: { vm.deviceStates[dev.path]?.pin ?? "" }, set: { pin in
-                var st = vm.deviceStates[dev.path] ?? AccountsViewModel.DeviceState(device: dev)
-                st.pin = pin
-                vm.deviceStates[dev.path] = st
-            }))
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 160)
-            Button {
-                if let pin = vm.deviceStates[dev.path]?.pin, !pin.isEmpty {
-                    vm.unlockDevice(dev, pin: pin)
-                }
-            } label: {
-                Label("Unlock", systemImage: "lock.open")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .help("Unlock the device with the provided PIN")
-            .disabled((vm.deviceStates[dev.path]?.pin ?? "").isEmpty)
-        }
-    }
-
-    private var toolbarButtons: some ToolbarContent {
-        ToolbarItemGroup(placement: .automatic) {
-            Button { vm.showNewAccountSheet = true } label: { Image(systemName: "plus") }
-                .help("New account")
-            Button { vm.reload() } label: { Image(systemName: "arrow.clockwise") }
-                .help("Refresh list")
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -616,6 +844,7 @@ struct NewAccountView: View {
     @State private var keyError: String? = nil
     @FocusState private var focused: Field?
     private enum Field { case account }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New account").font(.title2)
@@ -631,15 +860,20 @@ struct NewAccountView: View {
                     TextField("Base64 ImportedKey", text: $importedKeyB64)
                         .textFieldStyle(.roundedBorder)
                         .onChange(of: importedKeyB64) { _ in validateKey() }
-                    if let ke = keyError { Text(ke).font(.caption).foregroundColor(.red) }
+                    if let keyError {
+                        Text(keyError)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
                 }
             }
             if vm.devices.count > 1 {
                 Picker("Device", selection: Binding(get: { vm.selectedDevicePath ?? vm.devices.first?.path ?? "" }, set: { vm.selectedDevicePath = $0 })) {
-                    ForEach(vm.devices.filter { vm.deviceStates[$0.path]?.unlocked == true }, id: \.path) { dev in
-                        Text(deviceLabel(dev)).tag(dev.path)
+                    ForEach(vm.devices.filter { vm.deviceStates[$0.path]?.unlocked == true }, id: \.path) { device in
+                        Text(device.displayName).tag(device.path)
                     }
-                }.pickerStyle(.menu)
+                }
+                .pickerStyle(.menu)
             }
             HStack {
                 Spacer()
@@ -660,7 +894,7 @@ struct NewAccountView: View {
     }
 
     private var canCreate: Bool {
-        if accountId.isEmpty || (vm.selectedDevicePath == nil) { return false }
+        if accountId.isEmpty || vm.selectedDevicePath == nil { return false }
         if isPortable {
             if importedKeyB64.isEmpty { return true }
             return keyError == nil && (Data(base64Encoded: importedKeyB64)?.count == 32)
@@ -670,11 +904,10 @@ struct NewAccountView: View {
 
     private func validateKey() {
         guard !importedKeyB64.isEmpty else { keyError = nil; return }
-        if let d = Data(base64Encoded: importedKeyB64), d.count == 32 { keyError = nil } else { keyError = "Requires 32-byte base64 value" }
+        if let data = Data(base64Encoded: importedKeyB64), data.count == 32 {
+            keyError = nil
+        } else {
+            keyError = "Requires 32-byte base64 value"
+        }
     }
-}
-
-private func deviceLabel(_ dev: FidoPassCore.FidoDevice) -> String {
-    if dev.manufacturer.isEmpty { return dev.product }
-    return "\(dev.manufacturer) \(dev.product)"
 }
