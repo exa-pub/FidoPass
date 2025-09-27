@@ -8,7 +8,6 @@ let package = Package(
     ],
     products: [
         .library(name: "FidoPassCore", targets: ["FidoPassCore"]),
-    .executable(name: "fidopass", targets: ["FidoPassCLI"]),
     .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
     ],
     dependencies: [
@@ -26,13 +25,6 @@ let package = Package(
             name: "FidoPassCore",
             dependencies: ["CLibfido2"],
             swiftSettings: [.define("SWIFT_PACKAGE")]
-        ),
-        .executableTarget(
-            name: "FidoPassCLI",
-            dependencies: [
-                "FidoPassCore",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
-            ]
         ),
         .executableTarget(
             name: "FidoPassApp",
