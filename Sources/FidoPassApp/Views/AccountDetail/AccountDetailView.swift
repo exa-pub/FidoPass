@@ -34,27 +34,7 @@ struct AccountDetailView: View {
 
     private func generateAndCopy() {
         guard !viewModel.generating, !viewModel.labelInput.isEmpty else { return }
-        viewModel.generating = true
-        viewModel.generatingAccountId = account.id
-        viewModel.generatedPassword = nil
-        viewModel.showPlainPassword = false
-        let pin = viewModel.deviceStates[account.devicePath ?? ""]?.pin
-        Task {
-            do {
-                let password = try viewModel.core.generatePassword(account: account,
-                                                                    label: viewModel.labelInput,
-                                                                    requireUV: true,
-                                                                    pinProvider: { pin })
-                ClipboardService.copy(password)
-                await MainActor.run { viewModel.markPasswordCopied() }
-            } catch {
-                await MainActor.run { viewModel.errorMessage = error.localizedDescription }
-            }
-            await MainActor.run {
-                viewModel.generating = false
-                viewModel.generatingAccountId = nil
-            }
-        }
+        viewModel.generatePasswordAndCopy(for: account, label: viewModel.labelInput)
     }
 
     private func exportMasterKey() {
