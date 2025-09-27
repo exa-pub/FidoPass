@@ -26,7 +26,7 @@ struct FidoPassApp: App {
         }
         .commands { // basic commands for refresh
             CommandGroup(replacing: .newItem) {
-                Button("Новая учётка") { accountsVM.showNewAccountSheet = true }
+                Button("New account") { accountsVM.showNewAccountSheet = true }
                     .keyboardShortcut("n", modifiers: [.command])
             }
         }

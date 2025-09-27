@@ -17,16 +17,16 @@ struct ContentView: View {
             detailPane
         }
         .sheet(isPresented: $vm.showNewAccountSheet) { NewAccountView() }
-        .alert("Удалить учётку?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { acc in
-            Button("Отмена", role: .cancel) { vm.accountPendingDeletion = nil }
-            Button("Удалить", role: .destructive) {
+        .alert("Delete account?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { acc in
+            Button("Cancel", role: .cancel) { vm.accountPendingDeletion = nil }
+            Button("Delete", role: .destructive) {
                 if let a = vm.accountPendingDeletion { vm.deleteAccount(a) }
                 vm.accountPendingDeletion = nil
             }
         } message: { acc in
-            Text("Вы уверены, что хотите удалить ‘\(acc.id)’?")
+            Text("Are you sure you want to delete ‘\(acc.id)’?")
         }
-        .alert("Ошибка", isPresented: Binding(get: { vm.errorMessage != nil }, set: { _ in vm.errorMessage = nil })) { Button("OK", role: .cancel) {} } message: { Text(vm.errorMessage ?? "") }
+        .alert("Error", isPresented: Binding(get: { vm.errorMessage != nil }, set: { _ in vm.errorMessage = nil })) { Button("OK", role: .cancel) {} } message: { Text(vm.errorMessage ?? "") }
         .onAppear {
             vm.reload()
             if vm.labelInput.isEmpty { vm.labelInput = "default" }
@@ -44,9 +44,9 @@ struct ContentView: View {
             Section {
                 if vm.devices.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Нет устройств")
+                        Text("No devices")
                             .font(.headline)
-                        Text("Подключите FIDO-ключ чтобы управлять учётками.")
+                        Text("Connect a FIDO key to manage accounts.")
                             .font(.callout)
                             .foregroundColor(.secondary)
                     }
@@ -58,7 +58,7 @@ struct ContentView: View {
                     }
                 }
             } header: {
-                Text("Устройства")
+                Text("Devices")
                     .textCase(.uppercase)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -71,7 +71,7 @@ struct ContentView: View {
     private func deviceSidebarRow(for device: FidoPassCore.FidoDevice, state: AccountsViewModel.DeviceState?) -> some View {
         let unlocked = state?.unlocked == true
         let accountCount = vm.accounts.filter { $0.devicePath == device.path }.count
-        let statusText = unlocked ? (accountCount == 0 ? "Готово, учёток нет" : "Готово, \(accountCount)") : "Требуется PIN"
+        let statusText = unlocked ? (accountCount == 0 ? "Ready, no accounts" : "Ready, \(accountCount)") : "PIN required"
 
         return HStack(alignment: .center, spacing: 12) {
             ZStack {
@@ -104,8 +104,8 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .padding(.vertical, 6)
         .contextMenu {
-            Button("Обновить") { vm.reload() }
-            if unlocked { Button("Заблокировать") { vm.lockDevice(device) } }
+            Button("Refresh") { vm.reload() }
+            if unlocked { Button("Lock") { vm.lockDevice(device) } }
         }
     }
 
@@ -135,7 +135,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Учётки")
+                    Text("Accounts")
                         .font(.title3)
                         .fontWeight(.semibold)
                     if let subtitle = accountHeaderSubtitle {
@@ -149,7 +149,7 @@ struct ContentView: View {
                     Button {
                         vm.showNewAccountSheet = true
                     } label: {
-                        Label("Добавить", systemImage: "plus")
+                        Label("Add", systemImage: "plus")
                             .labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.borderedProminent)
@@ -164,14 +164,14 @@ struct ContentView: View {
     }
 
     private var accountHeaderSubtitle: String? {
-        guard !vm.devices.isEmpty else { return "Подключите устройство чтобы увидеть учётки" }
-        guard let path = vm.selectedDevicePath, let state = vm.deviceStates[path] else { return "Выберите устройство слева" }
-        if !state.unlocked { return "Устройство заблокировано — введите PIN" }
+        guard !vm.devices.isEmpty else { return "Connect a device to view accounts" }
+        guard let path = vm.selectedDevicePath, let state = vm.deviceStates[path] else { return "Select a device on the left" }
+        if !state.unlocked { return "Device is locked — enter the PIN" }
         let total = vm.accounts.filter { $0.devicePath == path }.count
         let filtered = filteredAccounts(for: path).count
-        if total == 0 { return "На устройстве пока нет учёток" }
-        if vm.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Всего: \(total)" }
-        return "Найдено: \(filtered) из \(total)"
+        if total == 0 { return "No accounts on this device yet" }
+        if vm.accountSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Total: \(total)" }
+        return "Found: \(filtered) of \(total)"
     }
 
     private var canCreateAccount: Bool {
@@ -188,22 +188,22 @@ struct ContentView: View {
                     Image(systemName: "person.crop.circle.badge.plus")
                         .font(.system(size: 32))
                         .foregroundColor(.secondary)
-                    Text("Учётки не найдены")
+                    Text("No accounts found")
                         .font(.headline)
-                    Text("Создайте новую учётку или сбросьте поиск.")
+                    Text("Create a new account or clear the search.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                     Button {
                         withAnimation { vm.accountSearch = "" }
                     } label: {
-                        Label("Сбросить поиск", systemImage: "xmark.circle")
+                        Label("Clear search", systemImage: "xmark.circle")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     Button {
                         vm.showNewAccountSheet = true
                     } label: {
-                        Label("Создать учётку", systemImage: "plus")
+                        Label("Create account", systemImage: "plus")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -235,7 +235,7 @@ struct ContentView: View {
                 Text(account.id)
                     .font(.body.weight(.medium))
                     .foregroundColor(.primary)
-                Text(isPortable ? "Portable" : (account.rpId.isEmpty ? "Без RP" : account.rpId))
+                Text(isPortable ? "Portable" : (account.rpId.isEmpty ? "No RP" : account.rpId))
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -255,9 +255,9 @@ struct ContentView: View {
                 vm.accountPendingDeletion = account
                 vm.showDeleteConfirm = true
             } label: {
-                Label("Удалить", systemImage: "trash")
+                Label("Delete", systemImage: "trash")
             }
-            Button("Сгенерировать пароль") {
+            Button("Generate password") {
                 vm.generatePassword(for: account, label: vm.labelInput)
             }
         }
@@ -277,9 +277,9 @@ struct ContentView: View {
             Image(systemName: "usb.cable")
                 .font(.system(size: 42))
                 .foregroundColor(.secondary)
-            Text("Подключите устройство")
+            Text("Connect a device")
                 .font(.headline)
-            Text("FidoPass автоматически покажет учётки как только ключ будет подключён.")
+            Text("FidoPass will show accounts as soon as a key is connected.")
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
@@ -292,9 +292,9 @@ struct ContentView: View {
             Image(systemName: "hand.point.left.fill")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
-            Text("Выберите устройство")
+            Text("Select a device")
                 .font(.headline)
-            Text("Щёлкните по устройству в боковой панели чтобы увидеть связанные учётки.")
+            Text("Click a device in the sidebar to view its accounts.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -307,9 +307,9 @@ struct ContentView: View {
             Image(systemName: "lock.fill")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
-            Text("\(label) заблокирован")
+            Text("\(label) is locked")
                 .font(.headline)
-            Text("Введите PIN чтобы разблокировать устройство и просмотреть учётки.")
+            Text("Enter the PIN to unlock the device and view accounts.")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -328,9 +328,9 @@ struct ContentView: View {
                         accountSummaryCard(for: account)
                         GroupBox {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("Генерация пароля")
+                                Text("Password generation")
                                     .font(.headline)
-                                Text("Используйте метки, чтобы получать разные варианты пароля для одной учётки. Недавние метки доступны в меню справа.")
+                                Text("Use labels to produce different passwords for one account. Recent labels are available from the menu on the right.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 labelInputBlock
@@ -354,9 +354,9 @@ struct ContentView: View {
                     Image(systemName: "person.crop.circle")
                         .font(.system(size: 48))
                         .foregroundStyle(.secondary)
-                    Text("Выберите учётку")
+                    Text("Select an account")
                         .font(.title3)
-                    Text("Слева отобразится список доступных учёток для выбранного устройства.")
+                    Text("The sidebar lists accounts available on the selected device.")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -385,9 +385,9 @@ struct ContentView: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 infoRow(icon: "globe", title: "RP ID", value: rp)
-                infoRow(icon: "usb.cable", title: "Устройство", value: deviceName)
+                infoRow(icon: "usb.cable", title: "Device", value: deviceName)
                 if let copied = vm.lastCopiedPasswordAt {
-                    infoRow(icon: "clock", title: "Последнее копирование", value: relativeTime(from: copied), accent: .secondary)
+                    infoRow(icon: "clock", title: "Last copied", value: relativeTime(from: copied), accent: .secondary)
                 }
             }
         }
@@ -414,18 +414,18 @@ struct ContentView: View {
     private func portableSection(for account: Account) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Portable аккаунт")
+                Text("Portable account")
                     .font(.headline)
-                Text("Экспортируйте мастер-ключ, чтобы перенести учётку в другой менеджер паролей или устройство.")
+                Text("Export the master key to move the account to another password manager or device.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 HStack(spacing: 10) {
                     Button(action: { exportImportedKey(account) }) {
-                        Label("Экспортировать мастер-ключ", systemImage: "square.and.arrow.down")
+                        Label("Export master key", systemImage: "square.and.arrow.down")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .help("Экспортировать мастер-ключ в скрытое поле пароля")
+                    .help("Export the master key into the hidden password field")
                 }
             }
         }
@@ -434,11 +434,11 @@ struct ContentView: View {
     private func passwordSection(_ password: String) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Сгенерированный пароль")
+                Text("Generated password")
                     .font(.headline)
                 passwordBlock(password)
                 if let copied = vm.lastCopiedPasswordAt {
-                    Text("Скопировано \(relativeTime(from: copied))")
+                    Text("Copied \(relativeTime(from: copied))")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -449,9 +449,9 @@ struct ContentView: View {
     private var noPasswordHint: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Пароль ещё не сгенерирован")
+                Text("Password has not been generated yet")
                     .font(.headline)
-                Text("Сгенерируйте пароль с помощью кнопок выше — он появится здесь и будет доступен для копирования.")
+                Text("Use the buttons above to generate a password — it will appear here and be ready to copy.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -465,7 +465,7 @@ struct ContentView: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-            TextField("Поиск учёток", text: $vm.accountSearch)
+            TextField("Search accounts", text: $vm.accountSearch)
                 .textFieldStyle(.plain)
                 .disableAutocorrection(true)
             if !vm.accountSearch.isEmpty {
@@ -480,17 +480,17 @@ struct ContentView: View {
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.08)))
-        .accessibilityLabel("Поиск учёток")
+        .accessibilityLabel("Search accounts")
         .frame(maxWidth: 420)
     }
 
     private var labelInputBlock: some View {
         HStack(spacing: 6) {
-            TextField("Метка (label)", text: $vm.labelInput)
+            TextField("Label", text: $vm.labelInput)
                 .textFieldStyle(.roundedBorder)
             Menu("⌄") {
                 ForEach(vm.recentLabels, id: \.self) { l in Button(l) { vm.labelInput = l } }
-                if !vm.recentLabels.isEmpty { Divider(); Button("Очистить") { vm.recentLabels.removeAll() } }
+                if !vm.recentLabels.isEmpty { Divider(); Button("Clear") { vm.recentLabels.removeAll() } }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -501,11 +501,11 @@ struct ContentView: View {
     private func generateBlock(acc: Account) -> some View {
         HStack(spacing: 12) {
             Button(action: { vm.generatePassword(for: acc, label: vm.labelInput) }) {
-                Label("Сгенерировать", systemImage: "wand.and.stars")
+                Label("Generate", systemImage: "wand.and.stars")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .help("Сгенерировать пароль")
+            .help("Generate password")
             .disabled(vm.generating || vm.labelInput.isEmpty)
 
             Button(action: {
@@ -522,11 +522,11 @@ struct ContentView: View {
                     } catch { await MainActor.run { vm.errorMessage = error.localizedDescription } }
                 }
             }) {
-                Label("Сгенерировать и скопировать", systemImage: "doc.on.doc")
+                Label("Generate and copy", systemImage: "doc.on.doc")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Сгенерировать и сразу скопировать (скрыто)")
+            .help("Generate and copy immediately (hidden)")
             .disabled(vm.generating || vm.labelInput.isEmpty)
 
             if vm.generating { ProgressView().controlSize(.small) }
@@ -550,11 +550,11 @@ struct ContentView: View {
         HStack(alignment: .center, spacing: 8) {
             Group {
                 if vm.showPlainPassword {
-                    TextField("Пароль", text: .constant(pwd))
+                    TextField("Password", text: .constant(pwd))
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                 } else {
-                    SecureField("Пароль", text: .constant(pwd))
+                    SecureField("Password", text: .constant(pwd))
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                 }
@@ -562,13 +562,13 @@ struct ContentView: View {
             Button(action: { withAnimation { vm.showPlainPassword.toggle() } }) {
                 Image(systemName: vm.showPlainPassword ? "eye.slash" : "eye")
             }
-            .help(vm.showPlainPassword ? "Скрыть" : "Показать")
+            .help(vm.showPlainPassword ? "Hide" : "Show")
             Button(action: {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(pwd, forType: .string)
                 vm.markPasswordCopied()
             }) { Image(systemName: "doc.on.doc") }
-            .help("Копировать пароль")
+            .help("Copy password")
         }
         .transition(.opacity)
         .frame(maxWidth: 420)
@@ -588,11 +588,11 @@ struct ContentView: View {
                     vm.unlockDevice(dev, pin: pin)
                 }
             } label: {
-                Label("Разблокировать", systemImage: "lock.open")
+                Label("Unlock", systemImage: "lock.open")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .help("Разблокировать устройство с помощью указанного PIN")
+            .help("Unlock the device with the provided PIN")
             .disabled((vm.deviceStates[dev.path]?.pin ?? "").isEmpty)
         }
     }
@@ -600,9 +600,9 @@ struct ContentView: View {
     private var toolbarButtons: some ToolbarContent {
         ToolbarItemGroup(placement: .automatic) {
             Button { vm.showNewAccountSheet = true } label: { Image(systemName: "plus") }
-                .help("Новая учётка")
+                .help("New account")
             Button { vm.reload() } label: { Image(systemName: "arrow.clockwise") }
-                .help("Обновить список")
+                .help("Refresh list")
         }
     }
 }
@@ -618,14 +618,14 @@ struct NewAccountView: View {
     private enum Field { case account }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Новая учётка").font(.title2)
+            Text("New account").font(.title2)
             TextField("ID", text: $accountId)
                 .textFieldStyle(.roundedBorder)
                 .focused($focused, equals: .account)
             Toggle("Portable (fidopass.portable)", isOn: $isPortable)
             if isPortable {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Импортированный ключ (32 байта ImportedKey base64) — оставьте пустым чтобы сгенерировать")
+                    Text("Imported key (32-byte ImportedKey base64) — leave empty to generate one")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     TextField("Base64 ImportedKey", text: $importedKeyB64)
@@ -635,7 +635,7 @@ struct NewAccountView: View {
                 }
             }
             if vm.devices.count > 1 {
-                Picker("Устройство", selection: Binding(get: { vm.selectedDevicePath ?? vm.devices.first?.path ?? "" }, set: { vm.selectedDevicePath = $0 })) {
+                Picker("Device", selection: Binding(get: { vm.selectedDevicePath ?? vm.devices.first?.path ?? "" }, set: { vm.selectedDevicePath = $0 })) {
                     ForEach(vm.devices.filter { vm.deviceStates[$0.path]?.unlocked == true }, id: \.path) { dev in
                         Text(deviceLabel(dev)).tag(dev.path)
                     }
@@ -643,8 +643,8 @@ struct NewAccountView: View {
             }
             HStack {
                 Spacer()
-                Button("Отмена") { dismiss() }
-                Button("Создать") {
+                Button("Cancel") { dismiss() }
+                Button("Create") {
                     if isPortable {
                         vm.enrollPortable(accountId: accountId, importedKeyB64: importedKeyB64.isEmpty ? nil : importedKeyB64)
                     } else {
@@ -670,7 +670,7 @@ struct NewAccountView: View {
 
     private func validateKey() {
         guard !importedKeyB64.isEmpty else { keyError = nil; return }
-        if let d = Data(base64Encoded: importedKeyB64), d.count == 32 { keyError = nil } else { keyError = "Нужен base64 32 байта" }
+        if let d = Data(base64Encoded: importedKeyB64), d.count == 32 { keyError = nil } else { keyError = "Requires 32-byte base64 value" }
     }
 }
 

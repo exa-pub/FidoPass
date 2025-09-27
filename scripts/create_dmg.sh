@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
+cd "${PROJECT_ROOT}"
+
 PRODUCT=FidoPassApp
 VOL_NAME="FidoPass"
 DMG_NAME="FidoPass.dmg"
@@ -11,7 +15,7 @@ STAGE_DIR=".build/dmg_stage"
 MOUNT_DIR="/Volumes/${VOL_NAME}"
 
 # Reuse build script to ensure fresh .app
-./build_app.sh >/dev/null
+"${SCRIPT_DIR}/build_app.sh" >/dev/null
 
 rm -f "${DMG_NAME}" || true
 rm -rf "${STAGE_DIR}" || true
@@ -31,4 +35,4 @@ hdiutil create -ov -fs HFS+ -srcfolder "${STAGE_DIR}" -volname "${VOL_NAME}" -si
 # (Optional layout customization using AppleScript / hdiutil attach + SetFile) skipped for brevity
 mv "${DMG_NAME}.temp.dmg" "${DMG_NAME}"
 
-echo "Created ${DMG_NAME}" 
+echo "Created ${DMG_NAME}"

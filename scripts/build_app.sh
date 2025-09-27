@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
+cd "${PROJECT_ROOT}"
+
 PRODUCT=FidoPassApp
 BUNDLE_ID=com.example.FidoPass
 BUILD_DIR=".build/release"
@@ -93,4 +97,4 @@ else
   echo "[warn] codesign tool not available; bundle will remain unsigned" >&2
 fi
 
-echo "Created ${APP_DIR}" 
+echo "Created ${APP_DIR}"

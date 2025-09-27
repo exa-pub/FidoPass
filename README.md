@@ -1,119 +1,107 @@
-# FidoPass (macOS, Swift + libfido2)
+# FidoPass
 
-Генератор паролей, использующий аппаратный FIDO2-ключ и расширение **hmac-secret**. Ничего секретного в файловой системе не хранит: все секреты деривируются ключом на лету. Локально сохраняются только метаданные (credentialId, rpId, политика, путь устройства) в **macOS Keychain**.
+Hardware-backed password generator for macOS that delegates all sensitive operations to a FIDO2 authenticator via the `hmac-secret` extension. FidoPass never writes derived secrets to disk—only deterministic metadata lives on the machine.
 
-## Установка
+## Table of Contents
+- [Features](#features)
+- [Requirements](#requirements)
+- [Getting Started](#getting-started)
+- [FidoPassCore Library](#fidopasscore-library)
+- [Command-Line Notes](#command-line-notes)
+- [Building & Packaging](#building--packaging)
+- [Data Storage & Privacy](#data-storage--privacy)
+- [How It Works](#how-it-works)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
+## Features
+- Derives deterministic passwords via a CTAP2/FIDO2 authenticator that advertises the `hmac-secret` extension.
+- Leaves secrets on the key: only credential metadata (credential ID, RP ID, password policy, device path) is stored locally in the macOS Keychain.
+- SwiftUI app for macOS 12+ with device grouping, PIN-gated unlock, recent-label shortcuts, and live search.
+- Portable accounts allow the master key material to be exported and re-imported on another authenticator.
+- Copy-to-clipboard helpers, light/dark appearance, and SF Symbol-based UI for accessibility.
+- Release bundles include `libfido2`, `libcbor`, and `libcrypto`, so users without Homebrew can run the packaged app.
+
+## Requirements
+- macOS 12 Monterey or newer.
+- Swift toolchain 5.9 or newer.
+- Homebrew packages: `libfido2` and `pkg-config` (brings in `libcbor`, `openssl@3`, etc.).
+- Xcode Command Line Tools for `install_name_tool`, `codesign`, and other build utilities.
+- A CTAP2/FIDO2 authenticator with `hmac-secret` support (YubiKey 5, Nitrokey 3, SoloKeys, …).
+
+## Getting Started
+
+### 1. Install prerequisites
 ```bash
 brew install libfido2 pkg-config
-export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" # при необходимости
-swift build
-swift run fidopass --help
+export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" # adjust if needed
 ```
 
-Скрипт `build_app.sh` при упаковке `.app` копирует динамические библиотеки `libfido2`, `libcbor` и `libcrypto` внутрь бандла и выполняет ad-hoc `codesign`, поэтому полученный `.app`/DMG запускается на машине без установленного Homebrew (нужна лишь ручная разблокировка Gatekeeper). CLI по‑прежнему требует наличия `libfido2` в системе.
-
-## Быстрый старт
-
-1) Вставьте ключ, убедитесь, что на нём установлен PIN (рекомендуется).
-2) Привяжите учётку (создаст resident/discoverable credential с hmac-secret):
-
-```bash
-swift run fidopass enroll --account demo --rp fidopass.local --user "Demo User" --uv
-```
-
-3) Сгенерируйте пароль для метки (обычно домен сайта):
-
-```bash
-swift run fidopass gen --account demo --label example.com --len 20 --copy
-```
-
-При каждой генерации будет запрошено прикосновение к ключу и, при необходимости, PIN.
-
-## Работа с несколькими ключами
-
-Команда просмотра устройств:
-```bash
-swift run fidopass devices
-```
-Пример вывода:
-```
-- path=/dev/hidraw3 | Yubico YubiKey 5
-- path=/dev/hidraw5 | Nitrokey 3
-```
-
-Enroll на конкретном ключе:
-```bash
-swift run fidopass enroll --account demo2 --device /dev/hidraw5 --uv
-```
-
-Если старая учётка была создана до поддержки нескольких устройств (без сохранённого devicePath), можно указать ключ один раз при генерации — путь сохранится:
-```bash
-swift run fidopass gen --account old --label example.org --device /dev/hidraw3
-```
-
-## Графическое приложение (SwiftUI)
-
-Добавлен отдельный продукт `FidoPassApp` (macOS 12+).
-
-Сборка и запуск:
+### 2. Build and launch the SwiftUI app
 ```bash
 swift build --product FidoPassApp
 swift run FidoPassApp
 ```
 
-Функции текущей версии:
-* Список учёток (Keychain) с возможностью создания и удаления.
-* Группировка учёток по физическому FIDO устройству (секции). Legacy-учётки без `devicePath` отдельным блоком.
-* Создание resident credential на выбранном ключе (если подключено несколько — выбор из меню).
-* Генерация пароля по введённой метке (label) с использованием подключённого FIDO2 ключа.
-* Поле PIN при создании и отдельное поле PIN для генерации (можно очистить для временного отключения).
-* Копирование пароля в буфер обмена.
-* Автоматическая адаптация к светлой / тёмной теме.
+### 3. Enroll an account and generate passwords
+1. Plug in your authenticator and ensure it has a PIN configured.
+2. Use the sidebar to unlock the device (enter the PIN when prompted).
+3. Create a new account from the toolbar or **File → New account (⌘N)**.
+4. Provide a label (e.g., `example.com`) and click **Generate** to obtain a password. The app can copy the result directly to the clipboard.
 
-Принципы соответствия современным Human Interface Guidelines:
-* SwiftUI: декларативные, доступные компоненты; поддержка Dynamic Type (масштабирование шрифтов системно управляется).
-* Ясная иерархия: список (слева) + детальная панель (справа) через `NavigationView` для совместимости macOS 12.
-* Минимум визуального шума: второстепенные тексты окрашены в secondary.
-* Клавиатурные сокращения: Cmd+N — создание учётки.
-* Доступность: системные SF Symbols (`key`, `trash`, `plus`) — корректны для VoiceOver.
-* Состояния ошибок показываются через стандартный `Alert`.
+The app maintains recent labels, groups accounts by physical device, and surfaces errors through standard macOS alerts.
 
-Планы улучшений UI:
-* Настройка политики паролей (редактирование длины, классов символов).
-* Автообновление списка устройств (хот-плаги) без ручного Reload.
-* История / недавно используемые метки.
-* Поиск по списку учёток и дополнительная фильтрация.
-* Прогресс-индикатор с отдельными шагами (ожидание PIN / касание).
-* Локализация (en, ru) через ресурсный пакет.
-* Меню для экспорта/импорта метаданных.
+## FidoPassCore Library
+Applications can integrate `FidoPassCore` directly when they need a programmatic API:
 
-> Замечание: при первом использовании GUI убедитесь, что ключ вставлен и доступен. Ошибки низкого уровня libfido2 отображаются локализованным текстом.
+```swift
+import FidoPassCore
 
-## CLI Справка по ключевым командам
-
-```bash
-swift run fidopass devices                # список подключённых ключей
-swift run fidopass enroll --account X --device /dev/hidraw5 --uv
-swift run fidopass gen --account X --label example.com --copy
-swift run fidopass list
-swift run fidopass remove --account X
+let core = FidoPassCore.shared
+let device = try core.listDevices().first
+let account = try core.enroll(accountId: "demo", devicePath: device?.path)
+let password = try core.generatePassword(account: account, label: "example.com")
 ```
 
-Опции:
-* `--device PATH` — выбрать конкретный ключ (при enroll/ gen). При gen добавляет путь в legacy-запись.
-* `--rk` в `enroll` теперь ОТКЛЮЧАЕТ resident credential (по умолчанию включено).
-* `--uv` — требовать PIN/UV.
+`Account` models are Codable and can be persisted outside of the supplied Keychain store if you need custom storage.
 
-## Как это работает (коротко)
-- При *enroll* делаем `makeCredential` с `FIDO_EXT_HMAC_SECRET`, включён `rk` (discoverable) по умолчанию.
-- При *gen* делаем `getAssertion` с тем же RP ID и allowList (credentialId), включаем `hmac-secret` и передаём **salt**, детерминированно вычисленный из `label`+`rpId`+`accountId`.
-- Ключ возвращает 32-байтовый секрет → через HKDF → маппим в пароль по заданной политике.
+## Command-Line Notes
+Older revisions shipped a CLI target named `fidopass`. If you have that product available locally, the typical workflow looked like:
+```bash
+swift run fidopass enroll --account demo --rp fidopass.local --user "Demo User" --uv
+swift run fidopass gen --account demo --label example.com --len 20 --copy
+```
+The current package focuses on the SwiftUI app and core library; a refreshed CLI is planned but not yet included in `Package.swift`.
 
-## Ограничения
-- Нужен ключ **CTAP2/FIDO2** с поддержкой `hmac-secret`.
-- Некоторые ключи требуют обязательный PIN/UV для `hmac-secret` — включайте `--uv` или в GUI введите PIN.
-- В дистрибуции App Store доступ к USB HID может потребовать настроек песочницы. Для локального использования ограничений нет.
+## Building & Packaging
+- `swift build -c release --product FidoPassApp` produces a release binary in `.build/release/FidoPassApp`.
+- `scripts/build_app.sh` assembles a relocatable `.app` bundle, copying the required dynamic libraries and applying an ad-hoc codesign signature. Adjust the `BUNDLE_ID` in the script before distributing a release build.
+- `scripts/create_dmg.sh` stages the bundle into a distributable DMG image (`FidoPass.dmg`). Both scripts determine the project root automatically, so they can be executed from any working directory.
+- Packaging requires `brew` in `PATH`, `codesign`, and `hdiutil` (macOS default).
+- `scripts/update_icon.sh /path/to/AppIcon.icns` (an `.iconset` directory or a high-resolution `.png`) swaps in a new app icon and refreshes the editable `Icon.iconset` when `iconutil` is available. The `Icon.iconset` folder is only used as a source asset for maintainers; the build consumes the generated `AppIcon.icns`.
 
-## Лицензия
-MIT для данного примера кода. На `libfido2` действует BSD-2-Clause.
+## Data Storage & Privacy
+- Account metadata is serialized to JSON and stored in the macOS Keychain with `kSecAttrAccessibleAfterFirstUnlock`.
+- Recent labels are synced via `UserDefaults` and `NSUbiquitousKeyValueStore` when iCloud is available.
+- Generated passwords are kept in memory only; copying moves them to the system clipboard where they follow normal macOS clipboard lifecycle rules.
+
+## How It Works
+- Enrollment issues `makeCredential` with `FIDO_EXT_HMAC_SECRET`, creating a resident credential by default.
+- Password generation calls `getAssertion` with the saved credential ID, enabling `hmac-secret` and supplying a deterministic salt derived from `label + rpId + accountId`.
+- The authenticator returns a 32-byte secret that is stretched via HKDF and mapped into a password respecting the configured policy (length, character classes, ambiguity filters).
+- Portable accounts XOR an imported key with the device-derived secret so the same password material can be regenerated on another authenticator.
+
+## Roadmap
+- First-class CLI rebuilt on `swift-argument-parser`.
+- Editable password policies (length and character classes) from the UI.
+- Automatic device hot-plug detection and refreshed lists without manual reloads.
+- Additional filters (per-device, per-RP) and password policy profiles.
+- Localized interface (English/Russian) backed by resource bundles.
+- Import/export utilities for metadata and portable keys.
+
+## Contributing
+Issues and pull requests are welcome. If you intend to work on authenticator communication, make sure you can test with real hardware so that changes can be validated end-to-end.
+
+## License
+FidoPass is available under the MIT License. Embedded `libfido2` remains under the BSD-2-Clause license.

@@ -105,7 +105,7 @@ final class AccountsViewModel: ObservableObject {
                 }
                 await MainActor.run { self.reload() }
             } catch {
-                await MainActor.run { self.errorMessage = "PIN неверен: \(error.localizedDescription)" }
+                await MainActor.run { self.errorMessage = "PIN is incorrect: \(error.localizedDescription)" }
             }
         }
     }
@@ -117,7 +117,7 @@ final class AccountsViewModel: ObservableObject {
     }
 
     func enroll(accountId: String, rpId: String = "fidopass.local", requireUV: Bool = true) {
-        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Сначала разблокируйте устройство"; return }
+        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Unlock the device first"; return }
         let pin = st.pin
         Task {
             do {
@@ -132,7 +132,7 @@ final class AccountsViewModel: ObservableObject {
     }
 
     func enrollPortable(accountId: String, importedKeyB64: String?) {
-        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Сначала разблокируйте устройство"; return }
+        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Unlock the device first"; return }
         let pin = st.pin
         Task {
             do {

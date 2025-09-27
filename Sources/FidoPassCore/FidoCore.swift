@@ -11,8 +11,8 @@ public enum FidoPassError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .libfido2(let s): return s
-        case .noDevices: return "Не найдено ни одного FIDO-устройства"
-        case .unsupported(let s): return "Функция не поддерживается: \(s)"
+        case .noDevices: return "No FIDO devices found"
+        case .unsupported(let s): return "Unsupported feature: \(s)"
         case .invalidState(let s): return s
         }
     }
@@ -72,13 +72,13 @@ public struct PasswordPolicy: Codable, Hashable {
 }
 
 public struct Account: Codable, Hashable, Identifiable {
-    public var id: String         // произвольное имя учётки (уникальное)
-    public var rpId: String       // RP ID (обычный: fidopass.local, portable: fidopass.portable)
-    public var userName: String   // обычный: displayName; portable: base64(External) (32 bytes -> 44 chars)
-    public var credentialIdB64: String // credentialId в base64
-    public var revision: Int      // номер ревизии соли/политики
+    public var id: String         // arbitrary account identifier (unique)
+    public var rpId: String       // RP ID (regular: fidopass.local, portable: fidopass.portable)
+    public var userName: String   // regular mode: displayName; portable: base64(External) (32 bytes -> 44 chars)
+    public var credentialIdB64: String // credentialId encoded as base64
+    public var revision: Int      // salt/policy revision counter
     public var policy: PasswordPolicy
-    public var devicePath: String? // путь/идентификатор устройства
+    public var devicePath: String? // HID device path/identifier
 
     public static func ==(lhs: Account, rhs: Account) -> Bool { lhs.id == rhs.id }
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -164,18 +164,18 @@ public final class FidoPassCore {
         defer { fido_cbor_info_free(&ci) }
         try check(fido_dev_get_cbor_info(dev, ci), "get_cbor_info")
         let n = fido_cbor_info_extensions_len(ci)
-        guard let pptr = fido_cbor_info_extensions_ptr(ci) else { throw FidoPassError.unsupported("нет списка расширений") }
+        guard let pptr = fido_cbor_info_extensions_ptr(ci) else { throw FidoPassError.unsupported("extension list is unavailable") }
         var ok = false
         for i in 0..<n { if let ext = pptr.advanced(by: Int(i)).pointee { if String(cString: ext) == "hmac-secret" { ok = true; break } } }
-        if !ok { throw FidoPassError.unsupported("Ключ не поддерживает hmac-secret") }
+        if !ok { throw FidoPassError.unsupported("Authenticator does not support hmac-secret") }
     }
 
     // MARK: Enrollment (makeCredential)
-    // residentKey теперь по умолчанию TRUE (discoverable credential)
+    // residentKey defaults to TRUE (discoverable credential)
     public func enroll(accountId: String, rpId: String = "fidopass.local", userName: String = "", requireUV: Bool = true, residentKey: Bool = true, devicePath: String? = nil, askPIN: (() -> String?)? = nil) throws -> Account {
         try withOpenedDevice(path: devicePath) { dev, path in
             try ensureHmacSecretSupported(dev)
-            guard residentKey else { throw FidoPassError.invalidState("Нерезидентные креды не поддерживаются без локального хранилища") }
+            guard residentKey else { throw FidoPassError.invalidState("Non-resident credentials are not supported without local storage") }
             guard let rawCred = fido_cred_new() else { throw FidoPassError.invalidState("cred_new") }
             var cred: OpaquePointer? = rawCred
             defer { fido_cred_free(&cred) }
@@ -183,16 +183,16 @@ public final class FidoPassCore {
             try check(fido_cred_set_extensions(cred, Int32(FIDO_EXT_HMAC_SECRET)), "cred_set_extensions(hmac-secret)")
             try check(fido_cred_set_rp(cred, rpId, "FidoPass"), "cred_set_rp")
             let packed = try encodeUserId(accountId)
-            // user.name (short) используем всегда accountId (не пустой, уникальный, краткий) — некоторые ключи не принимают пустую строку.
-            // displayName = запрошенное пользовательское имя (может быть пустым для portable, тогда покажется accountId через fallback при перечислении).
+            // user.name (short) always uses accountId (non-empty, unique, concise); some authenticators reject empty strings.
+            // displayName = requested user-visible name (may be empty for portable accounts — accountId is used as a fallback when enumerating).
             let shortName = String(accountId.prefix(32)) // limit for authenticator constraints
             let displayName = userName.isEmpty ? accountId : userName // ensure non-empty displayName
             try packed.withUnsafeBytes { ptr in
                 try check(fido_cred_set_user(cred,
                                              ptr.bindMemory(to: UInt8.self).baseAddress,
                                              packed.count,
-                                             shortName,    // user.name (короткое, стабильное)
-                                             displayName,  // displayName (может быть пустым)
+                                             shortName,    // user.name (short, stable)
+                                             displayName,  // displayName (may be empty)
                                              nil),
                           "cred_set_user")
             }
@@ -214,8 +214,8 @@ public final class FidoPassCore {
     }
 
     // MARK: Portable enrollment (rpId = fidopass.portable)
-    // importedKeyB64: если передан 32-байтный ImportedKey (base64), мы вычислим External = ImportedKey XOR A и сохраним externalKeyB64=External
-    // если nil -> сгенерируем новый ImportedKey (random 32), сохраним внешний и вернем сам ImportedKey (для отображения / экспорта)
+    // importedKeyB64: if a 32-byte ImportedKey (base64) is provided, derive External = ImportedKey XOR A and persist externalKeyB64 = External
+    // if nil -> generate a new ImportedKey (random 32 bytes), persist the external value and return the ImportedKey for display/export
     public func enrollPortable(accountId: String, requireUV: Bool = true, devicePath: String? = nil, askPIN: (() -> String?)? = nil, importedKeyB64: String?) throws -> (Account, generatedImportedKeyB64: String?) {
         let rpId = "fidopass.portable"
     // Enroll with empty user.name; user.id (metadata) immutable. Later we only set user.name to external base64.
@@ -224,7 +224,7 @@ public final class FidoPassCore {
         let a = try deriveFixedComponent(account: account, requireUV: requireUV, pinProvider: askPIN)
         let importedKey: Data
         if let given = importedKeyB64 {
-            guard let data = Data(base64Encoded: given), data.count == 32 else { throw FidoPassError.invalidState("ImportedKey base64 должен быть 32 байта") }
+            guard let data = Data(base64Encoded: given), data.count == 32 else { throw FidoPassError.invalidState("ImportedKey base64 must be 32 bytes") }
             importedKey = data
         } else {
             importedKey = randomBytes(32)
@@ -340,8 +340,8 @@ public final class FidoPassCore {
     }
 
     // MARK: Password generation
-    // Portable пароль должен зависеть только от ImportedKey, label и policy.
-    // Поэтому используем отдельную соль portableLabelSalt(label) = SHA256("fidopass|portable|" + label)
+    // Portable passwords must depend only on ImportedKey, label, and policy.
+    // Use a dedicated salt portableLabelSalt(label) = SHA256("fidopass|portable|" + label)
     private func portableLabelSalt(_ label: String) -> Data {
         var h = SHA256()
         h.update(data: Data("fidopass|portable|".utf8))
@@ -352,12 +352,12 @@ public final class FidoPassCore {
         let policy = override ?? account.policy
         let secret: Data
         if account.rpId == "fidopass.portable" {
-            guard let external = Data(base64Encoded: account.userName), external.count == 32 else { throw FidoPassError.invalidState("Portable userName должен содержать base64 External (32 байта)") }
-            // Восстанавливаем ImportedKey = External XOR A
+            guard let external = Data(base64Encoded: account.userName), external.count == 32 else { throw FidoPassError.invalidState("Portable userName must contain base64 External (32 bytes)") }
+            // Reconstruct ImportedKey = External XOR A
             let a = try deriveFixedComponent(account: account, requireUV: requireUV, pinProvider: pinProvider)
             guard a.count == 32 else { throw FidoPassError.invalidState("Fixed component size !=32") }
             let importedKey = Data(zip(a, external).map { $0 ^ $1 })
-            // Соль зависит только от label для детерминизма между устройствами
+            // Salt depends only on the label to stay deterministic across devices
             let challengeSalt = portableLabelSalt(label)
             let mac = HMAC<SHA256>.authenticationCode(for: challengeSalt, using: SymmetricKey(data: importedKey))
             secret = Data(mac)
@@ -420,8 +420,8 @@ public final class FidoPassCore {
 
     // MARK: Export ImportedKey for portable
     public func exportImportedKey(_ account: Account, requireUV: Bool = true, pinProvider: (() -> String?)? = nil) throws -> String {
-        guard account.rpId == "fidopass.portable" else { throw FidoPassError.invalidState("Не portable аккаунт") }
-        guard let external = Data(base64Encoded: account.userName), external.count == 32 else { throw FidoPassError.invalidState("userName не содержит корректный external base64") }
+        guard account.rpId == "fidopass.portable" else { throw FidoPassError.invalidState("Account is not portable") }
+        guard let external = Data(base64Encoded: account.userName), external.count == 32 else { throw FidoPassError.invalidState("userName does not contain a valid external base64 payload") }
         let a = try deriveFixedComponent(account: account, requireUV: requireUV, pinProvider: pinProvider)
         guard a.count == 32 else { throw FidoPassError.invalidState("Fixed component size !=32") }
         let imported = Data(zip(a, external).map { $0 ^ $1 })
@@ -439,8 +439,8 @@ public final class FidoPassCore {
             let rc = credId.withUnsafeBytes { ptr -> Int32 in
                 fido_credman_del_dev_rk(dev, ptr.bindMemory(to: UInt8.self).baseAddress, credId.count, pinCString)
             }
-            if rc == FIDO_ERR_INVALID_COMMAND { throw FidoPassError.unsupported("Credential Management не поддерживается устройством") }
-            if rc == FIDO_ERR_PIN_REQUIRED { throw FidoPassError.invalidState("Требуется PIN для удаления") }
+            if rc == FIDO_ERR_INVALID_COMMAND { throw FidoPassError.unsupported("Credential Management is not supported by the device") }
+            if rc == FIDO_ERR_PIN_REQUIRED { throw FidoPassError.invalidState("PIN is required for deletion") }
             if rc != FIDO_OK { let msg = String(cString: fido_strerr(rc)); throw FidoPassError.libfido2("credman_del: \(msg)") }
         }
     }

@@ -2,9 +2,9 @@ import Foundation
 
 public enum PasswordEngine {
     static func alphabet(policy: PasswordPolicy) -> [Character] {
-        let lower = Array("abcdefghjkmnpqrstuvwxyz") // без i, l, o
-        let upper = Array("ABCDEFGHJKMNPQRSTUVWXYZ") // без I, L, O
-        let digits = Array("23456789")              // без 0,1
+        let lower = Array("abcdefghjkmnpqrstuvwxyz") // omit i, l, o
+        let upper = Array("ABCDEFGHJKMNPQRSTUVWXYZ") // omit I, L, O
+        let digits = Array("23456789")              // omit 0,1
         let symbols = Array("!#$%&*+-.:;<=>?@^_~")
 
         var alpha: [Character] = []
@@ -21,7 +21,7 @@ public enum PasswordEngine {
         let n = alpha.count
         precondition(n > 1)
 
-        // rejection sampling, избегаем биаса
+        // rejection sampling to avoid bias
         let maxMultiple = (256 / n) * n
         var out: [Character] = []
         out.reserveCapacity(policy.length)
@@ -36,7 +36,7 @@ public enum PasswordEngine {
         let bytes = [UInt8](material)
         func nextByte() -> UInt8 {
             defer { idx += 1 }
-            if idx >= bytes.count { return 0 } // не должен случаться, у нас запас
+            if idx >= bytes.count { return 0 } // should never fire; we request enough entropy
             return bytes[idx]
         }
 
@@ -46,11 +46,11 @@ public enum PasswordEngine {
             out.append(alpha[b % n])
         }
 
-        // Гарантируем включение классов (если требуется)
+        // Ensure required character classes are present when requested
         if policy.useLower || policy.useUpper || policy.useDigits || policy.useSymbols {
             for (ci, cls) in needClasses.enumerated() {
                 if !out.contains(where: { cls.contains($0) }) {
-                    // заменим позицию, детерминированно выбрав индекс из материала
+                    // replace an index deterministically based on the entropy material
                     let pos = Int(bytes[ci % bytes.count]) % out.count
                     let ch = cls[Int(bytes[(ci+7) % bytes.count]) % cls.count]
                     out[pos] = ch
