@@ -62,9 +62,19 @@ final class AccountsViewModel: ObservableObject {
             let list = try core.listDevices()
             self.devices = list
             var next: [String: DeviceState] = [:]
-            for d in list { next[d.path] = deviceStates[d.path] ?? DeviceState(device: d) }
+            for d in list {
+                let previous = deviceStates[d.path]
+                let state = DeviceState(device: d, unlocked: previous?.unlocked ?? false, pin: previous?.pin ?? "")
+                next[d.path] = state
+            }
             deviceStates = next
-            if selectedDevicePath == nil { selectedDevicePath = devices.first?.path }
+            if list.isEmpty {
+                selectedDevicePath = nil
+            } else if let current = selectedDevicePath, !next.keys.contains(current) {
+                selectedDevicePath = list.first?.path
+            } else if selectedDevicePath == nil {
+                selectedDevicePath = list.first?.path
+            }
             // refresh accounts only for unlocked devices
             var acc: [Account] = []
             for (path, state) in deviceStates where state.unlocked {
@@ -87,9 +97,12 @@ final class AccountsViewModel: ObservableObject {
         Task {
             do {
                 _ = try core.enumerateAccounts(devicePath: device.path, pin: pin)
-                var st = deviceStates[device.path] ?? DeviceState(device: device)
-                st.pin = pin; st.unlocked = true
-                deviceStates[device.path] = st
+                await MainActor.run {
+                    var state = self.deviceStates[device.path] ?? DeviceState(device: device)
+                    state.pin = pin
+                    state.unlocked = true
+                    self.deviceStates[device.path] = state
+                }
                 await MainActor.run { self.reload() }
             } catch {
                 await MainActor.run { self.errorMessage = "PIN неверен: \(error.localizedDescription)" }
@@ -109,9 +122,11 @@ final class AccountsViewModel: ObservableObject {
         Task {
             do {
                 let acc = try core.enroll(accountId: accountId, rpId: rpId, userName: "", requireUV: requireUV, residentKey: true, devicePath: path, askPIN: { pin })
-                accounts.append(acc)
-                accounts.sort { $0.id < $1.id }
-                await MainActor.run { self.showNewAccountSheet = false }
+                await MainActor.run {
+                    self.accounts.append(acc)
+                    self.accounts.sort { $0.id < $1.id }
+                    self.showNewAccountSheet = false
+                }
             } catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
         }
     }
@@ -122,10 +137,12 @@ final class AccountsViewModel: ObservableObject {
         Task {
             do {
                 let (acc, generated) = try core.enrollPortable(accountId: accountId, requireUV: true, devicePath: path, askPIN: { pin }, importedKeyB64: importedKeyB64)
-                accounts.append(acc)
-                accounts.sort { $0.id < $1.id }
-                if let g = generated { generatedPassword = "IMPORTED:" + g } // temporary place to show generated key
-                await MainActor.run { self.showNewAccountSheet = false }
+                await MainActor.run {
+                    self.accounts.append(acc)
+                    self.accounts.sort { $0.id < $1.id }
+                    if let g = generated { self.generatedPassword = "IMPORTED:" + g } // temporary place to show generated key
+                    self.showNewAccountSheet = false
+                }
             } catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
         }
     }
@@ -136,12 +153,19 @@ final class AccountsViewModel: ObservableObject {
         generatedPassword = nil
         let pin = deviceStates[account.devicePath ?? ""]?.pin
         Task {
-            defer { generating = false; generatingAccountId = nil }
             do {
                 let pwd = try core.generatePassword(account: account, label: label, requireUV: true, pinProvider: { pin })
-                generatedPassword = pwd
-                if !label.isEmpty { addRecentLabel(label) }
-            } catch { errorMessage = error.localizedDescription }
+                await MainActor.run {
+                    self.generatedPassword = pwd
+                    if !label.isEmpty { self.addRecentLabel(label) }
+                }
+            } catch {
+                await MainActor.run { self.errorMessage = error.localizedDescription }
+            }
+            await MainActor.run {
+                self.generating = false
+                self.generatingAccountId = nil
+            }
         }
     }
 
