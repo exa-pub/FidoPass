@@ -1,8 +1,5 @@
 import SwiftUI
 import FidoPassCore
-#if os(macOS)
-import AppKit
-#endif
 
 @main
 struct FidoPassApp: App {
@@ -15,12 +12,7 @@ struct FidoPassApp: App {
                 .onAppear {
                     accountsVM.reload()
                     #if os(macOS)
-                    DispatchQueue.main.async {
-                        NSApp.setActivationPolicy(.regular)
-                        NSApp.activate(ignoringOtherApps: true)
-                        // make main window key & front
-                        NSApp.windows.first?.makeKeyAndOrderFront(nil)
-                    }
+                    AppActivationService.activate()
                     #endif
                 }
         }
