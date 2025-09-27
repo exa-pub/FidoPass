@@ -17,7 +17,7 @@ Hardware-backed password generator for macOS that delegates all sensitive operat
 
 ## Features
 - Derives deterministic passwords via a CTAP2/FIDO2 authenticator that advertises the `hmac-secret` extension.
-- Leaves secrets on the key: only credential metadata (credential ID, RP ID, password policy, device path) is stored locally in the macOS Keychain.
+- Leaves secrets on the key; credential metadata stays on the authenticator and the app only caches it in memory while running.
 - SwiftUI app for macOS 12+ with device grouping, PIN-gated unlock, recent-label shortcuts, and live search.
 - Portable accounts allow the master key material to be exported and re-imported on another authenticator.
 - Copy-to-clipboard helpers, light/dark appearance, and SF Symbol-based UI for accessibility.
@@ -64,7 +64,7 @@ let account = try core.enroll(accountId: "demo", devicePath: device?.path)
 let password = try core.generatePassword(account: account, label: "example.com")
 ```
 
-`Account` models are Codable and can be persisted outside of the supplied Keychain store if you need custom storage.
+`Account` models are Codable and can be persisted using any storage backend your app provides.
 
 ## Command-Line Notes
 Older revisions shipped a CLI target named `fidopass`. If you have that product available locally, the typical workflow looked like:
@@ -82,7 +82,7 @@ The current package focuses on the SwiftUI app and core library; a refreshed CLI
 - `scripts/update_icon.sh /path/to/AppIcon.icns` (an `.iconset` directory or a high-resolution `.png`) swaps in a new app icon and refreshes the editable `Icon.iconset` when `iconutil` is available. The `Icon.iconset` folder is only used as a source asset for maintainers; the build consumes the generated `AppIcon.icns`.
 
 ## Data Storage & Privacy
-- Account metadata is serialized to JSON and stored in the macOS Keychain with `kSecAttrAccessibleAfterFirstUnlock`.
+- Account metadata lives on the authenticator as resident credentials; the macOS app keeps only in-memory copies during a session.
 - Recent labels are synced via `UserDefaults` and `NSUbiquitousKeyValueStore` when iCloud is available.
 - Generated passwords are kept in memory only; copying moves them to the system clipboard where they follow normal macOS clipboard lifecycle rules.
 

@@ -35,8 +35,6 @@ Sources/FidoPassCore/
 │   ├── SecretDerivationService.swift# Resident/portable salt derivation, fixed component
 │   ├── PasswordGenerator.swift      # Combines derivation & HKDF to produce secret material
 │   └── PasswordEngine.swift         # Maps entropy bytes to passwords, enforces char classes
-├── Storage/
-│   └── KeychainStore.swift          # Keychain persistence for `Account` payloads
 ├── Support/
 │   ├── CryptoHelpers.swift          # `SecRandomCopyBytes` wrapper
 │   ├── SaltFactory.swift            # Salt factories (resident, portable, fixed component)
