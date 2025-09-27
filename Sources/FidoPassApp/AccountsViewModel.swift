@@ -26,8 +26,6 @@ final class AccountsViewModel: ObservableObject {
     @Published var showDeleteConfirm: Bool = false
     @Published var accountPendingDeletion: Account? = nil
     // Undo toast removed per request
-    @Published var lastDeletedAccount: Account? = nil
-    @Published var showUndoBanner: Bool = false // retained but no longer shown
     @Published var accountSearch: String = "" // live search filter
     @Published var showPlainPassword: Bool = false // reveal generated password
     @Published var lastCopiedPasswordAt: Date? = nil // ephemeral toast timestamp
@@ -60,26 +58,55 @@ final class AccountsViewModel: ObservableObject {
     func reload() {
         do {
             let list = try core.listDevices()
-            self.devices = list
-            var next: [String: DeviceState] = [:]
-            for d in list { next[d.path] = deviceStates[d.path] ?? DeviceState(device: d) }
-            deviceStates = next
-            if selectedDevicePath == nil { selectedDevicePath = devices.first?.path }
-            // refresh accounts only for unlocked devices
-            var acc: [Account] = []
-            for (path, state) in deviceStates where state.unlocked {
-                do {
-                    let normal = try core.enumerateAccounts(devicePath: path, pin: state.pin)
-                    acc.append(contentsOf: normal)
-                } catch { /* ignore normal */ }
-                do {
-                    let portable = try core.enumerateAccounts(rpId: "fidopass.portable", devicePath: path, pin: state.pin)
-                    acc.append(contentsOf: portable)
-                } catch { /* ignore portable */ }
+            applyDeviceList(list)
+            accounts = try loadAccountsForUnlockedDevices().sorted { $0.id < $1.id }
+            if let current = selected, !accounts.contains(where: { $0.id == current.id && $0.devicePath == current.devicePath }) {
+                selected = nil
             }
-            self.accounts = acc.sorted { $0.id < $1.id }
-            if let sel = selected, !accounts.contains(where: { $0.id == sel.id }) { selected = nil }
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyDeviceList(_ list: [FidoPassCore.FidoDevice]) {
+        devices = list
+        var updatedStates: [String: DeviceState] = [:]
+        for device in list {
+            let previous = deviceStates[device.path]
+            let state = DeviceState(device: device,
+                                    unlocked: previous?.unlocked ?? false,
+                                    pin: previous?.pin ?? "")
+            updatedStates[device.path] = state
+        }
+        deviceStates = updatedStates
+
+        guard !list.isEmpty else {
+            selectedDevicePath = nil
+            return
+        }
+
+        if let current = selectedDevicePath, updatedStates[current] != nil {
+            return
+        }
+        selectedDevicePath = list.first?.path
+    }
+
+    private func loadAccountsForUnlockedDevices() throws -> [Account] {
+        var collected: [Account] = []
+        for (path, state) in deviceStates where state.unlocked {
+            let pin = state.pin
+            collected.append(contentsOf: enumerateAccounts(devicePath: path, pin: pin))
+            collected.append(contentsOf: enumerateAccounts(devicePath: path, pin: pin, rpId: "fidopass.portable"))
+        }
+        return collected
+    }
+
+    private func enumerateAccounts(devicePath: String, pin: String?, rpId: String = "fidopass.local") -> [Account] {
+        do {
+            return try core.enumerateAccounts(rpId: rpId, devicePath: devicePath, pin: pin)
+        } catch {
+            return []
+        }
     }
 
     func unlockDevice(_ device: FidoPassCore.FidoDevice, pin: String) {
@@ -87,12 +114,15 @@ final class AccountsViewModel: ObservableObject {
         Task {
             do {
                 _ = try core.enumerateAccounts(devicePath: device.path, pin: pin)
-                var st = deviceStates[device.path] ?? DeviceState(device: device)
-                st.pin = pin; st.unlocked = true
-                deviceStates[device.path] = st
+                await MainActor.run {
+                    var state = self.deviceStates[device.path] ?? DeviceState(device: device)
+                    state.pin = pin
+                    state.unlocked = true
+                    self.deviceStates[device.path] = state
+                }
                 await MainActor.run { self.reload() }
             } catch {
-                await MainActor.run { self.errorMessage = "PIN неверен: \(error.localizedDescription)" }
+                await MainActor.run { self.errorMessage = "PIN is incorrect: \(error.localizedDescription)" }
             }
         }
     }
@@ -104,28 +134,32 @@ final class AccountsViewModel: ObservableObject {
     }
 
     func enroll(accountId: String, rpId: String = "fidopass.local", requireUV: Bool = true) {
-        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Сначала разблокируйте устройство"; return }
+        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Unlock the device first"; return }
         let pin = st.pin
         Task {
             do {
                 let acc = try core.enroll(accountId: accountId, rpId: rpId, userName: "", requireUV: requireUV, residentKey: true, devicePath: path, askPIN: { pin })
-                accounts.append(acc)
-                accounts.sort { $0.id < $1.id }
-                await MainActor.run { self.showNewAccountSheet = false }
+                await MainActor.run {
+                    self.accounts.append(acc)
+                    self.accounts.sort { $0.id < $1.id }
+                    self.showNewAccountSheet = false
+                }
             } catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
         }
     }
 
     func enrollPortable(accountId: String, importedKeyB64: String?) {
-        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Сначала разблокируйте устройство"; return }
+        guard let path = selectedDevicePath, let st = deviceStates[path], st.unlocked else { errorMessage = "Unlock the device first"; return }
         let pin = st.pin
         Task {
             do {
                 let (acc, generated) = try core.enrollPortable(accountId: accountId, requireUV: true, devicePath: path, askPIN: { pin }, importedKeyB64: importedKeyB64)
-                accounts.append(acc)
-                accounts.sort { $0.id < $1.id }
-                if let g = generated { generatedPassword = "IMPORTED:" + g } // temporary place to show generated key
-                await MainActor.run { self.showNewAccountSheet = false }
+                await MainActor.run {
+                    self.accounts.append(acc)
+                    self.accounts.sort { $0.id < $1.id }
+                    if let g = generated { self.generatedPassword = "IMPORTED:" + g } // temporary place to show generated key
+                    self.showNewAccountSheet = false
+                }
             } catch { await MainActor.run { self.errorMessage = error.localizedDescription } }
         }
     }
@@ -136,12 +170,19 @@ final class AccountsViewModel: ObservableObject {
         generatedPassword = nil
         let pin = deviceStates[account.devicePath ?? ""]?.pin
         Task {
-            defer { generating = false; generatingAccountId = nil }
             do {
                 let pwd = try core.generatePassword(account: account, label: label, requireUV: true, pinProvider: { pin })
-                generatedPassword = pwd
-                if !label.isEmpty { addRecentLabel(label) }
-            } catch { errorMessage = error.localizedDescription }
+                await MainActor.run {
+                    self.generatedPassword = pwd
+                    if !label.isEmpty { self.addRecentLabel(label) }
+                }
+            } catch {
+                await MainActor.run { self.errorMessage = error.localizedDescription }
+            }
+            await MainActor.run {
+                self.generating = false
+                self.generatingAccountId = nil
+            }
         }
     }
 
@@ -154,9 +195,6 @@ final class AccountsViewModel: ObservableObject {
             do {
                 try core.deleteAccount(account, pin: pin)
                 await MainActor.run {
-                    // Removed undo banner behavior
-                    lastDeletedAccount = nil
-                    showUndoBanner = false
                     accounts.removeAll { $0.id == account.id && $0.devicePath == path }
                     if selected?.id == account.id { selected = nil }
                 }
@@ -167,8 +205,6 @@ final class AccountsViewModel: ObservableObject {
             }
         }
     }
-
-    func undoLastDeletion() { /* no-op; feature removed */ }
 
     // MARK: - Recent Labels Persistence
     private func addRecentLabel(_ label: String) {

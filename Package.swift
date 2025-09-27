@@ -8,7 +8,6 @@ let package = Package(
     ],
     products: [
         .library(name: "FidoPassCore", targets: ["FidoPassCore"]),
-    .executable(name: "fidopass", targets: ["FidoPassCLI"]),
     .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
     ],
     dependencies: [
@@ -28,18 +27,15 @@ let package = Package(
             swiftSettings: [.define("SWIFT_PACKAGE")]
         ),
         .executableTarget(
-            name: "FidoPassCLI",
-            dependencies: [
-                "FidoPassCore",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
-            ]
-        ),
-        .executableTarget(
             name: "FidoPassApp",
             dependencies: [
                 "FidoPassCore"
             ],
             path: "Sources/FidoPassApp",
+            exclude: [
+                "Resources/Info.plist",
+                "Resources/placeholder.txt"
+            ],
             resources: [
                 // Copy the app icon (.icns); final .app bundling will happen via helper script
                 .copy("Resources/AppIcon.icns")
