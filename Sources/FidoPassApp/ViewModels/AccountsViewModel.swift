@@ -59,7 +59,8 @@ final class AccountsViewModel: ObservableObject {
     struct DeviceState: Identifiable, Hashable {
         let device: FidoDevice
         var unlocked: Bool = false
-        var pin: String = ""
+        var pinToken: SecurePinVault.Token? = nil
+        var pinDraft: String = ""
         var id: String { device.path }
     }
 
@@ -77,6 +78,8 @@ final class AccountsViewModel: ObservableObject {
     let userDefaultsKey = "recentLabels"
     let ubiquitousKey = "recentLabels"
     let ubiStore = NSUbiquitousKeyValueStore.default
+    let pinVault = SecurePinVault(defaultTTL: 300)
+    let pinTTL: TimeInterval = 300
     private var ubiObserver: NSObjectProtocol?
     var toastTask: Task<Void, Never>? = nil
 
@@ -96,10 +99,51 @@ final class AccountsViewModel: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         toastTask?.cancel()
+        pinVault.removeAll()
     }
 
     func resetEnrollmentState() {
         enrollmentPhase = .idle
+    }
+
+    func currentPin(forDevicePath path: String?, extendTTL: Bool = true) -> String? {
+        guard let resolved = path else { return nil }
+        return currentPin(for: resolved, extendTTL: extendTTL)
+    }
+
+    func currentPin(for path: String, extendTTL: Bool = true) -> String? {
+        guard let token = deviceStates[path]?.pinToken else { return nil }
+        let ttl = extendTTL ? pinTTL : nil
+        if let pin = pinVault.pin(for: token, extending: ttl) {
+            return pin
+        }
+        handlePinExpiration(for: path, notify: true)
+        return nil
+    }
+
+    func makePinProvider(for devicePath: String?) -> (() -> String?)? {
+        guard let path = devicePath,
+              let token = deviceStates[path]?.pinToken else { return nil }
+        let vault = pinVault
+        let ttl = pinTTL
+        return {
+            vault.pin(for: token, extending: ttl)
+        }
+    }
+
+    func handlePinExpiration(for path: String, notify: Bool) {
+        guard var state = deviceStates[path], state.unlocked else { return }
+        state.unlocked = false
+        state.pinToken = nil
+        state.pinDraft = ""
+        deviceStates[path] = state
+        accounts.removeAll { $0.devicePath == path }
+        if let current = selected, current.devicePath == path {
+            selected = nil
+        }
+        if notify {
+            showToast("Device locked", icon: "lock.fill", style: .warning, subtitle: "PIN expired; unlock again")
+        }
     }
 }
 

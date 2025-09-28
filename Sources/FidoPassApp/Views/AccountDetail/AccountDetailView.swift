@@ -39,11 +39,16 @@ struct AccountDetailView: View {
 
     private func exportMasterKey() {
         Task {
+            guard let pinProvider = viewModel.makePinProvider(for: account.devicePath) else {
+                if let path = account.devicePath {
+                    viewModel.handlePinExpiration(for: path, notify: true)
+                }
+                return
+            }
             do {
-                let pin = viewModel.deviceStates[account.devicePath ?? ""]?.pin
                 let imported = try viewModel.core.exportImportedKey(account,
                                                                      requireUV: true,
-                                                                     pinProvider: { pin })
+                                                                     pinProvider: pinProvider)
                 await MainActor.run {
                     viewModel.generatedPassword = imported
                     viewModel.showPlainPassword = false

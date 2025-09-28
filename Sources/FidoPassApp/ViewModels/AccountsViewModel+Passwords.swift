@@ -55,7 +55,13 @@ extension AccountsViewModel {
         generatingAccountId = account.id
         generatedPassword = nil
 
-        let pin = deviceStates[account.devicePath ?? ""]?.pin
+        guard let pinProvider = makePinProvider(for: account.devicePath) else {
+            generating = false
+            generatingAccountId = nil
+            showToast("Unlock required", icon: "lock.fill", style: .warning, subtitle: "Unlock the device to generate a password")
+            return
+        }
+
         let core = self.core
         weak var weakSelf = self
 
@@ -64,7 +70,7 @@ extension AccountsViewModel {
                 let password = try core.generatePassword(account: account,
                                                           label: label,
                                                           requireUV: true,
-                                                          pinProvider: { pin })
+                                                          pinProvider: pinProvider)
                 await MainActor.run {
                     guard let viewModel = weakSelf else { return }
                     success(viewModel, password)

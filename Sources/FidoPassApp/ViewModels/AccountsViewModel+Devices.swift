@@ -27,8 +27,14 @@ extension AccountsViewModel {
                 _ = try core.enumerateAccounts(devicePath: device.path, pin: pin)
                 await MainActor.run {
                     var state = deviceStates[device.path] ?? DeviceState(device: device)
-                    state.pin = pin
+                    if let existing = state.pinToken {
+                        pinVault.remove(token: existing)
+                    }
+                    state.pinToken = pinVault.store(pin: pin, ttl: pinTTL) { [weak self] in
+                        self?.handlePinExpiration(for: device.path, notify: true)
+                    }
                     state.unlocked = true
+                    state.pinDraft = ""
                     deviceStates[device.path] = state
                     showToast("Device unlocked", icon: "lock.open", style: .success)
                 }
@@ -43,8 +49,12 @@ extension AccountsViewModel {
 
     func lockDevice(_ device: FidoDevice) {
         if var state = deviceStates[device.path] {
+            if let token = state.pinToken {
+                pinVault.remove(token: token)
+            }
             state.unlocked = false
-            state.pin = ""
+            state.pinToken = nil
+            state.pinDraft = ""
             deviceStates[device.path] = state
         }
         accounts.removeAll { $0.devicePath == device.path }
@@ -70,7 +80,8 @@ extension AccountsViewModel {
             let previous = deviceStates[device.path]
             let state = DeviceState(device: device,
                                     unlocked: previous?.unlocked ?? false,
-                                    pin: previous?.pin ?? "")
+                                    pinToken: previous?.pinToken,
+                                    pinDraft: previous?.pinDraft ?? "")
             updatedStates[device.path] = state
         }
         deviceStates = updatedStates
@@ -89,7 +100,7 @@ extension AccountsViewModel {
     private func loadAccountsForUnlockedDevices() throws -> [Account] {
         var collected: [Account] = []
         for (path, state) in deviceStates where state.unlocked {
-            let pin = state.pin
+            guard let pin = currentPin(for: path) else { continue }
             collected.append(contentsOf: enumerateAccounts(devicePath: path, pin: pin))
             collected.append(contentsOf: enumerateAccounts(devicePath: path, pin: pin, rpId: "fidopass.portable"))
         }
@@ -116,4 +127,5 @@ extension AccountsViewModel {
             selected = first
         }
     }
+
 }
