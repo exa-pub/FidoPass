@@ -2,6 +2,7 @@ import Foundation
 
 /// Stores PIN codes in memory with automatic expiration and zeroisation on removal.
 final class SecurePinVault {
+    typealias TimerFactory = (_ queue: DispatchQueue) -> DispatchSourceTimer
     struct Token: Hashable {
         fileprivate let rawValue = UUID()
     }
@@ -19,12 +20,17 @@ final class SecurePinVault {
         }
     }
 
-    private let queue = DispatchQueue(label: "com.fidopass.pinVault", qos: .userInitiated, attributes: .concurrent)
+    private let queue: DispatchQueue
+    private let timerFactory: TimerFactory
     private var entries: [Token: Entry] = [:]
     private let defaultTTL: TimeInterval
 
-    init(defaultTTL: TimeInterval = 300) {
+    init(defaultTTL: TimeInterval = 300,
+         queue: DispatchQueue = DispatchQueue(label: "com.fidopass.pinVault", qos: .userInitiated, attributes: .concurrent),
+         timerFactory: @escaping TimerFactory = { queue in DispatchSource.makeTimerSource(queue: queue) }) {
         self.defaultTTL = defaultTTL
+        self.queue = queue
+        self.timerFactory = timerFactory
     }
 
     @discardableResult
@@ -96,7 +102,7 @@ final class SecurePinVault {
             return
         }
         entry.expiration = Date().addingTimeInterval(ttl)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
+        let timer = timerFactory(queue)
         timer.schedule(deadline: .now() + ttl)
         timer.setEventHandler { [weak self] in
             self?.handleExpiration(for: token)

@@ -80,12 +80,14 @@ final class AccountsViewModel: ObservableObject {
     }
 
     let core: FidoPassCore
+    let userDefaults: UserDefaults
+    let notificationCenter: NotificationCenter
+    let ubiStore: NSUbiquitousKeyValueStore
+    let pinVault: SecurePinVault
+    let pinTTL: TimeInterval
+    let deviceWorkQueue: DispatchQueue
     let userDefaultsKey = "recentLabels"
     let ubiquitousKey = "recentLabels"
-    let ubiStore = NSUbiquitousKeyValueStore.default
-    let pinVault = SecurePinVault(defaultTTL: 300)
-    let pinTTL: TimeInterval = 300
-    let deviceWorkQueue = DispatchQueue(label: "com.fidopass.deviceWork", qos: .userInitiated)
     var pendingReloadTrigger: ReloadTrigger?
 #if os(macOS)
     private var deviceMonitor: DeviceMonitorService?
@@ -94,24 +96,39 @@ final class AccountsViewModel: ObservableObject {
     private var ubiObserver: NSObjectProtocol?
     var toastTask: Task<Void, Never>? = nil
 
-    init(core: FidoPassCore = .shared) {
+    init(core: FidoPassCore = .shared,
+         pinVault: SecurePinVault = SecurePinVault(defaultTTL: 300),
+         pinTTL: TimeInterval = 300,
+         deviceWorkQueue: DispatchQueue = DispatchQueue(label: "com.fidopass.deviceWork", qos: .userInitiated),
+         ubiStore: NSUbiquitousKeyValueStore = .default,
+         userDefaults: UserDefaults = .standard,
+         notificationCenter: NotificationCenter = .default,
+         enableDeviceMonitors: Bool = true) {
         self.core = core
+        self.pinVault = pinVault
+        self.pinTTL = pinTTL
+        self.deviceWorkQueue = deviceWorkQueue
+        self.ubiStore = ubiStore
+        self.userDefaults = userDefaults
+        self.notificationCenter = notificationCenter
         loadRecentLabels()
-        ubiObserver = NotificationCenter.default.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-                                                             object: ubiStore,
-                                                             queue: .main) { [weak self] _ in
+        ubiObserver = notificationCenter.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                                                     object: ubiStore,
+                                                     queue: .main) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in self.mergeUbiquitous() }
         }
 #if os(macOS)
-        deviceMonitor = DeviceMonitorService { [weak self] in
-            Task { @MainActor in
-                self?.reload(trigger: .hotplug)
+        if enableDeviceMonitors {
+            deviceMonitor = DeviceMonitorService { [weak self] in
+                Task { @MainActor in
+                    self?.reload(trigger: .hotplug)
+                }
             }
-        }
-        sessionMonitor = SessionLockMonitor { [weak self] in
-            Task { @MainActor in
-                self?.lockAllDevices(reason: "macOS session locked; re-enter PIN to continue")
+            sessionMonitor = SessionLockMonitor { [weak self] in
+                Task { @MainActor in
+                    self?.lockAllDevices(reason: "macOS session locked; re-enter PIN to continue")
+                }
             }
         }
 #endif
@@ -119,7 +136,7 @@ final class AccountsViewModel: ObservableObject {
 
     deinit {
         if let observer = ubiObserver {
-            NotificationCenter.default.removeObserver(observer)
+            notificationCenter.removeObserver(observer)
         }
         toastTask?.cancel()
         pinVault.removeAll()

@@ -22,6 +22,11 @@ let package = Package(
             ]
         ),
         .target(
+            name: "TestSupport",
+            dependencies: ["FidoPassCore"],
+            path: "Tests/TestSupport"
+        ),
+        .target(
             name: "FidoPassCore",
             dependencies: ["CLibfido2"],
             swiftSettings: [.define("SWIFT_PACKAGE")],
@@ -40,6 +45,16 @@ let package = Package(
                 // Copy the app icon (.icns); final .app bundling will happen via helper script
                 .copy("Resources/AppIcon.icns")
             ]
+        ),
+        .testTarget(
+            name: "FidoPassCoreTests",
+            dependencies: ["FidoPassCore", "TestSupport"],
+            path: "Tests/FidoPassCoreTests"
+        ),
+        .testTarget(
+            name: "FidoPassAppTests",
+            dependencies: ["FidoPassApp", "FidoPassCore", "TestSupport"],
+            path: "Tests/FidoPassAppTests"
         )
     ]
 )
