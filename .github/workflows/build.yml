@@ -54,9 +54,27 @@ jobs:
       - name: Resolve Swift dependencies
         run: swift package resolve
 
-      - name: Run Tests (if any)
-        run: swift test --parallel
-        continue-on-error: true
+      - name: Run unit tests
+        run: swift test --enable-code-coverage --parallel
+
+      - name: Archive code coverage
+        if: always()
+        run: |
+          mkdir -p artifacts/codecov
+          if [ -d .build/debug/codecov ]; then
+            cp -R .build/debug/codecov artifacts/
+          fi
+          if [ -d .build/debug/coverage ]; then
+            cp -R .build/debug/coverage artifacts/
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-code-coverage
+          path: artifacts
+          if-no-files-found: warn
 
       - name: Build release binaries
         run: swift build -c release

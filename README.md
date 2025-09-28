@@ -1,5 +1,8 @@
 # FidoPass
 
+[![Build & Release](https://github.com/exa-pub/FidoPass/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/exa-pub/FidoPass/actions/workflows/build.yml)
+[![Latest Release](https://img.shields.io/github/v/release/exa-pub/FidoPass?display_name=tag&sort=semver)](https://github.com/exa-pub/FidoPass/releases/latest)
+
 Hardware-backed password generator for macOS that delegates all sensitive operations to a FIDO2 authenticator via the `hmac-secret` extension. FidoPass never writes derived secrets to disk—only deterministic metadata lives on the machine.
 
 ## Table of Contents
@@ -66,14 +69,6 @@ let password = try core.generatePassword(account: account, label: "example.com")
 
 `Account` models are Codable and can be persisted using any storage backend your app provides.
 
-## Command-Line Notes
-Older revisions shipped a CLI target named `fidopass`. If you have that product available locally, the typical workflow looked like:
-```bash
-swift run fidopass enroll --account demo --rp fidopass.local --user "Demo User" --uv
-swift run fidopass gen --account demo --label example.com --len 20 --copy
-```
-The current package focuses on the SwiftUI app and core library; a refreshed CLI is planned but not yet included in `Package.swift`.
-
 ## Building & Packaging
 - `swift build -c release --product FidoPassApp` produces a release binary in `.build/release/FidoPassApp`.
 - `scripts/build_app.sh` assembles a relocatable `.app` bundle, copying the required dynamic libraries and applying an ad-hoc codesign signature. Adjust the `BUNDLE_ID` in the script before distributing a release build.
@@ -93,7 +88,6 @@ The current package focuses on the SwiftUI app and core library; a refreshed CLI
 - Portable accounts XOR an imported key with the device-derived secret so the same password material can be regenerated on another authenticator.
 
 ## Roadmap
-- First-class CLI rebuilt on `swift-argument-parser`.
 - Editable password policies (length and character classes) from the UI.
 - Automatic device hot-plug detection and refreshed lists without manual reloads.
 - Additional filters (per-device, per-RP) and password policy profiles.
