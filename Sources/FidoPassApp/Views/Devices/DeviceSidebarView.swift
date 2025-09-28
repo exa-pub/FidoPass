@@ -15,7 +15,7 @@ struct DeviceSidebarView: View {
                         DeviceSidebarRow(device: device,
                                          state: viewModel.deviceStates[device.path],
                                          accountCount: accountCount(for: device),
-                                         onReload: viewModel.reload,
+                                         onReload: { viewModel.reload() },
                                          onLock: { viewModel.lockDevice(device) })
                             .tag(device.path as String?)
                     }

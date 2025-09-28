@@ -11,7 +11,10 @@ extension AccountsViewModel {
             errorMessage = "Unlock the device first"
             return
         }
-        let pin = state.pin
+        guard let pinProvider = makePinProvider(for: path) else {
+            errorMessage = "Unlock the device first"
+            return
+        }
         enrollmentPhase = .waiting(message: "Touch your security key to confirm")
         let core = self.core
         weak var weakSelf = self
@@ -23,7 +26,7 @@ extension AccountsViewModel {
                                               requireUV: requireUV,
                                               residentKey: true,
                                               devicePath: path,
-                                              askPIN: { pin })
+                                              askPIN: pinProvider)
                 await MainActor.run {
                     guard let self = weakSelf else { return }
                     self.accounts.append(account)
@@ -50,7 +53,10 @@ extension AccountsViewModel {
             errorMessage = "Unlock the device first"
             return
         }
-        let pin = state.pin
+        guard let pinProvider = makePinProvider(for: path) else {
+            errorMessage = "Unlock the device first"
+            return
+        }
         enrollmentPhase = .waiting(message: "Touch your security key to confirm portable enrollment")
         let core = self.core
         weak var weakSelf = self
@@ -59,7 +65,7 @@ extension AccountsViewModel {
                 let result = try core.enrollPortable(accountId: accountId,
                                                      requireUV: true,
                                                      devicePath: path,
-                                                     askPIN: { pin },
+                                                     askPIN: pinProvider,
                                                      importedKeyB64: importedKeyB64)
                 let account = result.0
                 let generated = result.1
@@ -88,7 +94,10 @@ extension AccountsViewModel {
         guard let path = account.devicePath,
               let state = deviceStates[path],
               state.unlocked else { return }
-        let pin = state.pin
+        guard let pin = currentPin(forDevicePath: path) else {
+            handlePinExpiration(for: path, notify: true)
+            return
+        }
         Task {
             do {
                 try core.deleteAccount(account, pin: pin)

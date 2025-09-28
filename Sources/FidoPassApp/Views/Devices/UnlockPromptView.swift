@@ -31,10 +31,10 @@ struct PinUnlockRow: View {
     var body: some View {
         HStack(spacing: 8) {
             SecureField("PIN", text: Binding(get: {
-                viewModel.deviceStates[device.path]?.pin ?? ""
+                viewModel.deviceStates[device.path]?.pinDraft ?? ""
             }, set: { pin in
                 var state = viewModel.deviceStates[device.path] ?? AccountsViewModel.DeviceState(device: device)
-                state.pin = pin
+                state.pinDraft = pin
                 viewModel.deviceStates[device.path] = state
             }))
             .textFieldStyle(.roundedBorder)
@@ -50,7 +50,7 @@ struct PinUnlockRow: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .help("Unlock the device with the provided PIN")
-            .disabled((viewModel.deviceStates[device.path]?.pin ?? "").isEmpty)
+            .disabled((viewModel.deviceStates[device.path]?.pinDraft ?? "").isEmpty)
         }
         .onChange(of: pinFocused) { isFocused in
             if isFocused {
@@ -72,7 +72,7 @@ struct PinUnlockRow: View {
     }
 
     private func attemptUnlock() {
-        if let pin = viewModel.deviceStates[device.path]?.pin, !pin.isEmpty {
+        if let pin = viewModel.deviceStates[device.path]?.pinDraft, !pin.isEmpty {
             viewModel.unlockDevice(device, pin: pin)
         }
     }

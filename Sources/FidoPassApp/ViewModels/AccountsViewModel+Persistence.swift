@@ -12,13 +12,13 @@ extension AccountsViewModel {
 
     func saveRecentLabels() {
         let value = recentLabels
-        UserDefaults.standard.set(value, forKey: userDefaultsKey)
+        userDefaults.set(value, forKey: userDefaultsKey)
         ubiStore.set(value, forKey: ubiquitousKey)
         ubiStore.synchronize()
     }
 
     func loadRecentLabels() {
-        var local = (UserDefaults.standard.array(forKey: userDefaultsKey) as? [String]) ?? []
+        var local = (userDefaults.array(forKey: userDefaultsKey) as? [String]) ?? []
         if let cloud = ubiStore.array(forKey: ubiquitousKey) as? [String] {
             for label in cloud.reversed() where !local.contains(label) {
                 local.insert(label, at: 0)
@@ -36,7 +36,7 @@ extension AccountsViewModel {
             }
             recentLabels = Array(merged.prefix(10))
             if Set(recentLabels) != before {
-                UserDefaults.standard.set(recentLabels, forKey: userDefaultsKey)
+                userDefaults.set(recentLabels, forKey: userDefaultsKey)
             }
         }
     }
