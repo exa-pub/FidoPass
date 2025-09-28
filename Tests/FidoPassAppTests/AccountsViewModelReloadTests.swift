@@ -3,9 +3,9 @@ import FidoPassCore
 @testable import FidoPassApp
 import TestSupport
 
-@MainActor
 final class AccountsViewModelReloadTests: XCTestCase {
-    func testReloadPopulatesDevicesAndAccounts() {
+    @MainActor
+    func testReloadPopulatesDevicesAndAccounts() async throws {
         let device = FidoDevice(path: "/dev/key",
                                 product: "Key",
                                 manufacturer: "Vendor",
@@ -31,42 +31,60 @@ final class AccountsViewModelReloadTests: XCTestCase {
         }
 
         let portable = MockPortableEnrollmentService()
+        let context = makeViewModel(deviceRepository: deviceRepository,
+                                    enrollment: enrollment,
+                                    portable: portable,
+                                    device: device)
+        let vm = context.viewModel
+
+        vm.deviceStates[device.path] = context.deviceState
+        vm.selectedDevicePath = device.path
+        vm.reload()
+
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let devices = vm.devices
+        let accounts = vm.accounts.map { $0.id }
+        let selected = vm.selected?.id
+        let reloading = vm.reloading
+
+        XCTAssertEqual(devices, [device])
+        XCTAssertEqual(accounts, ["acct1", "acct2", "portable"])
+        XCTAssertEqual(selected, "acct1")
+        XCTAssertFalse(reloading)
+    }
+
+    @MainActor
+    private func makeViewModel(deviceRepository: MockDeviceRepository,
+                               enrollment: MockEnrollmentService,
+                               portable: MockPortableEnrollmentService,
+                               device: FidoDevice) -> (viewModel: AccountsViewModel, deviceState: AccountsViewModel.DeviceState) {
         let core = FidoPassCore(deviceRepository: deviceRepository,
                                 enrollmentService: enrollment,
                                 portableEnrollmentService: portable,
                                 secretDerivationService: MockSecretDerivationService(),
                                 passwordGenerator: MockPasswordGenerator())
-
         let vault = SecurePinVault(defaultTTL: 60)
         let token = vault.store(pin: "1234", ttl: 60)
 
         let queue = DispatchQueue(label: "test.deviceWork", qos: .userInitiated, attributes: .concurrent)
-        let ubiStore = InMemoryUbiquitousStore()
         let suiteName = "ReloadTest-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
+
         let vm = AccountsViewModel(core: core,
                                    pinVault: vault,
                                    pinTTL: 60,
                                    deviceWorkQueue: queue,
-                                   ubiStore: ubiStore,
+                                   ubiStore: InMemoryUbiquitousStore(),
                                    userDefaults: defaults,
                                    notificationCenter: NotificationCenter(),
                                    enableDeviceMonitors: false)
 
-        vm.deviceStates[device.path] = AccountsViewModel.DeviceState(device: device,
-                                                                     unlocked: true,
-                                                                     pinToken: token,
-                                                                     pinDraft: "")
-        vm.selectedDevicePath = device.path
-
-        vm.reload()
-        vm.deviceWorkQueue.sync(flags: DispatchWorkItemFlags.barrier) {}
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-
-        XCTAssertEqual(vm.devices, [device])
-        XCTAssertEqual(vm.accounts.map { $0.id }, ["acct1", "acct2", "portable"])
-        XCTAssertEqual(vm.selected?.id, "acct1")
-        XCTAssertFalse(vm.reloading)
+        let state = AccountsViewModel.DeviceState(device: device,
+                                                  unlocked: true,
+                                                  pinToken: token,
+                                                  pinDraft: "")
+        return (vm, state)
     }
 }

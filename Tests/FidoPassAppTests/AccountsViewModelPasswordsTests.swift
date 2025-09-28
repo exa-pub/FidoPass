@@ -3,9 +3,9 @@ import FidoPassCore
 @testable import FidoPassApp
 import TestSupport
 
-@MainActor
 final class AccountsViewModelPasswordsTests: XCTestCase {
-    func testGeneratePasswordSuccessUpdatesState() throws {
+    @MainActor
+    func testGeneratePasswordSuccessUpdatesState() async throws {
         let device = FidoDevice(path: "/dev/key",
                                 product: "Key",
                                 manufacturer: "Vendor",
@@ -23,44 +23,31 @@ final class AccountsViewModelPasswordsTests: XCTestCase {
             return "secret"
         }
 
-        let core = FidoPassCore(deviceRepository: MockDeviceRepository(),
-                                enrollmentService: MockEnrollmentService(),
-                                portableEnrollmentService: MockPortableEnrollmentService(),
-                                secretDerivationService: MockSecretDerivationService(),
-                                passwordGenerator: passwordGenerator)
-
-        let vault = SecurePinVault(defaultTTL: 60)
-        let token = vault.store(pin: "1234", ttl: 60)
-
-        let suite = "PasswordSuccess-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        let vm = AccountsViewModel(core: core,
-                                   pinVault: vault,
-                                   pinTTL: 60,
-                                   deviceWorkQueue: DispatchQueue(label: "test.deviceWork"),
-                                   ubiStore: InMemoryUbiquitousStore(),
-                                   userDefaults: defaults,
-                                   notificationCenter: NotificationCenter(),
-                                   enableDeviceMonitors: false)
-
-        vm.deviceStates[device.path] = AccountsViewModel.DeviceState(device: device,
-                                                                     unlocked: true,
-                                                                     pinToken: token,
-                                                                     pinDraft: "")
+        let vmContext = makeViewModel(passwordGenerator: passwordGenerator,
+                                      pin: "1234",
+                                      device: device)
+        let vm = vmContext.viewModel
         let account = Account.fixture(id: "acct", devicePath: device.path)
+
+        vm.deviceStates[device.path] = vmContext.deviceState
         vm.generatePassword(for: account, label: "label")
 
-        wait(for: [generateExpectation], timeout: 1.0)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        await fulfillment(of: [generateExpectation], timeout: 2.0)
+        try await Task.sleep(nanoseconds: 100_000_000)
 
-        XCTAssertEqual(vm.generatedPassword, "secret")
-        XCTAssertEqual(vm.toastMessage?.title, "Password generated")
-        XCTAssertFalse(vm.generating)
-        XCTAssertNil(vm.generatingAccountId)
+        let generated = vm.generatedPassword
+        let toastTitle = vm.toastMessage?.title
+        let generating = vm.generating
+        let generatingAccountId = vm.generatingAccountId
+
+        XCTAssertEqual(generated, "secret")
+        XCTAssertEqual(toastTitle, "Password generated")
+        XCTAssertFalse(generating)
+        XCTAssertNil(generatingAccountId)
     }
 
-    func testGeneratePasswordPropagatesError() throws {
+    @MainActor
+    func testGeneratePasswordPropagatesError() async throws {
         let device = FidoDevice(path: "/dev/key",
                                 product: "Key",
                                 manufacturer: "Vendor",
@@ -74,18 +61,43 @@ final class AccountsViewModelPasswordsTests: XCTestCase {
             throw TestError.generic("failure")
         }
 
+        let vmContext = makeViewModel(passwordGenerator: passwordGenerator,
+                                      pin: "0000",
+                                      device: device)
+        let vm = vmContext.viewModel
+        let account = Account.fixture(id: "acct", devicePath: device.path)
+
+        vm.deviceStates[device.path] = vmContext.deviceState
+        vm.generatePassword(for: account, label: "label")
+
+        await fulfillment(of: [generateExpectation], timeout: 2.0)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let errorMessage = vm.errorMessage
+        let generating = vm.generating
+        let generatedPassword = vm.generatedPassword
+
+        XCTAssertEqual(errorMessage, TestError.generic("failure").localizedDescription)
+        XCTAssertFalse(generating)
+        XCTAssertNil(generatedPassword)
+    }
+
+    @MainActor
+    private func makeViewModel(passwordGenerator: MockPasswordGenerator,
+                               pin: String,
+                               device: FidoDevice) -> (viewModel: AccountsViewModel, deviceState: AccountsViewModel.DeviceState) {
         let core = FidoPassCore(deviceRepository: MockDeviceRepository(),
                                 enrollmentService: MockEnrollmentService(),
                                 portableEnrollmentService: MockPortableEnrollmentService(),
                                 secretDerivationService: MockSecretDerivationService(),
                                 passwordGenerator: passwordGenerator)
-
         let vault = SecurePinVault(defaultTTL: 60)
-        let token = vault.store(pin: "0000", ttl: 60)
+        let token = vault.store(pin: pin, ttl: 60)
 
-        let suite = "PasswordError-\(UUID().uuidString)"
+        let suite = "PasswordTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
+
         let vm = AccountsViewModel(core: core,
                                    pinVault: vault,
                                    pinTTL: 60,
@@ -95,18 +107,10 @@ final class AccountsViewModelPasswordsTests: XCTestCase {
                                    notificationCenter: NotificationCenter(),
                                    enableDeviceMonitors: false)
 
-        vm.deviceStates[device.path] = AccountsViewModel.DeviceState(device: device,
-                                                                     unlocked: true,
-                                                                     pinToken: token,
-                                                                     pinDraft: "")
-        let account = Account.fixture(id: "acct", devicePath: device.path)
-        vm.generatePassword(for: account, label: "label")
-
-        wait(for: [generateExpectation], timeout: 1.0)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-
-        XCTAssertEqual(vm.errorMessage, TestError.generic("failure").localizedDescription)
-        XCTAssertFalse(vm.generating)
-        XCTAssertNil(vm.generatedPassword)
+        let state = AccountsViewModel.DeviceState(device: device,
+                                                  unlocked: true,
+                                                  pinToken: token,
+                                                  pinDraft: "")
+        return (vm, state)
     }
 }
