@@ -43,7 +43,7 @@ struct ContentView: View {
         .toolbar {
             ToolbarButtons(viewModel: vm,
                            onNewAccount: { vm.showNewAccountSheet = true },
-                           onReload: vm.reload)
+                           onReload: { vm.reload() })
         }
         .overlay(alignment: .bottomTrailing) {
             ToastHostView(toast: vm.toastMessage)

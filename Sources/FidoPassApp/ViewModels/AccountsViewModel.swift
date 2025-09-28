@@ -74,12 +74,23 @@ final class AccountsViewModel: ObservableObject {
         let style: Style
     }
 
+    enum ReloadTrigger {
+        case manual
+        case hotplug
+    }
+
     let core: FidoPassCore
     let userDefaultsKey = "recentLabels"
     let ubiquitousKey = "recentLabels"
     let ubiStore = NSUbiquitousKeyValueStore.default
     let pinVault = SecurePinVault(defaultTTL: 300)
     let pinTTL: TimeInterval = 300
+    let deviceWorkQueue = DispatchQueue(label: "com.fidopass.deviceWork", qos: .userInitiated)
+    var pendingReloadTrigger: ReloadTrigger?
+#if os(macOS)
+    private var deviceMonitor: DeviceMonitorService?
+    private var sessionMonitor: SessionLockMonitor?
+#endif
     private var ubiObserver: NSObjectProtocol?
     var toastTask: Task<Void, Never>? = nil
 
@@ -92,6 +103,18 @@ final class AccountsViewModel: ObservableObject {
             guard let self else { return }
             Task { @MainActor in self.mergeUbiquitous() }
         }
+#if os(macOS)
+        deviceMonitor = DeviceMonitorService { [weak self] in
+            Task { @MainActor in
+                self?.reload(trigger: .hotplug)
+            }
+        }
+        sessionMonitor = SessionLockMonitor { [weak self] in
+            Task { @MainActor in
+                self?.lockAllDevices(reason: "macOS session locked; re-enter PIN to continue")
+            }
+        }
+#endif
     }
 
     deinit {
@@ -100,6 +123,10 @@ final class AccountsViewModel: ObservableObject {
         }
         toastTask?.cancel()
         pinVault.removeAll()
+#if os(macOS)
+        deviceMonitor = nil
+        sessionMonitor = nil
+#endif
     }
 
     func resetEnrollmentState() {
