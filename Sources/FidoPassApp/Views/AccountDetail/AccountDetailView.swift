@@ -9,7 +9,7 @@ struct AccountDetailView: View {
         LazyVStack(alignment: .leading, spacing: 16) {
             AccountSummarySection(account: account,
                                   deviceName: deviceName,
-                                  lastCopied: viewModel.lastCopiedPasswordAt)
+                                  receipt: viewModel.copyReceipt)
             PasswordGenerationSection(viewModel: viewModel,
                                       accentColor: accountAccent,
                                       onGenerate: generatePassword,
@@ -48,7 +48,7 @@ struct AccountDetailView: View {
 struct AccountSummarySection: View {
     let account: Account
     let deviceName: String
-    let lastCopied: Date?
+    let receipt: AccountsViewModel.CopyReceipt?
 
     var body: some View {
         SectionCard(icon: "key.fill",
@@ -59,8 +59,11 @@ struct AccountSummarySection: View {
             VStack(alignment: .leading, spacing: 12) {
                 InfoRow(icon: "usb.cable", title: "Device", value: deviceName)
                 InfoRow(icon: "globe", title: "RP ID", value: rpDisplay)
-                if let copied = lastCopied {
-                    InfoRow(icon: "clock", title: "Last copied", value: ContentView.relativeTime(from: copied), accent: .secondary)
+                if let receipt, receipt.belongs(to: account) {
+                    InfoRow(icon: "clock",
+                            title: "Last copied",
+                            value: LiveRelativeText(date: receipt.copiedAt),
+                            accent: .secondary)
                 }
             }
         }
@@ -196,10 +199,8 @@ struct PasswordResultSection: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
-                    if let copied = viewModel.lastCopiedPasswordAt {
-                        Text("Copied \(ContentView.relativeTime(from: copied)) · clipboard clears automatically")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                    if let receipt = viewModel.copyReceipt {
+                        ClipboardStatusView(receipt: receipt)
                     }
                 }
             } else {
@@ -286,13 +287,13 @@ struct PasswordField: View {
     }
 }
 
-struct InfoRow: View {
+struct InfoRow<Value: View>: View {
     let icon: String
     let title: String
-    let value: String
+    let value: Value
     let accent: Color
 
-    init(icon: String, title: String, value: String, accent: Color = .accentColor) {
+    init(icon: String, title: String, value: Value, accent: Color = .accentColor) {
         self.icon = icon
         self.title = title
         self.value = value
@@ -308,12 +309,66 @@ struct InfoRow: View {
                 Text(title)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text(value)
+                value
                     .font(.body)
-                    .textSelection(.enabled)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+        }
+    }
+}
+
+extension InfoRow where Value == Text {
+    init(icon: String, title: String, value: String, accent: Color = .accentColor) {
+        self.init(icon: icon, title: title, value: Text(value), accent: accent)
+    }
+}
+
+/// Relative timestamp that actually advances.
+///
+/// Rendering `RelativeDateTimeFormatter` once inside a view body produces text that is
+/// correct for a single instant and then never changes: SwiftUI has no reason to redraw,
+/// so "3 sec. ago" stays "3 sec. ago" for as long as the view is on screen. A timeline
+/// gives the redraw a source.
+struct LiveRelativeText: View {
+    let date: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: date, by: 1)) { context in
+            Text(ContentView.relativeTime(from: date, relativeTo: context.date))
+        }
+    }
+}
+
+/// Live state of the secret this account put on the clipboard.
+///
+/// While the clipboard still holds it the countdown ticks once a second; once it is gone
+/// the view settles on static text, so nothing keeps redrawing indefinitely.
+struct ClipboardStatusView: View {
+    let receipt: AccountsViewModel.CopyReceipt
+
+    var body: some View {
+        Group {
+            if receipt.clearsAt != nil {
+                TimelineView(.periodic(from: receipt.copiedAt, by: 1)) { context in
+                    label(at: context.date)
+                }
+            } else {
+                label(at: Date())
+            }
+        }
+        .font(.caption2)
+    }
+
+    @ViewBuilder
+    private func label(at now: Date) -> some View {
+        if let remaining = receipt.secondsUntilClear(at: now) {
+            Label("\(receipt.item.noun) on the clipboard — clears in \(remaining)s",
+                  systemImage: "clock.badge.exclamationmark")
+                .foregroundColor(remaining <= 10 ? .orange : .secondary)
+        } else {
+            Label("Clipboard cleared", systemImage: "checkmark.shield")
+                .foregroundColor(.green)
         }
     }
 }

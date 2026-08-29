@@ -23,28 +23,38 @@ extension AccountsViewModel {
         }
     }
 
-    /// Copies a secret and records when the clipboard will drop it again.
+    /// Copies a secret and records it against the account it belongs to.
     func copyGeneratedPassword(_ password: String) {
-        let deadline = ClipboardService.copySecret(password)
-        lastCopiedPasswordAt = Date()
-        clipboardClearsAt = deadline
-        let subtitle = deadline.map { _ in "Clipboard clears in \(Int(ClipboardService.defaultClearInterval))s" }
-        showToast("Password copied", icon: "doc.on.doc.fill", style: .success, subtitle: subtitle)
+        recordCopy(of: .password, secret: password)
+        showToast("Password copied",
+                  icon: "doc.on.doc.fill",
+                  style: .success,
+                  subtitle: "Clipboard clears in \(Int(ClipboardService.defaultClearInterval))s")
     }
 
     /// Copies a backup key. Same clipboard hygiene as a password, different wording, so
     /// the toast can never be mistaken for "your password is ready".
     func copyBackupKey(_ key: String) {
-        ClipboardService.copySecret(key)
+        recordCopy(of: .backupKey, secret: key)
         showToast("Backup key copied",
                   icon: "key.horizontal",
                   style: .warning,
                   subtitle: "Clipboard clears in \(Int(ClipboardService.defaultClearInterval))s — store it offline")
     }
 
-    func markPasswordCopied() {
-        lastCopiedPasswordAt = Date()
-        showToast("Password copied", icon: "doc.on.doc.fill", style: .success)
+    private func recordCopy(of item: CopyReceipt.Item, secret: String) {
+        guard let account = selected else { return }
+        let deadline = ClipboardService.copySecret(secret) { [weak self] in
+            Task { @MainActor in
+                // Stop advertising a countdown for a clipboard that no longer holds it.
+                self?.copyReceipt?.clearsAt = nil
+            }
+        }
+        copyReceipt = CopyReceipt(accountId: account.id,
+                                  devicePath: account.devicePath,
+                                  item: item,
+                                  copiedAt: Date(),
+                                  clearsAt: deadline)
     }
 
     /// Drops a shown password once it no longer matches what the label field says.

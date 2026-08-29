@@ -25,10 +25,14 @@ enum ClipboardService {
     ///
     /// - Parameter syncAcrossDevices: when false the value never leaves this Mac.
     /// - Returns: the deadline at which the pasteboard will be cleared, for UI countdowns.
+    /// - Parameter onCleared: called on the main queue once the value is no longer ours to
+    ///   clear — either because the timeout elapsed or because something else took over the
+    ///   pasteboard. Lets the UI stop advertising a countdown that no longer applies.
     @discardableResult
     static func copySecret(_ secret: String,
                            clearAfter: TimeInterval = defaultClearInterval,
-                           syncAcrossDevices: Bool = false) -> Date? {
+                           syncAcrossDevices: Bool = false,
+                           onCleared: (() -> Void)? = nil) -> Date? {
         #if canImport(AppKit)
         let pasteboard = NSPasteboard.general
         clearWorkItem?.cancel()
@@ -48,8 +52,11 @@ enum ClipboardService {
         // meantime, clearing would destroy the user's newer content instead of our secret.
         let ownedChangeCount = pasteboard.changeCount
         let work = DispatchWorkItem {
-            guard NSPasteboard.general.changeCount == ownedChangeCount else { return }
-            NSPasteboard.general.clearContents()
+            if NSPasteboard.general.changeCount == ownedChangeCount {
+                NSPasteboard.general.clearContents()
+            }
+            // Fires either way: if someone else copied over it, our secret is equally gone.
+            onCleared?()
         }
         clearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter, execute: work)

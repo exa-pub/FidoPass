@@ -32,8 +32,10 @@ final class EnrollmentService: EnrollmentServiceProtocol {
         // resident-key slot each. Enumeration needs no user presence, so this costs one
         // silent round-trip. It runs before the device is opened for makeCredential —
         // nesting two opens on the same device would fail.
-        if let path = devicePath {
-            let existing = try enumerateAccounts(rpId: kind.rpId, devicePath: path, pin: askPIN?())
+        if let path = devicePath, let pin = askPIN?(), !pin.isEmpty {
+            // Best-effort: a key that cannot list its credentials still deserves to be
+            // enrolled, so a failure to check is not a failure to create.
+            let existing = (try? enumerateAccounts(rpId: kind.rpId, devicePath: path, pin: pin)) ?? []
             if existing.contains(where: { $0.id == trimmedId }) {
                 throw FidoPassError.invalidState("An account named ‘\(trimmedId)’ already exists on this device")
             }
@@ -98,59 +100,61 @@ final class EnrollmentService: EnrollmentServiceProtocol {
         }
     }
 
+    /// Reads the accounts stored on an authenticator.
+    ///
+    /// Uses credential management rather than a silent assertion. An assertion made with
+    /// `up = false` returns only `user.id`: CTAP withholds `name` and `displayName` unless
+    /// user presence is confirmed, so the portable payload — which lives in `displayName` —
+    /// came back empty and portable accounts lost their key material on every reload.
+    /// Credential management returns the full user entity and still needs no touch, only
+    /// the PIN.
     func enumerateAccounts(rpId: String,
                            devicePath: String,
                            pin: String?) throws -> [Account] {
         guard let kind = AccountKind(rpId: rpId) else {
             throw FidoPassError.invalidState("Unknown relying-party id ‘\(rpId)’")
         }
+        guard let pin, !pin.isEmpty else {
+            throw FidoPassError.invalidState("A PIN is required to list accounts on the key")
+        }
 
         return try deviceRepository.withOpenedDevice(path: devicePath) { device, path in
-            guard let assertion = fido_assert_new() else {
-                throw FidoPassError.invalidState("assert_new")
+            guard let rawList = fido_credman_rk_new() else {
+                throw FidoPassError.invalidState("credman_rk_new")
             }
-            var assert: OpaquePointer? = assertion
-            defer { fido_assert_free(&assert) }
+            var residentKeys: OpaquePointer? = rawList
+            defer { fido_credman_rk_free(&residentKeys) }
 
-            try Libfido2Context.check(fido_assert_set_rp(assertion, rpId), operation: "assert_set_rp")
-            let challenge = CryptoHelpers.randomBytes(count: 32)
-            try challenge.withUnsafeBytes { pointer in
-                try Libfido2Context.check(
-                    fido_assert_set_clientdata_hash(assertion,
-                                                    pointer.bindMemory(to: UInt8.self).baseAddress,
-                                                    challenge.count),
-                    operation: "assert_set_clientdata_hash")
-            }
-            try Libfido2Context.check(fido_assert_set_up(assertion, FIDO_OPT_FALSE), operation: "assert_set_up")
-
-            if pin != nil {
-                _ = fido_assert_set_uv(assertion, FIDO_OPT_TRUE)
-            }
-
-            let rc = PinScope.withPIN(pin) { fido_dev_get_assert(device, assertion, $0) }
+            let rc = PinScope.withPIN(pin) { fido_credman_get_dev_rk(device, rpId, rawList, $0) }
+            // An authenticator with nothing stored for this relying party reports it as an
+            // error rather than an empty list.
             if rc == FIDO_ERR_NO_CREDENTIALS { return [] }
-            try Libfido2Context.check(rc, operation: "dev_get_assert(enumerate)")
+            if rc == FIDO_ERR_INVALID_COMMAND || rc == FIDO_ERR_UNSUPPORTED_OPTION {
+                throw FidoPassError.unsupported("This key does not support credential management")
+            }
+            try Libfido2Context.check(rc, operation: "credman_get_dev_rk")
 
-            let count = Int(fido_assert_count(assertion))
+            let count = fido_credman_rk_count(rawList)
             var accounts: [Account] = []
             accounts.reserveCapacity(count)
 
             for index in 0..<count {
-                guard let credentialPointer = fido_assert_id_ptr(assertion, index),
-                      let userIdPointer = fido_assert_user_id_ptr(assertion, index) else { continue }
-                let credential = Data(bytes: credentialPointer, count: fido_assert_id_len(assertion, index))
-                let userId = Data(bytes: userIdPointer, count: fido_assert_user_id_len(assertion, index))
+                guard let credential = fido_credman_rk(rawList, index),
+                      let credentialPointer = fido_cred_id_ptr(credential),
+                      let userIdPointer = fido_cred_user_id_ptr(credential) else { continue }
+
+                let credentialId = Data(bytes: credentialPointer, count: fido_cred_id_len(credential))
+                let userId = Data(bytes: userIdPointer, count: fido_cred_user_id_len(credential))
                 guard let accountId = String(data: userId, encoding: .utf8) else { continue }
 
-                let rawDisplayName = fido_assert_user_display_name(assertion, index).map { String(cString: $0) } ?? ""
-                let rawName = fido_assert_user_name(assertion, index).map { String(cString: $0) } ?? ""
-
+                let rawName = fido_cred_user_name(credential).map { String(cString: $0) } ?? ""
+                let rawDisplayName = fido_cred_display_name(credential).map { String(cString: $0) } ?? ""
                 let decoded = Self.decodeUserFields(kind: kind, name: rawName, displayName: rawDisplayName)
 
                 accounts.append(Account(id: accountId,
                                         kind: kind,
                                         displayName: decoded.displayName,
-                                        credentialIdB64: credential.base64EncodedString(),
+                                        credentialIdB64: credentialId.base64EncodedString(),
                                         revision: 1,
                                         policy: PasswordPolicy(),
                                         devicePath: path,

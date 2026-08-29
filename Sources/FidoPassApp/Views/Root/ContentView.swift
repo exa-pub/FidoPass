@@ -58,8 +58,8 @@ struct ContentView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: vm.toastMessage)
     }
 
-    static func relativeTime(from date: Date) -> String {
-        relativeFormatter.localizedString(for: date, relativeTo: Date())
+    static func relativeTime(from date: Date, relativeTo reference: Date = Date()) -> String {
+        relativeFormatter.localizedString(for: date, relativeTo: reference)
     }
 }
 
