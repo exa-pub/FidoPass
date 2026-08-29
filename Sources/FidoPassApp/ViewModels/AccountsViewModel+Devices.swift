@@ -26,36 +26,68 @@ extension AccountsViewModel {
             guard let self else { return }
             do {
                 let devices = try core.listDevices()
-                var collected: [Account] = []
-                collected.reserveCapacity(pinMap.count * 2)
-                for (path, pin) in pinMap {
-                    collected.append(contentsOf: try core.enumerateAccounts(devicePath: path, pin: pin))
-                    collected.append(contentsOf: try core.enumerateAccounts(rpId: "fidopass.portable",
-                                                                            devicePath: path,
-                                                                            pin: pin))
-                }
+                let outcome = Self.collectAccounts(core: core, pinMap: pinMap)
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.applyDeviceList(devices)
-                    self.accounts = collected.sorted { $0.id < $1.id }
-                    if let current = self.selected,
-                       !self.accounts.contains(where: { $0.id == current.id && $0.devicePath == current.devicePath }) {
+                    self.accounts = outcome.accounts.sorted { $0.id < $1.id }
+                    self.deviceErrors = outcome.errors
+                    if let current = self.selected, !self.accounts.contains(current) {
                         self.selected = nil
                     }
                     self.autoSelectFirstAccountIfPossible(for: self.selectedDevicePath)
                     self.reloading = false
+                    self.reportUnreadableDevices(outcome.errors)
                     self.flushPendingReloadIfNeeded()
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = FidoPassErrorPresenter.message(for: error).title
                     self.reloading = false
                     self.flushPendingReloadIfNeeded()
                 }
             }
         }
+    }
+
+    /// Reads accounts from every unlocked device, keeping failures local to the device
+    /// that caused them.
+    ///
+    /// A single `try` across the loop used to abort the whole refresh: unplugging one key
+    /// while another stayed connected produced an alert plus a stale account list. Losing
+    /// a device mid-refresh is routine — hot-plug events trigger a reload precisely when
+    /// devices appear and disappear.
+    private static func collectAccounts(core: FidoPassCore,
+                                        pinMap: [String: String]) -> (accounts: [Account], errors: [String: String]) {
+        var accounts: [Account] = []
+        var errors: [String: String] = [:]
+
+        for (path, pin) in pinMap {
+            for kind in AccountKind.allCases {
+                do {
+                    accounts.append(contentsOf: try core.enumerateAccounts(kind: kind, devicePath: path, pin: pin))
+                } catch {
+                    // Keep the first failure per device: later kinds usually fail for the
+                    // same underlying reason and would just overwrite it.
+                    if errors[path] == nil {
+                        errors[path] = FidoPassErrorPresenter.message(for: error).title
+                    }
+                }
+            }
+        }
+        return (accounts, errors)
+    }
+
+    private func reportUnreadableDevices(_ errors: [String: String]) {
+        guard !errors.isEmpty else { return }
+        let names = errors.keys.compactMap { deviceStates[$0]?.device.conciseName }
+        let subtitle = names.isEmpty ? nil : names.joined(separator: ", ")
+        showToast("Some devices could not be read",
+                  icon: "exclamationmark.triangle",
+                  style: .warning,
+                  subtitle: subtitle)
     }
 
     func unlockDevice(_ device: FidoDevice, pin: String) {
@@ -73,16 +105,39 @@ extension AccountsViewModel {
                     }
                     state.unlocked = true
                     state.pinDraft = ""
+                    state.pinRetriesRemaining = nil
                     deviceStates[device.path] = state
                     showToast("Device unlocked", icon: "lock.open", style: .success)
                 }
                 await MainActor.run { self.reload(trigger: .manual) }
             } catch {
-                await MainActor.run {
-                    self.errorMessage = "PIN is incorrect: \(error.localizedDescription)"
-                }
+                await MainActor.run { self.handleUnlockFailure(error, for: device) }
             }
         }
+    }
+
+    /// Surfaces how many PIN attempts are left, and what a lock-out means.
+    ///
+    /// A FIDO2 authenticator wipes its credentials only on a factory reset, but it stops
+    /// accepting the PIN permanently after eight consecutive failures. For an app whose
+    /// whole purpose is deriving keys that have no reset path, running out of attempts is
+    /// the single most expensive mistake a user can make, so it must never be a surprise.
+    private func handleUnlockFailure(_ error: Error, for device: FidoDevice) {
+        let presented = FidoPassErrorPresenter.message(for: error)
+        var state = deviceStates[device.path] ?? DeviceState(device: device)
+
+        switch presented.kind {
+        case .pinInvalid:
+            state.pinRetriesRemaining = (try? core.pinRetriesRemaining(devicePath: device.path)) ?? nil
+        case .pinBlocked, .pinAuthBlocked:
+            state.pinRetriesRemaining = 0
+        default:
+            break
+        }
+        state.pinDraft = ""
+        deviceStates[device.path] = state
+
+        errorMessage = presented.fullText(retriesRemaining: state.pinRetriesRemaining)
     }
 
     func lockDevice(_ device: FidoDevice) {
@@ -139,10 +194,29 @@ extension AccountsViewModel {
             let state = DeviceState(device: device,
                                     unlocked: previous?.unlocked ?? false,
                                     pinToken: previous?.pinToken,
-                                    pinDraft: previous?.pinDraft ?? "")
+                                    pinDraft: previous?.pinDraft ?? "",
+                                    pinRetriesRemaining: previous?.pinRetriesRemaining)
             updatedStates[device.path] = state
         }
+
+        // Devices that vanished take their state with them, so their vault token would
+        // become unreachable while the PIN itself stayed in memory until the TTL expired.
+        // Release it here the same way `lockDevice` does.
+        for (path, previous) in deviceStates where updatedStates[path] == nil {
+            if let token = previous.pinToken {
+                pinVault.remove(token: token)
+            }
+        }
+        let vanished = Set(deviceStates.keys).subtracting(updatedStates.keys)
+        if !vanished.isEmpty {
+            accounts.removeAll { path in vanished.contains(path.devicePath ?? "") }
+            if let current = selected, vanished.contains(current.devicePath ?? "") {
+                selected = nil
+            }
+        }
+
         deviceStates = updatedStates
+        deviceErrors = deviceErrors.filter { updatedStates[$0.key] != nil }
 
         guard !sortedList.isEmpty else {
             selectedDevicePath = nil
@@ -170,5 +244,24 @@ extension AccountsViewModel {
             reload(trigger: next)
         }
     }
+}
 
+extension AccountsViewModel {
+    /// Asks the authenticator how many PIN attempts are left, before the user spends one.
+    ///
+    /// Reading this needs no PIN and no touch, so it is safe to do whenever the unlock
+    /// prompt appears. Authenticators that decline to answer leave the value `nil`, which
+    /// the UI renders as nothing at all rather than as reassurance.
+    func refreshPinRetries(for device: FidoDevice) async {
+        let core = self.core
+        let path = device.path
+        let remaining = await Task.detached(priority: .utility) { () -> Int? in
+            try? core.pinRetriesRemaining(devicePath: path)
+        }.value
+
+        guard let remaining else { return }
+        var state = deviceStates[path] ?? DeviceState(device: device)
+        state.pinRetriesRemaining = remaining
+        deviceStates[path] = state
+    }
 }

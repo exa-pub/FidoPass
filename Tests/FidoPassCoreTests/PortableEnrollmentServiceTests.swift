@@ -8,10 +8,10 @@ final class PortableEnrollmentServiceTests: XCTestCase {
         let fixed = Data(repeating: 0xAB, count: 32)
         let secret = MockSecretDerivationService()
         secret.deriveFixedClosure = { _, _, _ in fixed }
-        enrollment.enrollClosure = { accountId, rpId, _, _, _, devicePath, _ in
+        enrollment.enrollClosure = { accountId, kind, _, _, devicePath, _ in
             Account.fixture(id: accountId,
-                            rpId: rpId,
-                            userName: "",
+                            kind: kind,
+                            displayName: "",
                             credentialId: Data("cred".utf8),
                             devicePath: devicePath)
         }
@@ -22,14 +22,15 @@ final class PortableEnrollmentServiceTests: XCTestCase {
                                                                requireUV: true,
                                                                devicePath: "/dev/key",
                                                                askPIN: nil,
-                                                               importedKeyB64: nil)
+                                                               importedKeyB64: nil,
+                                                               onStep: nil)
 
-        XCTAssertEqual(account.rpId, "fidopass.portable")
+        XCTAssertEqual(account.kind, AccountKind.portable)
         XCTAssertNotNil(generated)
         XCTAssertEqual(enrollment.updateCalls.count, 1)
         XCTAssertEqual(secret.deriveFixedCalls.count, 1)
 
-        let external = try XCTUnwrap(Data(base64Encoded: account.userName))
+        let external = try XCTUnwrap(account.portable?.external)
         let imported = try XCTUnwrap(Data(base64Encoded: generated!))
         XCTAssertEqual(external.count, 32)
         XCTAssertEqual(imported.count, 32)
@@ -43,8 +44,8 @@ final class PortableEnrollmentServiceTests: XCTestCase {
         let fixed = Data(repeating: 0x11, count: 32)
         let secret = MockSecretDerivationService()
         secret.deriveFixedClosure = { _, _, _ in fixed }
-        enrollment.enrollClosure = { accountId, rpId, _, _, _, _, _ in
-            Account.fixture(id: accountId, rpId: rpId, userName: "")
+        enrollment.enrollClosure = { accountId, kind, _, _, _, _ in
+            Account.fixture(id: accountId, kind: kind, displayName: "")
         }
         let service = PortableEnrollmentService(enrollmentService: enrollment,
                                                 secretDerivationService: secret)
@@ -54,10 +55,11 @@ final class PortableEnrollmentServiceTests: XCTestCase {
                                                                requireUV: false,
                                                                devicePath: nil,
                                                                askPIN: nil,
-                                                               importedKeyB64: imported)
+                                                               importedKeyB64: imported,
+                                                               onStep: nil)
 
         XCTAssertNil(generated)
-        let external = try XCTUnwrap(Data(base64Encoded: account.userName))
+        let external = try XCTUnwrap(account.portable?.external)
         let importedData = try XCTUnwrap(Data(base64Encoded: imported))
         let recomposed = Data(zip(importedData, fixed).map { $0 ^ $1 })
         XCTAssertEqual(recomposed, external)
@@ -65,8 +67,8 @@ final class PortableEnrollmentServiceTests: XCTestCase {
 
     func testEnrollPortableValidatesImportedKeyLength() throws {
         let enrollment = MockEnrollmentService()
-        enrollment.enrollClosure = { accountId, rpId, _, _, _, _, _ in
-            Account.fixture(id: accountId, rpId: rpId, userName: "")
+        enrollment.enrollClosure = { accountId, kind, _, _, _, _ in
+            Account.fixture(id: accountId, kind: kind, displayName: "")
         }
         let secret = MockSecretDerivationService()
         secret.deriveFixedClosure = { _, _, _ in Data(repeating: 0x00, count: 32) }
@@ -76,7 +78,8 @@ final class PortableEnrollmentServiceTests: XCTestCase {
                                                          requireUV: true,
                                                          devicePath: nil,
                                                          askPIN: nil,
-                                                         importedKeyB64: "short"))
+                                                         importedKeyB64: "short",
+                                                               onStep: nil))
     }
 
     func testExportImportedKeyReconstructsOriginal() throws {
@@ -86,10 +89,10 @@ final class PortableEnrollmentServiceTests: XCTestCase {
         let service = PortableEnrollmentService(enrollmentService: MockEnrollmentService(),
                                                 secretDerivationService: secret)
 
-        let imported = Data((0..<32).map { UInt8($0) })
+        let imported = Data((0..<32).map { UInt8(truncatingIfNeeded: $0) })
         let external = Data(zip(imported, fixed).map { $0 ^ $1 })
-        let account = Account.fixture(rpId: "fidopass.portable",
-                                      userName: external.base64EncodedString())
+        let account = Account.fixture(kind: .portable,
+                                      portable: PortablePayload(external: external))
 
         let reconstructed = try service.exportImportedKey(account,
                                                            requireUV: true,

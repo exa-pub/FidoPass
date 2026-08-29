@@ -97,7 +97,8 @@ struct AccountColumnHeader: View {
             guard account.devicePath == path else { return false }
             guard !query.isEmpty else { return true }
             return account.id.localizedCaseInsensitiveContains(query)
-            || account.rpId.localizedCaseInsensitiveContains(query)
+            || account.displayName.localizedCaseInsensitiveContains(query)
+            || account.kind.rawValue.localizedCaseInsensitiveContains(query)
         }
     }
 

@@ -1,6 +1,5 @@
 import Foundation
 import FidoPassCore
-import CLibfido2
 
 public enum TestError: Error, Equatable {
     case generic(String)
@@ -35,59 +34,32 @@ public final class InMemoryUbiquitousStore: NSUbiquitousKeyValueStore {
     }
 }
 
-public final class MockDeviceRepository: DeviceRepositoryProtocol {
+public final class MockDeviceLister: DeviceListing {
     public init() {}
 
     public var devices: [FidoDevice] = []
     public var listDevicesError: Error?
     public private(set) var listedLimits: [Int] = []
 
-    public var withOpenedDeviceHandler: ((String?, (OpaquePointer, String) throws -> Any) throws -> Any)?
-    public private(set) var withOpenedDevicePaths: [String?] = []
-
-    public var ensureHmacSecretSupportedError: Error?
-    public private(set) var ensureCalls: Int = 0
-
     public func listDevices(limit: Int) throws -> [FidoDevice] {
         listedLimits.append(limit)
         if let error = listDevicesError { throw error }
         return devices
-    }
-
-    public func withOpenedDevice<T>(path: String?, _ body: (OpaquePointer, String) throws -> T) throws -> T {
-        withOpenedDevicePaths.append(path)
-        if let handler = withOpenedDeviceHandler {
-            guard let value = try handler(path, body) as? T else {
-                throw TestError.generic("Unexpected handler return type")
-            }
-            return value
-        }
-        let pointer = OpaquePointer(bitPattern: 0xdeadbeef)!
-        let resolvedPath = path ?? devices.first?.path ?? "/mock"
-        return try body(pointer, resolvedPath)
-    }
-
-    public func ensureHmacSecretSupported(_ device: OpaquePointer) throws {
-        ensureCalls += 1
-        if let error = ensureHmacSecretSupportedError {
-            throw error
-        }
     }
 }
 
 public final class MockEnrollmentService: EnrollmentServiceProtocol {
     public struct EnrollCall: Equatable {
         public let accountId: String
-        public let rpId: String
-        public let userName: String
+        public let kind: AccountKind
+        public let displayName: String
         public let requireUV: Bool
-        public let residentKey: Bool
         public let devicePath: String?
     }
 
     public init() {}
 
-    public var enrollClosure: ((String, String, String, Bool, Bool, String?, (() -> String?)?) throws -> Account)?
+    public var enrollClosure: ((String, AccountKind, String, Bool, String?, (() -> String?)?) throws -> Account)?
     public private(set) var enrollCalls: [EnrollCall] = []
 
     public var enumerateClosure: ((String, String, String?) throws -> [Account])?
@@ -96,28 +68,26 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol {
     public var deleteClosure: ((Account, String?) throws -> Void)?
     public private(set) var deleteCalls: [(Account, String?)] = []
 
-    public var updateClosure: ((Account, String, Bool, (() -> String?)?) throws -> Void)?
-    public private(set) var updateCalls: [(Account, String, Bool)] = []
+    public var updateClosure: ((Account, Bool, (() -> String?)?) throws -> Void)?
+    public private(set) var updateCalls: [(Account, Bool)] = []
 
     public func enroll(accountId: String,
-                       rpId: String,
-                       userName: String,
+                       kind: AccountKind,
+                       displayName: String,
                        requireUV: Bool,
-                       residentKey: Bool,
                        devicePath: String?,
                        askPIN: (() -> String?)?) throws -> Account {
         enrollCalls.append(EnrollCall(accountId: accountId,
-                                      rpId: rpId,
-                                      userName: userName,
+                                      kind: kind,
+                                      displayName: displayName,
                                       requireUV: requireUV,
-                                      residentKey: residentKey,
                                       devicePath: devicePath))
         if let closure = enrollClosure {
-            return try closure(accountId, rpId, userName, requireUV, residentKey, devicePath, askPIN)
+            return try closure(accountId, kind, displayName, requireUV, devicePath, askPIN)
         }
         return Account(id: accountId,
-                       rpId: rpId,
-                       userName: userName,
+                       kind: kind,
+                       displayName: displayName,
                        credentialIdB64: Data(accountId.utf8).base64EncodedString(),
                        revision: 1,
                        policy: PasswordPolicy(),
@@ -139,12 +109,11 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol {
         try deleteClosure?(account, pin)
     }
 
-    public func updateCredentialUserName(account: Account,
-                                         newUserName: String,
+    public func updateCredentialUserInfo(account: Account,
                                          requireUV: Bool,
                                          pinProvider: (() -> String?)?) throws {
-        updateCalls.append((account, newUserName, requireUV))
-        try updateClosure?(account, newUserName, requireUV, pinProvider)
+        updateCalls.append((account, requireUV))
+        try updateClosure?(account, requireUV, pinProvider)
     }
 }
 
@@ -152,6 +121,7 @@ public final class MockPortableEnrollmentService: PortableEnrollmentServiceProto
     public init() {}
 
     public var enrollPortableClosure: ((String, Bool, String?, (() -> String?)?, String?) throws -> (Account, String?))?
+    public private(set) var reportedSteps: [PortableEnrollmentStep] = []
     public private(set) var enrollPortableCalls: [(String, Bool, String?)] = []
 
     public var exportClosure: ((Account, Bool, (() -> String?)?) throws -> String)?
@@ -161,14 +131,15 @@ public final class MockPortableEnrollmentService: PortableEnrollmentServiceProto
                                requireUV: Bool,
                                devicePath: String?,
                                askPIN: (() -> String?)?,
-                               importedKeyB64: String?) throws -> (Account, String?) {
+                               importedKeyB64: String?,
+                               onStep: ((PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
         enrollPortableCalls.append((accountId, requireUV, devicePath))
+        onStep.map { report in [PortableEnrollmentStep.creatingCredential].forEach(report) }
         if let closure = enrollPortableClosure {
             return try closure(accountId, requireUV, devicePath, askPIN, importedKeyB64)
         }
         return (Account(id: accountId,
-                        rpId: "fidopass.portable",
-                        userName: "",
+                        kind: .portable,
                         credentialIdB64: Data(accountId.utf8).base64EncodedString(),
                         revision: 1,
                         policy: PasswordPolicy(),
@@ -239,19 +210,21 @@ public final class MockPasswordGenerator: PasswordGenerating {
 
 public extension Account {
     static func fixture(id: String = "account",
-                        rpId: String = "fidopass.local",
-                        userName: String = "user",
+                        kind: AccountKind = .local,
+                        displayName: String = "user",
                         credentialId: Data? = nil,
                         revision: Int = 1,
                         policy: PasswordPolicy = PasswordPolicy(),
-                        devicePath: String? = "/dev/mock") -> Account {
+                        devicePath: String? = "/dev/mock",
+                        portable: PortablePayload? = nil) -> Account {
         let credential = credentialId ?? Data(id.utf8)
         return Account(id: id,
-                       rpId: rpId,
-                       userName: userName,
+                       kind: kind,
+                       displayName: displayName,
                        credentialIdB64: credential.base64EncodedString(),
                        revision: revision,
                        policy: policy,
-                       devicePath: devicePath)
+                       devicePath: devicePath,
+                       portable: portable)
     }
 }

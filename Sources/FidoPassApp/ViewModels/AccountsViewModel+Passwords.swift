@@ -5,6 +5,7 @@ extension AccountsViewModel {
     func generatePassword(for account: Account, label: String) {
         performPasswordGeneration(for: account, label: label) { viewModel, password in
             viewModel.generatedPassword = password
+            viewModel.generatedForLabel = label
             if !label.isEmpty { viewModel.addRecentLabel(label) }
             viewModel.showToast("Password generated", icon: "wand.and.stars", style: .success)
         }
@@ -13,14 +14,48 @@ extension AccountsViewModel {
     func generatePasswordAndCopy(for account: Account, label: String) {
         showPlainPassword = false
         performPasswordGeneration(for: account, label: label) { viewModel, password in
-            ClipboardService.copy(password)
-            viewModel.markPasswordCopied()
+            // Keep the result visible too. Copying used to leave the panel reading "No
+            // password generated yet" even though a password was on the clipboard.
+            viewModel.generatedPassword = password
+            viewModel.generatedForLabel = label
+            if !label.isEmpty { viewModel.addRecentLabel(label) }
+            viewModel.copyGeneratedPassword(password)
         }
+    }
+
+    /// Copies a secret and records when the clipboard will drop it again.
+    func copyGeneratedPassword(_ password: String) {
+        let deadline = ClipboardService.copySecret(password)
+        lastCopiedPasswordAt = Date()
+        clipboardClearsAt = deadline
+        let subtitle = deadline.map { _ in "Clipboard clears in \(Int(ClipboardService.defaultClearInterval))s" }
+        showToast("Password copied", icon: "doc.on.doc.fill", style: .success, subtitle: subtitle)
+    }
+
+    /// Copies a backup key. Same clipboard hygiene as a password, different wording, so
+    /// the toast can never be mistaken for "your password is ready".
+    func copyBackupKey(_ key: String) {
+        ClipboardService.copySecret(key)
+        showToast("Backup key copied",
+                  icon: "key.horizontal",
+                  style: .warning,
+                  subtitle: "Clipboard clears in \(Int(ClipboardService.defaultClearInterval))s — store it offline")
     }
 
     func markPasswordCopied() {
         lastCopiedPasswordAt = Date()
         showToast("Password copied", icon: "doc.on.doc.fill", style: .success)
+    }
+
+    /// Drops a shown password once it no longer matches what the label field says.
+    ///
+    /// The panel used to keep displaying a password derived from a previous label, so
+    /// editing the label and hitting copy handed over the wrong secret.
+    func invalidateGeneratedPasswordIfLabelChanged() {
+        guard generatedPassword != nil, generatedForLabel != labelInput else { return }
+        generatedPassword = nil
+        generatedForLabel = nil
+        showPlainPassword = false
     }
 
     func requestSearchFocus() {
@@ -78,7 +113,7 @@ extension AccountsViewModel {
             } catch {
                 await MainActor.run {
                     guard let viewModel = weakSelf else { return }
-                    viewModel.errorMessage = error.localizedDescription
+                    viewModel.errorMessage = FidoPassErrorPresenter.message(for: error).fullText()
                 }
             }
 

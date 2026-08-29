@@ -3,11 +3,67 @@ import Foundation
 import AppKit
 #endif
 
+/// Puts a derived secret on the pasteboard with the handling such a value deserves.
+///
+/// A plain `setString` leaks in three directions: the value stays on the pasteboard
+/// indefinitely, clipboard managers archive it into their searchable history, and
+/// Universal Clipboard forwards it to every other Apple device on the account. All three
+/// are addressed here.
 enum ClipboardService {
-    static func copy(_ string: String) {
+
+    /// Convention honoured by clipboard managers (Maccy, Alfred, Raycast and others) to
+    /// mean "do not record this in history". Not an Apple API — just a widely respected
+    /// agreement, and free to add.
+    private static let concealedType = "org.nspasteboard.ConcealedType"
+
+    /// How long a secret is allowed to stay on the pasteboard.
+    static let defaultClearInterval: TimeInterval = 45
+
+    private static var clearWorkItem: DispatchWorkItem?
+
+    /// Copies `secret`, then clears the pasteboard after `clearAfter` seconds.
+    ///
+    /// - Parameter syncAcrossDevices: when false the value never leaves this Mac.
+    /// - Returns: the deadline at which the pasteboard will be cleared, for UI countdowns.
+    @discardableResult
+    static func copySecret(_ secret: String,
+                           clearAfter: TimeInterval = defaultClearInterval,
+                           syncAcrossDevices: Bool = false) -> Date? {
         #if canImport(AppKit)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(string, forType: .string)
+        let pasteboard = NSPasteboard.general
+        clearWorkItem?.cancel()
+
+        pasteboard.clearContents()
+        pasteboard.setString(secret, forType: .string)
+        // Marking it concealed keeps it out of clipboard-manager history.
+        pasteboard.setString("", forType: NSPasteboard.PasteboardType(concealedType))
+        if !syncAcrossDevices {
+            // Opting out of Universal Clipboard keeps the secret on this machine.
+            pasteboard.setData(Data([1]), forType: NSPasteboard.PasteboardType("com.apple.is-sensitive"))
+        }
+
+        guard clearAfter > 0 else { return nil }
+
+        // Remember which pasteboard generation is ours: if anything else is copied in the
+        // meantime, clearing would destroy the user's newer content instead of our secret.
+        let ownedChangeCount = pasteboard.changeCount
+        let work = DispatchWorkItem {
+            guard NSPasteboard.general.changeCount == ownedChangeCount else { return }
+            NSPasteboard.general.clearContents()
+        }
+        clearWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter, execute: work)
+        return Date().addingTimeInterval(clearAfter)
+        #else
+        return nil
+        #endif
+    }
+
+    /// Clears the pasteboard immediately, but only if it still holds what we put there.
+    static func clearIfOwned() {
+        #if canImport(AppKit)
+        clearWorkItem?.perform()
+        clearWorkItem = nil
         #endif
     }
 }

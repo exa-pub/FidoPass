@@ -1,4 +1,8 @@
 import Foundation
+import FidoPassCore
+#if canImport(AppKit)
+import AppKit
+#endif
 
 extension AccountsViewModel {
     func addRecentLabel(_ label: String) {
@@ -7,6 +11,16 @@ extension AccountsViewModel {
         if recentLabels.count > 10 {
             recentLabels.removeLast(recentLabels.count - 10)
         }
+        saveRecentLabels()
+    }
+
+    /// Clears the history in memory *and* in storage.
+    ///
+    /// Wiping only the published array left the values in UserDefaults and iCloud, so they
+    /// reappeared on the next launch — or immediately, once the iCloud store notified a
+    /// change.
+    func clearRecentLabels() {
+        recentLabels.removeAll()
         saveRecentLabels()
     }
 
@@ -39,5 +53,33 @@ extension AccountsViewModel {
                 userDefaults.set(recentLabels, forKey: userDefaultsKey)
             }
         }
+    }
+}
+
+extension AccountsViewModel {
+    /// Builds the recovery sheet for an account and offers to save it.
+    ///
+    /// Everything on it is non-secret, which is the point: it can be printed and kept with
+    /// the key instead of being guarded separately.
+    func exportRecoverySheet(for account: Account) {
+        let deviceDescription = account.devicePath
+            .flatMap { deviceStates[$0]?.device }
+            .map { "\($0.displayName) — \($0.identityLabel)" }
+        let sheet = RecoverySheet(account: account,
+                                  labels: recentLabels,
+                                  deviceDescription: deviceDescription)
+        #if canImport(AppKit)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = sheet.suggestedFileName
+        panel.allowedContentTypes = [.plainText]
+        panel.message = "This sheet contains no passwords, PIN or backup key."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try sheet.render().write(to: url, atomically: true, encoding: .utf8)
+            showToast("Recovery sheet saved", icon: "doc.text", style: .success)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        #endif
     }
 }

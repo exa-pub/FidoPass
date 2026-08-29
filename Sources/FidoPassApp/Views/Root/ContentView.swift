@@ -16,6 +16,11 @@ struct ContentView: View {
         }
         .navigationViewStyle(.columns)
         .sheet(isPresented: $vm.showNewAccountSheet) { NewAccountView() }
+        .sheet(item: $vm.exportedMasterKey) { export in
+            MasterKeyExportView(export: export,
+                                onCopy: { vm.copyBackupKey($0) },
+                                onDismiss: { vm.exportedMasterKey = nil })
+        }
         .alert("Delete account?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { _ in
             Button("Cancel", role: .cancel) { vm.accountPendingDeletion = nil }
             Button("Delete", role: .destructive) {

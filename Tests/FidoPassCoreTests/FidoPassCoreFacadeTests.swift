@@ -4,25 +4,25 @@ import TestSupport
 
 final class FidoPassCoreFacadeTests: XCTestCase {
     func testFacadeForwardsCallsToDependencies() throws {
-        let deviceRepository = MockDeviceRepository()
+        let deviceLister = MockDeviceLister()
         let expectedDevice = FidoDevice(path: "/dev/mock",
                                         product: "Key",
                                         manufacturer: "Vendor",
                                         vendorId: 1,
                                         productId: 2)
-        deviceRepository.devices = [expectedDevice]
+        deviceLister.devices = [expectedDevice]
 
         let enrollment = MockEnrollmentService()
-        enrollment.enrollClosure = { accountId, rpId, _, _, _, _, _ in
-            Account.fixture(id: accountId, rpId: rpId, userName: "user")
+        enrollment.enrollClosure = { accountId, kind, _, _, _, _ in
+            Account.fixture(id: accountId, kind: kind, displayName: "user")
         }
         enrollment.enumerateClosure = { _, _, _ in
-            [Account.fixture(id: "acct", rpId: "fidopass.local", userName: "user")]
+            [Account.fixture(id: "acct", kind: .local, displayName: "user")]
         }
 
         let portable = MockPortableEnrollmentService()
         portable.enrollPortableClosure = { accountId, _, _, _, _ in
-            (Account.fixture(id: accountId, rpId: "fidopass.portable", userName: ""), "generated")
+            (Account.fixture(id: accountId, kind: .portable, displayName: ""), "generated")
         }
         portable.exportClosure = { _, _, _ in "exported" }
 
@@ -30,7 +30,7 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         let passwordGenerator = MockPasswordGenerator()
         passwordGenerator.generateClosure = { _, _, _, _, _ in "secret-password" }
 
-        let core = FidoPassCore(deviceRepository: deviceRepository,
+        let core = FidoPassCore(deviceLister: deviceLister,
                                 enrollmentService: enrollment,
                                 portableEnrollmentService: portable,
                                 secretDerivationService: secret,
@@ -38,13 +38,12 @@ final class FidoPassCoreFacadeTests: XCTestCase {
 
         let devices = try core.listDevices(limit: 4)
         XCTAssertEqual(devices, [expectedDevice])
-        XCTAssertEqual(deviceRepository.listedLimits, [4])
+        XCTAssertEqual(deviceLister.listedLimits, [4])
 
         let enrolled = try core.enroll(accountId: "acct",
-                                       rpId: "fidopass.local",
-                                       userName: "",
+                                       kind: .local,
+                                       displayName: "",
                                        requireUV: true,
-                                       residentKey: true,
                                        devicePath: "/dev/mock",
                                        askPIN: nil)
         XCTAssertEqual(enrolled.id, "acct")

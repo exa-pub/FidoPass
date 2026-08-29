@@ -60,7 +60,7 @@ final class RecentLabelsPersistenceTests: XCTestCase {
             defaults = UserDefaults(suiteName: suite)!
             defaults.removePersistentDomain(forName: suite)
         }
-        let core = FidoPassCore(deviceRepository: MockDeviceRepository(),
+        let core = FidoPassCore(deviceLister: MockDeviceLister(),
                                 enrollmentService: MockEnrollmentService(),
                                 portableEnrollmentService: MockPortableEnrollmentService(),
                                 secretDerivationService: MockSecretDerivationService(),

@@ -23,7 +23,11 @@ Hardware-backed password generator for macOS that delegates all sensitive operat
 - Leaves secrets on the key; credential metadata stays on the authenticator and the app only caches it in memory while running.
 - SwiftUI app for macOS 12+ with device grouping, PIN-gated unlock, recent-label shortcuts, and live search.
 - Portable accounts allow the master key material to be exported and re-imported on another authenticator.
-- Copy-to-clipboard helpers, light/dark appearance, and SF Symbol-based UI for accessibility.
+- Copy-to-clipboard helpers that mark the value as concealed, keep it off Universal
+  Clipboard, and clear it automatically after a short delay.
+- Shows how many PIN attempts remain before an authenticator locks itself permanently.
+- Exports a printable recovery sheet holding everything needed to reproduce an account's
+  passwords — and no secrets.
 - Release bundles include `libfido2`, `libcbor`, and `libcrypto`, so users without Homebrew can run the packaged app.
 
 ## Requirements
@@ -63,8 +67,8 @@ import FidoPassCore
 
 let core = FidoPassCore.shared
 let device = try core.listDevices().first
-let account = try core.enroll(accountId: "demo", devicePath: device?.path)
-let password = try core.generatePassword(account: account, label: "example.com")
+let account = try core.enroll(accountId: "demo", kind: .portable, devicePath: device?.path)
+let password = try core.generatePassword(account: account, label: "vault")
 ```
 
 `Account` models are Codable and can be persisted using any storage backend your app provides.
@@ -75,6 +79,12 @@ let password = try core.generatePassword(account: account, label: "example.com")
 - `scripts/create_dmg.sh` stages the bundle into a distributable DMG image (`FidoPass.dmg`). Both scripts determine the project root automatically, so they can be executed from any working directory.
 - Packaging requires `brew` in `PATH`, `codesign`, and `hdiutil` (macOS default).
 - `scripts/update_icon.sh /path/to/AppIcon.icns` (an `.iconset` directory or a high-resolution `.png`) swaps in a new app icon and refreshes the editable `Icon.iconset` when `iconutil` is available. The `Icon.iconset` folder is only used as a source asset for maintainers; the build consumes the generated `AppIcon.icns`.
+
+## Compatibility
+Password derivation is a frozen contract: for `PasswordPolicy.version == 1` the output will
+never change. `GoldenVectorsTests` pins the salts, the character mapping and the full
+generator, so an accidental change fails the build rather than silently invalidating
+passwords already in use.
 
 ## Data Storage & Privacy
 - Account metadata lives on the authenticator as resident credentials; the macOS app keeps only in-memory copies during a session.
@@ -87,12 +97,24 @@ let password = try core.generatePassword(account: account, label: "example.com")
 - The authenticator returns a 32-byte secret that is stretched via HKDF and mapped into a password respecting the configured policy (length, character classes, ambiguity filters).
 - Portable accounts XOR an imported key with the device-derived secret so the same password material can be regenerated on another authenticator.
 
+## Installing a Release Build
+Release DMGs are signed ad-hoc rather than notarised, so Gatekeeper quarantines them after
+download and reports the app as damaged. Until notarisation is in place, either right-click
+the app and choose **Open**, or clear the quarantine flag:
+
+```bash
+xattr -d com.apple.quarantine /Applications/FidoPass.app
+```
+
+Building locally with `scripts/build_app.sh` avoids this entirely.
+
 ## Roadmap
-- Editable password policies (length and character classes) from the UI.
-- Automatic device hot-plug detection and refreshed lists without manual reloads.
-- Additional filters (per-device, per-RP) and password policy profiles.
+- Notarised, Developer ID-signed releases so downloads open without a Gatekeeper warning.
+- On-key management: set and change the PIN, enrol fingerprints, show free credential slots.
+- Split `AccountsViewModel` into per-concern stores and finish the move to `async`/`await`.
+- Editable password policies. Requires storing metadata on the authenticator first
+  (`largeBlobs`) — see `AGENTS.md`, rule 6.
 - Localized interface (English/Russian) backed by resource bundles.
-- Import/export utilities for metadata and portable keys.
 
 ## Contributing
 Issues and pull requests are welcome. If you intend to work on authenticator communication, make sure you can test with real hardware so that changes can be validated end-to-end.

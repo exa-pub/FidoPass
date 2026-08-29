@@ -8,8 +8,9 @@ enum Libfido2Context {
 
     static func check(_ rc: Int32, operation: String) throws {
         guard rc == FIDO_OK else {
-            let message = String(cString: fido_strerr(rc))
-            throw FidoPassError.libfido2("\(operation): \(message)")
+            throw FidoPassError.libfido2(operation: operation,
+                                         status: FidoStatus(code: rc),
+                                         message: String(cString: fido_strerr(rc)))
         }
     }
 }

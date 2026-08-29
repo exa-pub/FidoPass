@@ -54,17 +54,9 @@ final class HmacSecretService {
                     operation: "assert_set_clientdata_hash")
             }
 
-            var pinCString: UnsafePointer<CChar>? = nil
-            if requireUV, let pin = pinProvider?() {
-                pinCString = UnsafePointer(strdup(pin))
+            try PinScope.withPIN(requireUV ? pinProvider?() : nil) { pinCString in
+                try Libfido2Context.check(fido_dev_get_assert(device, assertion, pinCString), operation: "dev_get_assert")
             }
-            defer {
-                if let pinCString {
-                    free(UnsafeMutableRawPointer(mutating: pinCString))
-                }
-            }
-
-            try Libfido2Context.check(fido_dev_get_assert(device, assertion, pinCString), operation: "dev_get_assert")
 
             guard let secretPointer = fido_assert_hmac_secret_ptr(assertion, 0) else {
                 throw FidoPassError.invalidState("assert_hmac_secret_ptr=NULL")

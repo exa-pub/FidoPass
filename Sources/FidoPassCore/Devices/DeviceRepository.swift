@@ -49,6 +49,56 @@ final class DeviceRepository: DeviceRepositoryProtocol {
         return try body(device, path)
     }
 
+    /// Reads what the authenticator will tell us without any user interaction.
+    ///
+    /// Every field is optional-by-nature: authenticators differ in what they report, and a
+    /// missing value must degrade to "unknown" rather than to a wrong number.
+    func status(devicePath: String) throws -> DeviceStatus {
+        try withOpenedDevice(path: devicePath) { device, _ in
+            var retries: Int32 = -1
+            let retryRC = fido_dev_get_retry_count(device, &retries)
+            let remainingPINAttempts = (retryRC == FIDO_OK && retries >= 0) ? Int(retries) : nil
+
+            guard let rawInfo = fido_cbor_info_new() else {
+                throw FidoPassError.invalidState("cbor_info_new")
+            }
+            var info: OpaquePointer? = rawInfo
+            defer { fido_cbor_info_free(&info) }
+            try Libfido2Context.check(fido_dev_get_cbor_info(device, info), operation: "get_cbor_info")
+
+            let rkRemaining = fido_cbor_info_rk_remaining(info)
+
+            return DeviceStatus(pinRetriesRemaining: remainingPINAttempts,
+                                hasPIN: Self.option(named: "clientPin", in: info) == true,
+                                supportsHmacSecret: Self.hasExtension(named: "hmac-secret", in: info),
+                                remainingResidentKeys: rkRemaining >= 0 ? Int(rkRemaining) : nil)
+        }
+    }
+
+    private static func option(named name: String, in info: OpaquePointer?) -> Bool? {
+        let count = fido_cbor_info_options_len(info)
+        guard let names = fido_cbor_info_options_name_ptr(info),
+              let values = fido_cbor_info_options_value_ptr(info) else { return nil }
+        for index in 0..<count {
+            guard let raw = names.advanced(by: Int(index)).pointee else { continue }
+            if String(cString: raw) == name {
+                return values.advanced(by: Int(index)).pointee
+            }
+        }
+        return nil
+    }
+
+    private static func hasExtension(named name: String, in info: OpaquePointer?) -> Bool {
+        let count = fido_cbor_info_extensions_len(info)
+        guard let pointer = fido_cbor_info_extensions_ptr(info) else { return false }
+        for index in 0..<count {
+            if let raw = pointer.advanced(by: Int(index)).pointee, String(cString: raw) == name {
+                return true
+            }
+        }
+        return false
+    }
+
     func ensureHmacSecretSupported(_ device: OpaquePointer) throws {
         guard let rawInfo = fido_cbor_info_new() else {
             throw FidoPassError.invalidState("cbor_info_new")

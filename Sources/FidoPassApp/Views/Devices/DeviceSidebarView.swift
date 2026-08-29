@@ -15,6 +15,7 @@ struct DeviceSidebarView: View {
                         DeviceSidebarRow(device: device,
                                          state: viewModel.deviceStates[device.path],
                                          accountCount: accountCount(for: device),
+                                         readError: viewModel.deviceErrors[device.path],
                                          onReload: { viewModel.reload() },
                                          onLock: { viewModel.lockDevice(device) })
                             .tag(device.path as String?)
@@ -53,12 +54,15 @@ struct DeviceSidebarRow: View {
     let device: FidoDevice
     let state: AccountsViewModel.DeviceState?
     let accountCount: Int
+    /// Set when the last refresh could not read this device. Shown per row so one failing
+    /// key does not imply the others are broken too.
+    let readError: String?
     let onReload: () -> Void
     let onLock: () -> Void
 
     var body: some View {
         let unlocked = state?.unlocked == true
-        let statusText = unlocked ? (accountCount == 0 ? "Ready, no accounts" : "Ready, \(accountCount)") : "PIN required"
+        let statusText = readError ?? (unlocked ? (accountCount == 0 ? "Ready, no accounts" : "Ready, \(accountCount)") : "PIN required")
 
         HStack(alignment: .center, spacing: 12) {
             DeviceAvatarView(device: device, isLocked: !unlocked)
@@ -82,8 +86,8 @@ struct DeviceSidebarRow: View {
                     .truncationMode(.middle)
                 Text(statusText)
                     .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                    .foregroundColor(readError == nil ? .secondary : .orange)
+                    .lineLimit(2)
             }
             Spacer()
 

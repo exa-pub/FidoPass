@@ -10,65 +10,73 @@ final class PortableEnrollmentService: PortableEnrollmentServiceProtocol {
         self.secretDerivationService = secretDerivationService
     }
 
+    /// Creates a portable account and returns it together with the freshly generated
+    /// master key, if one was generated rather than supplied.
+    ///
+    /// Requires two touches of the authenticator: one for `makeCredential`, one for the
+    /// assertion that derives this device's fixed component. Callers must say so, or the
+    /// second prompt looks like the app hanging.
     func enrollPortable(accountId: String,
                         requireUV: Bool,
                         devicePath: String?,
                         askPIN: (() -> String?)?,
-                        importedKeyB64: String?) throws -> (Account, String?) {
-        let rpId = "fidopass.portable"
+                        importedKeyB64: String?,
+                        onStep: ((PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
+        onStep?(.creatingCredential)
         var account = try enrollmentService.enroll(accountId: accountId,
-                                                   rpId: rpId,
-                                                   userName: "",
+                                                   kind: .portable,
+                                                   displayName: "",
                                                    requireUV: requireUV,
-                                                   residentKey: true,
                                                    devicePath: devicePath,
                                                    askPIN: askPIN)
 
+        onStep?(.derivingBackupKey)
         let fixed = try secretDerivationService.deriveFixedComponent(account: account,
                                                                      requireUV: requireUV,
                                                                      pinProvider: askPIN)
-        guard fixed.count == 32 else {
-            throw FidoPassError.invalidState("Fixed component size !=32")
+        guard fixed.count == PortablePayload.externalByteCount else {
+            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
         }
 
         let importedKey: Data
         if let importedKeyB64 {
-            guard let data = Data(base64Encoded: importedKeyB64), data.count == 32 else {
-                throw FidoPassError.invalidState("ImportedKey base64 must be 32 bytes")
+            guard let data = Data(base64Encoded: importedKeyB64),
+                  data.count == PortablePayload.externalByteCount else {
+                throw FidoPassError.invalidState("Imported key must be \(PortablePayload.externalByteCount) base64-encoded bytes")
             }
             importedKey = data
         } else {
-            importedKey = CryptoHelpers.randomBytes(count: 32)
+            importedKey = CryptoHelpers.randomBytes(count: PortablePayload.externalByteCount)
         }
 
-        let external = Data(zip(importedKey, fixed).map { $0 ^ $1 })
-        account.userName = external.base64EncodedString()
+        guard let payload = PortablePayload(external: Data(zip(importedKey, fixed).map { $0 ^ $1 })) else {
+            throw FidoPassError.invalidState("Failed to build portable payload")
+        }
+        account.portable = payload
 
-        try enrollmentService.updateCredentialUserName(account: account,
-                                                       newUserName: account.userName,
+        onStep?(.savingPayload)
+        try enrollmentService.updateCredentialUserInfo(account: account,
                                                        requireUV: requireUV,
                                                        pinProvider: askPIN)
 
-        let generated = importedKeyB64 == nil ? importedKey.base64EncodedString() : nil
-        return (account, generated)
+        return (account, importedKeyB64 == nil ? importedKey.base64EncodedString() : nil)
     }
 
     func exportImportedKey(_ account: Account,
                            requireUV: Bool,
                            pinProvider: (() -> String?)?) throws -> String {
-        guard account.rpId == "fidopass.portable" else {
+        guard account.kind == .portable else {
             throw FidoPassError.invalidState("Account is not portable")
         }
-        guard let external = Data(base64Encoded: account.userName), external.count == 32 else {
-            throw FidoPassError.invalidState("userName does not contain a valid external base64 payload")
+        guard let payload = account.portable else {
+            throw FidoPassError.invalidState("Portable account is missing its key material")
         }
         let fixed = try secretDerivationService.deriveFixedComponent(account: account,
                                                                      requireUV: requireUV,
                                                                      pinProvider: pinProvider)
-        guard fixed.count == 32 else {
-            throw FidoPassError.invalidState("Fixed component size !=32")
+        guard fixed.count == PortablePayload.externalByteCount else {
+            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
         }
-        let imported = Data(zip(fixed, external).map { $0 ^ $1 })
-        return imported.base64EncodedString()
+        return Data(zip(fixed, payload.external).map { $0 ^ $1 }).base64EncodedString()
     }
 }

@@ -7,8 +7,9 @@ final class AccountsViewModel: ObservableObject {
     @Published var accounts: [Account] = []
     @Published var selected: Account? = nil {
         didSet {
-            if oldValue?.id != selected?.id {
+            if oldValue != selected {
                 generatedPassword = nil
+                generatedForLabel = nil
                 generatingAccountId = nil
                 showPlainPassword = false
             }
@@ -33,6 +34,16 @@ final class AccountsViewModel: ObservableObject {
     @Published var reloading: Bool = false
     @Published var toastMessage: ToastMessage? = nil
     @Published var enrollmentPhase: EnrollmentPhase = .idle
+    /// Per-device read failures from the last refresh, keyed by device path. Kept separate
+    /// from `errorMessage` so one unreadable key does not blank the whole account list.
+    @Published var deviceErrors: [String: String] = [:]
+    /// Label the currently shown password was derived from, so a stale result can be
+    /// dropped when the label changes.
+    @Published var generatedForLabel: String? = nil
+    /// When the clipboard will drop the copied secret, for the countdown in the UI.
+    @Published var clipboardClearsAt: Date? = nil
+    /// Master key awaiting the user's attention, shown in its own sheet.
+    @Published var exportedMasterKey: MasterKeyExport? = nil
 
     enum EnrollmentPhase: Equatable {
         case idle
@@ -61,7 +72,22 @@ final class AccountsViewModel: ObservableObject {
         var unlocked: Bool = false
         var pinToken: SecurePinVault.Token? = nil
         var pinDraft: String = ""
+        /// PIN attempts the authenticator says are left, or `nil` when unknown.
+        ///
+        /// Never treat `nil` as "plenty": some authenticators decline to report it, and
+        /// the cost of guessing wrong is a permanently locked key.
+        var pinRetriesRemaining: Int? = nil
         var id: String { device.path }
+    }
+
+    /// A portable account's master key, surfaced deliberately and never as a "password".
+    struct MasterKeyExport: Identifiable, Equatable {
+        enum Reason { case created, exported }
+
+        let id = UUID()
+        let accountId: String
+        let key: String
+        let reason: Reason
     }
 
     struct ToastMessage: Identifiable, Equatable {

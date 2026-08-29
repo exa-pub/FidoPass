@@ -14,9 +14,10 @@ struct AccountDetailView: View {
                                       accentColor: accountAccent,
                                       onGenerate: generatePassword,
                                       onGenerateAndCopy: generateAndCopy)
-            if account.rpId == "fidopass.portable" {
-                PortableAccountSection(onExport: exportMasterKey)
+            if account.kind == .portable {
+                PortableAccountSection(onExport: { viewModel.exportMasterKey(for: account) })
             }
+            RecoverySection(onExport: { viewModel.exportRecoverySheet(for: account) })
             PasswordResultSection(viewModel: viewModel)
         }
         .padding(.bottom, 12)
@@ -35,32 +36,6 @@ struct AccountDetailView: View {
     private func generateAndCopy() {
         guard !viewModel.generating, !viewModel.labelInput.isEmpty else { return }
         viewModel.generatePasswordAndCopy(for: account, label: viewModel.labelInput)
-    }
-
-    private func exportMasterKey() {
-        Task {
-            guard let pinProvider = viewModel.makePinProvider(for: account.devicePath) else {
-                if let path = account.devicePath {
-                    viewModel.handlePinExpiration(for: path, notify: true)
-                }
-                return
-            }
-            do {
-                let imported = try viewModel.core.exportImportedKey(account,
-                                                                     requireUV: true,
-                                                                     pinProvider: pinProvider)
-                await MainActor.run {
-                    viewModel.generatedPassword = imported
-                    viewModel.showPlainPassword = false
-                    viewModel.showToast("Master key exported",
-                                         icon: "square.and.arrow.down",
-                                         style: .warning,
-                                         subtitle: "Revealed in the password field")
-                }
-            } catch {
-                await MainActor.run { viewModel.errorMessage = error.localizedDescription }
-            }
-        }
     }
 
     private var accountAccent: Color {
@@ -91,19 +66,17 @@ struct AccountSummarySection: View {
         }
     }
 
-    private var rpDisplay: String {
-        if account.rpId.isEmpty { return "—" }
-        return account.rpId
-    }
+    private var rpDisplay: String { account.rpId }
 
     private var subtitle: String {
-        if account.rpId == "fidopass.portable" { return "Portable credential" }
-        if account.rpId.isEmpty || account.rpId == "fidopass.local" { return "Local credential" }
-        return "Domain · \(account.rpId)"
+        switch account.kind {
+        case .portable: return "Portable credential"
+        case .local:    return "Local credential"
+        }
     }
 
     private var trailingBadge: AnyView? {
-        guard account.rpId == "fidopass.portable" else { return nil }
+        guard account.kind == .portable else { return nil }
         return AnyView(
             Text("Portable")
                 .font(.caption2.weight(.semibold))
@@ -128,9 +101,13 @@ struct PasswordGenerationSection: View {
                     subtitle: "Use labels to derive deterministic passwords for this account.") {
             VStack(alignment: .leading, spacing: 12) {
                 LabelInputView(text: $viewModel.labelInput,
-                                recentLabels: $viewModel.recentLabels,
+                                recentLabels: viewModel.recentLabels,
                                 canSubmit: canSubmit,
-                                onSubmit: onGenerate)
+                                onSubmit: onGenerate,
+                                onClearHistory: { viewModel.clearRecentLabels() })
+                    .onChange(of: viewModel.labelInput) { _ in
+                        viewModel.invalidateGeneratedPasswordIfLabelChanged()
+                    }
                 PasswordActionsView(isGenerating: viewModel.generating,
                                      canSubmit: canSubmit,
                                      onGenerate: onGenerate,
@@ -173,6 +150,33 @@ struct PortableAccountSection: View {
     }
 }
 
+/// Offers the one piece of paper that makes this account survivable.
+struct RecoverySection: View {
+    let onExport: () -> Void
+
+    var body: some View {
+        SectionCard(icon: "doc.text",
+                    title: "Recovery sheet",
+                    accent: .blue,
+                    subtitle: "What you would otherwise have to remember to reproduce these passwords.") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Passwords are derived from the key plus the account id, the label and the policy. The key is in your pocket; the rest is only in your head and on this Mac. Keep a copy with the key.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Label("Contains no password, PIN or backup key — safe to print", systemImage: "checkmark.shield")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.green)
+                Button(action: onExport) {
+                    Label("Save recovery sheet…", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+}
+
 struct PasswordResultSection: View {
     @ObservedObject var viewModel: AccountsViewModel
 
@@ -186,18 +190,20 @@ struct PasswordResultSection: View {
                     PasswordField(showPlainPassword: viewModel.showPlainPassword,
                                   password: password,
                                   onToggleVisibility: { withAnimation { viewModel.showPlainPassword.toggle() } },
-                                  onCopy: {
-                                      ClipboardService.copy(password)
-                                      viewModel.markPasswordCopied()
-                                  })
+                                  onCopy: { viewModel.copyGeneratedPassword(password) })
+                    if let label = viewModel.generatedForLabel, !label.isEmpty {
+                        Text("For label “\(label)”")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                     if let copied = viewModel.lastCopiedPasswordAt {
-                        Text("Copied \(ContentView.relativeTime(from: copied))")
+                        Text("Copied \(ContentView.relativeTime(from: copied)) · clipboard clears automatically")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
             } else {
-                Text("Generate a password above to display it here. It will remain hidden until you choose to reveal it.")
+                Text(emptyStateText)
                     .font(.callout)
                     .foregroundColor(.secondary)
             }
@@ -207,6 +213,10 @@ struct PasswordResultSection: View {
     private var subtitle: String {
         if viewModel.generatedPassword == nil { return "No password generated yet" }
         return viewModel.showPlainPassword ? "Visible on screen" : "Hidden until revealed"
+    }
+
+    private var emptyStateText: String {
+        "Generate a password above to display it here. It stays hidden until you choose to reveal it, and anything copied is removed from the clipboard automatically."
     }
 }
 
@@ -310,9 +320,10 @@ struct InfoRow: View {
 
 struct LabelInputView: View {
     @Binding var text: String
-    @Binding var recentLabels: [String]
+    let recentLabels: [String]
     let canSubmit: Bool
     let onSubmit: (() -> Void)?
+    let onClearHistory: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -329,7 +340,7 @@ struct LabelInputView: View {
                 }
                 if !recentLabels.isEmpty {
                     Divider()
-                    Button("Clear") { recentLabels.removeAll() }
+                    Button("Clear", action: onClearHistory)
                 }
             }
             .menuStyle(.borderlessButton)
