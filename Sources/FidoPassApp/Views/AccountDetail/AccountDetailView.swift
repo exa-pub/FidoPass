@@ -114,7 +114,8 @@ struct PasswordGenerationSection: View {
                 PasswordActionsView(isGenerating: viewModel.generating,
                                      canSubmit: canSubmit,
                                      onGenerate: onGenerate,
-                                     onGenerateAndCopy: onGenerateAndCopy)
+                                     onGenerateAndCopy: onGenerateAndCopy,
+                                     onOpenEditor: { viewModel.openCryptoEditor() })
                 if !viewModel.recentLabels.isEmpty {
                     Text("Recent labels: \(viewModel.recentLabels.joined(separator: ", "))")
                         .font(.caption2)
@@ -222,10 +223,13 @@ struct PasswordResultSection: View {
 }
 
 struct PasswordActionsView: View {
+    /// Below this width the editor button drops its title and keeps only the icon, so the
+    /// row never has to squeeze three labels into a narrow pane.
     let isGenerating: Bool
     let canSubmit: Bool
     let onGenerate: () -> Void
     let onGenerateAndCopy: () -> Void
+    let onOpenEditor: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -250,7 +254,34 @@ struct PasswordActionsView: View {
             if isGenerating {
                 ProgressView().controlSize(.small)
             }
+
+            // Separated from the two password actions: encrypting text is a different kind
+            // of operation on the same key, not a third way to produce a password.
+            Spacer(minLength: 8)
+
+            // Keeps the full title when there is room and falls back to the icon alone when
+            // there is not, so a narrow pane never has to fit three labels side by side.
+            ViewThatFits(in: .horizontal) {
+                editorButton(labelStyle: .titleAndIcon)
+                editorButton(labelStyle: .iconOnly)
+            }
         }
+    }
+}
+
+extension PasswordActionsView {
+    @ViewBuilder
+    fileprivate func editorButton(labelStyle: some LabelStyle) -> some View {
+        Button(action: onOpenEditor) {
+            Label("Encrypt text…", systemImage: "lock.rectangle")
+                .labelStyle(labelStyle)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Encrypt or decrypt text with this account and label (⌘E)")
+        .disabled(!canSubmit)
+        .keyboardShortcut("e", modifiers: [.command])
+        .fixedSize()
     }
 }
 

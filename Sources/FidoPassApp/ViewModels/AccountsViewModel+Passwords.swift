@@ -135,3 +135,61 @@ extension AccountsViewModel {
         }
     }
 }
+
+extension AccountsViewModel {
+    /// Opens an editing session for the selected account and the current label.
+    ///
+    /// Deriving the key costs one touch of the security key, so it happens once here rather
+    /// than on every keystroke. The window then holds the key until it closes.
+    func openCryptoEditor() {
+        guard let account = selected, !labelInput.isEmpty else { return }
+        guard let pinProvider = makePinProvider(for: account.devicePath) else {
+            if let path = account.devicePath { handlePinExpiration(for: path, notify: true) }
+            return
+        }
+
+        generating = true
+        generatingAccountId = account.id
+        let core = self.core
+        let label = labelInput
+        weak var weakSelf = self
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let key = try core.deriveEncryptionKey(account: account,
+                                                       label: label,
+                                                       requireUV: true,
+                                                       pinProvider: pinProvider)
+                await MainActor.run {
+                    guard let self = weakSelf else { return }
+                    self.cryptoEditor?.close()
+                    self.cryptoEditor = CryptoEditorSession(account: account, label: label, key: key, core: core)
+                    self.cryptoEditorOpenToken &+= 1
+                }
+            } catch {
+                await MainActor.run {
+                    weakSelf?.errorMessage = FidoPassErrorPresenter.message(for: error).fullText()
+                }
+            }
+            await MainActor.run {
+                weakSelf?.generating = false
+                weakSelf?.generatingAccountId = nil
+            }
+        }
+    }
+
+    /// Ends the editing session and destroys its key.
+    func closeCryptoEditor() {
+        cryptoEditor?.close()
+        cryptoEditor = nil
+    }
+
+    /// Copies an encrypted value.
+    ///
+    /// Unlike a password this is not a secret, and it exists to be pasted somewhere else —
+    /// wiping it from the clipboard mid-paste would be a defect, not protection.
+    func copyEncryptedValue(_ value: String) {
+        ClipboardService.copySecret(value, clearAfter: 0)
+        showToast("Encrypted value copied", icon: "doc.on.doc", style: .info)
+    }
+}

@@ -47,6 +47,11 @@ final class AccountsViewModel: ObservableObject {
     @Published var generatedForLabel: String? = nil
     /// Master key awaiting the user's attention, shown in its own sheet.
     @Published var exportedMasterKey: MasterKeyExport? = nil
+    /// Live text-encryption session, or nil when the editor is closed.
+    @Published var cryptoEditor: CryptoEditorSession? = nil
+    /// Bumped to ask the scene to bring the editor window forward. A counter rather than a
+    /// flag so reopening for a different label is not swallowed as "no change".
+    @Published var cryptoEditorOpenToken: Int = 0
 
     enum EnrollmentPhase: Equatable {
         case idle
@@ -239,6 +244,9 @@ final class AccountsViewModel: ObservableObject {
 
     func handlePinExpiration(for path: String, notify: Bool) {
         guard var state = deviceStates[path], state.unlocked else { return }
+        if cryptoEditor != nil, selected?.devicePath == path {
+            closeCryptoEditor()
+        }
         state.unlocked = false
         state.pinToken = nil
         state.pinDraft = ""

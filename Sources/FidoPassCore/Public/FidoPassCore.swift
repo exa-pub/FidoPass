@@ -8,12 +8,14 @@ public final class FidoPassCore {
     private let enrollmentService: EnrollmentServiceProtocol
     private let portableEnrollmentService: PortableEnrollmentServiceProtocol
     private let passwordGenerator: PasswordGenerating
+    private let secretEncryption: SecretEncrypting
 
     public init(deviceLister: DeviceListing? = nil,
                 enrollmentService: EnrollmentServiceProtocol? = nil,
                 portableEnrollmentService: PortableEnrollmentServiceProtocol? = nil,
                 secretDerivationService: SecretDerivationServiceProtocol? = nil,
-                passwordGenerator: PasswordGenerating? = nil) {
+                passwordGenerator: PasswordGenerating? = nil,
+                secretEncryption: SecretEncrypting? = nil) {
         Libfido2Context.initialize()
 
         let resolvedDeviceRepository = DeviceRepository()
@@ -32,6 +34,8 @@ public final class FidoPassCore {
 
         let resolvedPasswordGenerator = passwordGenerator ?? PasswordGenerator(secretDerivationService: resolvedSecretDerivation)
         self.passwordGenerator = resolvedPasswordGenerator
+
+        self.secretEncryption = secretEncryption ?? SecretEncryptionService(secretDerivationService: resolvedSecretDerivation)
     }
 
     public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
@@ -104,6 +108,25 @@ public final class FidoPassCore {
         try portableEnrollmentService.exportImportedKey(account,
                                                         requireUV: requireUV,
                                                         pinProvider: pinProvider)
+    }
+
+    /// Derives the key used by the text editor. Costs one touch of the authenticator.
+    public func deriveEncryptionKey(account: Account,
+                                    label: String,
+                                    requireUV: Bool = true,
+                                    pinProvider: (() -> String?)? = nil) throws -> EncryptionKey {
+        try secretEncryption.deriveEncryptionKey(account: account,
+                                                 label: label,
+                                                 requireUV: requireUV,
+                                                 pinProvider: pinProvider)
+    }
+
+    public func seal(_ plaintext: String, with key: EncryptionKey) throws -> String {
+        try secretEncryption.seal(plaintext, with: key)
+    }
+
+    public func open(_ envelopeB64: String, with key: EncryptionKey) throws -> String {
+        try secretEncryption.open(envelopeB64, with: key)
     }
 
     public func deleteAccount(_ account: Account, pin: String?) throws {

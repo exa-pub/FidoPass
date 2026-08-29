@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var vm: AccountsViewModel
+    @Environment(\.openWindow) private var openWindow
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
@@ -38,6 +39,11 @@ struct ContentView: View {
         .onAppear {
             vm.reload()
             if vm.labelInput.isEmpty { vm.labelInput = "default" }
+        }
+        .onChange(of: vm.cryptoEditorOpenToken) { _ in
+            // The key is already derived by the time the token moves; bringing the window
+            // forward is all that is left.
+            openWindow(id: CryptoEditorSession.windowId)
         }
         .onChange(of: vm.selectedDevicePath) { newValue in
             if vm.selected?.devicePath != newValue {
