@@ -11,17 +11,42 @@ on:
 jobs:
   build-macos:
     name: macOS Build (App + DMG)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Select the newest Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode.app
+          # macOS applies its current design language to apps built against the matching
+          # SDK; the deployment target plays no part. Building with an older Xcode silently
+          # produces a bundle that renders in the legacy appearance, so pick the newest
+          # toolchain the runner offers rather than whatever /Applications/Xcode.app is.
+          latest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$latest" ]; then
+            echo "::error::no Xcode found on the runner"
+            exit 1
+          fi
+          echo "Selecting $latest"
+          sudo xcode-select -s "$latest"
           xcodebuild -version
+          echo "macOS SDK: $(xcrun --show-sdk-version)"
+
+      - name: Require a modern macOS SDK
+        run: |
+          # Fails loudly instead of shipping a bundle that looks a generation old. If this
+          # trips, the runner image has no Xcode 26 yet — move the job to a newer image.
+          required=26
+          sdk="$(xcrun --show-sdk-version)"
+          major="${sdk%%.*}"
+          if [ "$major" -lt "$required" ]; then
+            echo "::error::macOS SDK $sdk is older than $required — the app would be built in the legacy appearance."
+            exit 1
+          fi
+          echo "Building against macOS SDK $sdk"
+
 
       - name: Cache Swift build
         uses: actions/cache@v4
@@ -82,6 +107,20 @@ jobs:
       - name: Build .app bundle
         run: bash ./scripts/build_app.sh
 
+      - name: Verify the bundle records the modern SDK
+        run: |
+          # The linked SDK is what decides the app's appearance, and it is recorded in the
+          # binary. Assert it on the artefact that actually ships rather than trusting the
+          # toolchain selection two steps earlier.
+          binary=.build/release/FidoPass.app/Contents/MacOS/FidoPassApp
+          vtool -show-build-version "$binary"
+          sdk="$(vtool -show-build-version "$binary" | awk '/^ *sdk /{print $2}')"
+          major="${sdk%%.*}"
+          if [ "$major" -lt 26 ]; then
+            echo "::error::the shipped binary records SDK $sdk"
+            exit 1
+          fi
+
       - name: Create DMG
         run: bash ./scripts/create_dmg.sh
 
@@ -107,7 +146,7 @@ jobs:
     name: Release (tag)
     needs: build-macos
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
     steps:

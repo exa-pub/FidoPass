@@ -11,6 +11,10 @@ PRODUCT=FidoPassApp
 RAW_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
 SHORT_VERSION="${RAW_VERSION#v}"
 BUILD_VERSION="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# Read the deployment target from the single place that defines it. Hardcoding it here too
+# let the two drift: the plist still claimed 12.0 after the package moved to 13.
+MIN_MACOS="$(sed -n 's/.*\.macOS(\.v\([0-9][0-9]*\)).*/\1/p' Package.swift | head -1)"
+MIN_MACOS="${MIN_MACOS:-13}.0"
 BUNDLE_ID="${FIDOPASS_BUNDLE_ID:-pub.exa.FidoPass}"
 BUILD_DIR=".build/release"
 APP_DIR="${BUILD_DIR}/FidoPass.app"
@@ -82,7 +86,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>${PRODUCT}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
