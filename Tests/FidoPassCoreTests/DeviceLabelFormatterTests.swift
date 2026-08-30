@@ -11,15 +11,6 @@ final class DeviceLabelFormatterTests: XCTestCase {
         XCTAssertEqual(DeviceLabelFormatter.displayName(for: device), "/dev/usb")
     }
 
-    func testConciseNameAvoidsRepeatingManufacturer() {
-        let device = FidoDevice(path: "/dev/yubikey",
-                                product: "YubiKey 5C NFC",
-                                manufacturer: "YubiKey",
-                                vendorId: 0x1050,
-                                productId: 0x0407)
-        XCTAssertEqual(DeviceLabelFormatter.conciseName(for: device), "YubiKey")
-    }
-
     func testIdentityLabelUsesUsbLocationWhenPresent() {
         let device = FidoDevice(path: "/dev/usb@0x1234abcd",
                                 product: "Key",

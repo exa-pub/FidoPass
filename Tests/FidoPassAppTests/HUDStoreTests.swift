@@ -265,6 +265,17 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertEqual(store.devices.pinTTL, 60)
     }
 
+    /// The click budget, checked against a real store rather than a hand-built snapshot:
+    /// with a key unlocked and an account preselected, the daily action is "copy this
+    /// password", never "now choose an account".
+    func testThePrimaryActionOfAnUnlockedKeyIsToCopy() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        XCTAssertEqual(store.primaryAction, .generateAndCopy(store.selection!))
+
+        store.lockSelectedKey()
+        XCTAssertEqual(store.primaryAction, .unlock(devicePath: device.path))
+    }
+
     // MARK: - Labels
 
     /// The chips have to follow the account. A label belonging to another one derives a

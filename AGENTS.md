@@ -89,10 +89,14 @@ kept open across a save panel or a key touch, and does not give the PIN field fo
    them. This is safe only while policy stays a per-generation choice. A persistent
    per-account policy editor needs key-side metadata storage (`largeBlobs`) first — note
    that `credBlob` cannot serve: it is write-once at credential creation.
-7. **The click budget is a test, not a preference.** `HUDReducerTests` pins what the primary
-   action is in every state: with a key unlocked and an account preselected it must be
-   "generate and copy", never "now choose an account". Changing that behaviour means arguing
-   with `ai.tmp/HUD-PLAN.md` first.
+7. **The click budget is a test, not a preference.** `HUDReducer.primaryAction` states what
+   `⏎` must do in every state — with a key unlocked and an account preselected, "generate and
+   copy", never "now choose an account" — and it is pinned twice: by `HUDReducerTests` on
+   hand-built snapshots and by `HUDStoreTests` on real store state. Nothing dispatches
+   through it: each screen owns its default button, because a second global Return handler
+   fired alongside the focused field's submit and spent two PIN attempts on one keypress. Any
+   new screen has to keep the two in agreement. Changing the budget means arguing with
+   `ai.tmp/HUD-PLAN.md` first.
 8. **Only account ids, labels and device signatures may be written to disk**
    (`Preferences.LastUsed`, and `labelHistory.v2` — the label history, kept per account and
    synced through iCloud). Both are clearable from Preferences. Passwords, PINs and backup

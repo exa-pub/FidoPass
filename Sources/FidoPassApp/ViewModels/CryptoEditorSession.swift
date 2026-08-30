@@ -6,8 +6,6 @@ import FidoPassCore
 /// step without chasing each other.
 @MainActor
 final class CryptoEditorSession: ObservableObject {
-    static let windowId = "fidopass.crypto-editor"
-
     /// How long to wait after the last keystroke before recomputing.
     ///
     /// Every edit produces a brand-new ciphertext — a fresh nonce is mandatory — so

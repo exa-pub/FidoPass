@@ -8,39 +8,12 @@ enum DeviceLabelFormatter {
         return trimmed.isEmpty ? device.path : trimmed
     }
 
-    static func conciseName(for device: FidoDevice) -> String {
-        if device.manufacturer.isEmpty {
-            return primaryModelName(from: device.product) ?? device.product
-        }
-        if let short = primaryModelName(from: device.product), !short.isEmpty {
-            if short.compare(device.manufacturer, options: .caseInsensitive) == .orderedSame {
-                return device.manufacturer
-            }
-            return "\(device.manufacturer) \(short)"
-        }
-        return "\(device.manufacturer) \(device.product)"
-    }
-
     static func identityLabel(for device: FidoDevice) -> String {
         identityLabel(path: device.path, vendorId: device.vendorId, productId: device.productId)
     }
 
     static func identitySeed(for device: FidoDevice) -> String {
         identitySeed(path: device.path, vendorId: device.vendorId, productId: device.productId)
-    }
-
-    private static func primaryModelName(from product: String) -> String? {
-        let trimmed = product.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let delimiters = CharacterSet(charactersIn: " /-+")
-        if let range = trimmed.rangeOfCharacter(from: delimiters) {
-            let segment = trimmed[..<range.lowerBound]
-            if !segment.isEmpty { return String(segment) }
-        }
-        if let first = trimmed.split(whereSeparator: { $0.isWhitespace }).first {
-            return String(first)
-        }
-        return trimmed
     }
 
     private static func identityLabel(path: String, vendorId: Int, productId: Int) -> String {

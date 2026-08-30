@@ -40,7 +40,6 @@ final class LabelStore: ObservableObject {
         var labels: [String]
         var usedAt: Date
 
-        var scope: LabelScope? { credentialId.map(LabelScope.init) }
         var id: String { credentialId ?? "legacy|\(deviceSignature ?? "")|\(accountId)" }
     }
 

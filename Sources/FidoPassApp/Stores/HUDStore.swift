@@ -139,11 +139,6 @@ final class HUDStore: ObservableObject {
         return accounts.accounts(onDevice: path)
     }
 
-    var selectedAccount: Account? {
-        guard let selection else { return nil }
-        return accounts.account(selection)
-    }
-
     /// What the PIN screen says the unlock is *for*.
     ///
     /// Without it, unlocking looks like a detour; with it, the user can see that the thing
@@ -169,6 +164,12 @@ final class HUDStore: ObservableObject {
                     selection: selection)
     }
 
+    /// What `⏎` is expected to do in the current state.
+    ///
+    /// Read by the tests that pin the click budget, not by the panel: each screen owns its
+    /// own default button, because a second, global Return handler used to fire alongside
+    /// the focused field's submit and spend two PIN attempts on one keypress. This is the
+    /// statement of what those buttons must add up to, checked against real store state.
     var primaryAction: HUDPrimaryAction { HUDReducer.primaryAction(snapshot) }
 
     /// What may actually be shown, given the state of the key.
@@ -391,23 +392,6 @@ final class HUDStore: ObservableObject {
             if !labels.chips.isEmpty { hints.append("←→ label") }
             hints.append("⌘N new")
             return hints
-        }
-    }
-
-    // MARK: - The primary action
-
-    func runPrimaryAction() async {
-        switch primaryAction {
-        case .connectKey:
-            await devices.refresh()
-        case .unlock:
-            await submitPin()
-        case .createAccount:
-            show(.enroll)
-        case .chooseAccount:
-            restoreSelectionIfNeeded()
-        case .generateAndCopy(let ref):
-            await copyPassword(for: ref)
         }
     }
 
