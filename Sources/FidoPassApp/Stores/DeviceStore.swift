@@ -39,7 +39,9 @@ final class DeviceStore: ObservableObject {
     private var pendingRefresh = false
     private let worker: KeyWorker
     private let pinVault: SecurePinVault
-    private let pinTTL: TimeInterval
+    /// How long the PIN stays in the vault without being used. Settable: the user can change
+    /// it in Preferences while a key is already unlocked.
+    private(set) var pinTTL: TimeInterval
     /// How long to wait before believing that a key which was here a moment ago is gone.
     private let emptyConfirmationDelay: Duration
 #if os(macOS)
@@ -76,6 +78,20 @@ final class DeviceStore: ObservableObject {
     }
 
     func state(for path: String) -> KeyState? { states[path] }
+
+    /// Applies a new timeout, to keys already unlocked as well as future ones.
+    ///
+    /// The live tokens are re-armed rather than left on the old deadline: shortening the
+    /// timeout is something a user does because they want the key to lock sooner, and
+    /// "sooner, starting with the next unlock" is not what they asked for.
+    func setPinTTL(_ ttl: TimeInterval) {
+        guard ttl > 0, ttl != pinTTL else { return }
+        pinTTL = ttl
+        for state in states.values {
+            guard let token = state.pinToken else { continue }
+            pinVault.extend(token: token, ttl: ttl)
+        }
+    }
 
     var selectedState: KeyState? {
         guard let selectedPath else { return nil }

@@ -59,19 +59,14 @@ enum HUDReducer {
         return accounts.compactMap(AccountRef.init).first
     }
 
-    /// The label to start from: the one used with this account last time, else the most
-    /// recent label overall, else the conventional default.
-    static func resolveLabel(for ref: AccountRef?,
-                             accounts: [Account],
-                             devices: [FidoDevice],
-                             memory: Preferences.LastUsed?,
-                             recent: [String]) -> String {
-        if let ref, let memory, memory.accountId == ref.accountId,
-           let device = devices.first(where: { $0.path == ref.devicePath }),
-           Preferences.signature(for: device) == memory.deviceSignature,
-           !memory.label.isEmpty {
-            return memory.label
-        }
-        return recent.first ?? "default"
+    /// The label to start from: the last one used with this very account, and otherwise the
+    /// conventional default.
+    ///
+    /// Nothing else is consulted. A label used with another account is not a candidate here
+    /// — it would derive a valid, wrong password — and `Preferences.LastUsed.label` now says
+    /// the same thing as the head of the account's own history, only for one account instead
+    /// of all of them.
+    static func resolveLabel(recent: [String]) -> String {
+        recent.first ?? LabelStore.fallback
     }
 }

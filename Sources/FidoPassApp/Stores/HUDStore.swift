@@ -100,7 +100,6 @@ final class HUDStore: ObservableObject {
     /// Device whose key the open editor session belongs to, or nil when no editor is open.
     private(set) var editorDevicePath: String?
     private var statusTask: Task<Void, Never>?
-    private var autoCloseTask: Task<Void, Never>?
 
     /// The stores are built here rather than injected as defaults: a default argument is
     /// evaluated outside the main actor, and every one of these is main-actor bound.
@@ -109,7 +108,9 @@ final class HUDStore: ObservableObject {
          labels: LabelStore? = nil,
          emptyConfirmationDelay: Duration = .milliseconds(700),
          enableMonitors: Bool = true) {
+        let settings = preferences ?? Preferences()
         let deviceStore = DeviceStore(backend: backend,
+                                      pinTTL: settings.lockTimeout,
                                       emptyConfirmationDelay: emptyConfirmationDelay,
                                       enableMonitors: enableMonitors)
         self.devices = deviceStore
@@ -119,8 +120,9 @@ final class HUDStore: ObservableObject {
         self.generation = GenerationStore(backend: backend,
                                           pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })
         self.labels = labels ?? LabelStore()
-        self.preferences = preferences ?? Preferences()
+        self.preferences = settings
 
+        settings.onLockTimeoutChanged = { [weak deviceStore] ttl in deviceStore?.setPinTTL(ttl) }
         generation.onClipboardChanged = { [weak self] in self?.onStateChanged?() }
         devices.onKeyClosed = { [weak self] path in self?.handleKeyClosed(path) }
         devices.onSessionLocked = { [weak self] in self?.handleSessionLocked() }
@@ -197,7 +199,6 @@ final class HUDStore: ObservableObject {
 
     /// Called every time the panel is about to appear.
     func prepareForDisplay(intent: HUDIntent? = nil) async {
-        autoCloseTask?.cancel()
         errorText = nil
         await devices.refresh()
         if let failure = devices.refreshError { errorText = failure }
@@ -213,7 +214,6 @@ final class HUDStore: ObservableObject {
     }
 
     func panelDidClose() {
-        autoCloseTask?.cancel()
         pinDraft = ""
         errorText = nil
         backupKey = nil
@@ -236,15 +236,36 @@ final class HUDStore: ObservableObject {
 
     private func restoreSelectionIfNeeded() {
         let visible = visibleAccounts
-        if let selection, visible.contains(where: selection.matches) { return }
-        selection = HUDReducer.resolveSelection(accounts: visible,
-                                                devices: devices.devices,
-                                                memory: preferences.lastUsed)
-        labels.current = HUDReducer.resolveLabel(for: selection,
-                                                 accounts: visible,
-                                                 devices: devices.devices,
-                                                 memory: preferences.lastUsed,
-                                                 recent: labels.recent)
+        let resolved = selection.flatMap { visible.contains(where: $0.matches) ? $0 : nil }
+            ?? HUDReducer.resolveSelection(accounts: visible,
+                                           devices: devices.devices,
+                                           memory: preferences.lastUsed)
+        // Nothing is re-resolved when the account and its history are already the ones on
+        // screen: a refresh must not throw away a label the user has just typed. Note that a
+        // reconnect changes the path but not the scope, so the label survives it.
+        guard selection != resolved || labels.scope != labelTarget(for: resolved)?.scope else { return }
+        selection = resolved
+        focusLabels(on: resolved)
+    }
+
+    /// Where this account's label history is kept, and how to describe it.
+    ///
+    /// Built here rather than inside `LabelStore`, which never sees a device: identity is the
+    /// credential id, and the key's name is read from the device it is plugged into right
+    /// now — the path that leads to it is a session handle and is never stored.
+    func labelTarget(for ref: AccountRef?) -> LabelTarget? {
+        guard let ref,
+              let account = accounts.account(ref),
+              let state = devices.state(for: ref.devicePath) else { return nil }
+        return LabelTarget(scope: LabelScope(credentialId: account.credentialIdB64),
+                           accountId: account.id,
+                           deviceSignature: Preferences.signature(for: state.device),
+                           deviceName: state.device.displayName)
+    }
+
+    private func focusLabels(on ref: AccountRef?) {
+        labels.focus(labelTarget(for: ref))
+        labels.current = HUDReducer.resolveLabel(recent: labels.recent)
     }
 
     // MARK: - Navigation
@@ -262,12 +283,11 @@ final class HUDStore: ObservableObject {
 
     func select(_ ref: AccountRef) {
         selection = ref
+        // The label moves with the account, so the result is judged against the new label —
+        // otherwise a password derived from the previous one would stay on screen under an
+        // account it does not belong to.
+        focusLabels(on: ref)
         generation.invalidateResult(unless: ref, label: labels.current)
-        labels.current = HUDReducer.resolveLabel(for: ref,
-                                                 accounts: visibleAccounts,
-                                                 devices: devices.devices,
-                                                 memory: preferences.lastUsed,
-                                                 recent: labels.recent)
     }
 
     /// Moves the selection by one row. Clamped rather than wrapping: with two or three
@@ -482,14 +502,19 @@ final class HUDStore: ObservableObject {
             return
         }
 
+        // Generating for an account that was not the selected one makes it the selected one,
+        // its history included — otherwise the chips would go on describing the previous
+        // account while the result on screen belongs to this one. The label itself is left
+        // alone: it is the one this generation is running with.
         selection = ref
+        labels.focus(labelTarget(for: ref))
         do {
             let password = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
                                                                  message: "Keep it in contact until the password appears.",
                                                                  deviceName: selectedDevice?.displayName ?? "Security key")) {
                 try await self.generation.generate(account: account, label: usedLabel)
             }
-            labels.use(usedLabel)
+            if let target = labelTarget(for: ref) { labels.use(usedLabel, in: target) }
             if let device = selectedDevice {
                 preferences.remember(accountId: ref.accountId, label: usedLabel, device: device)
             }
@@ -499,7 +524,6 @@ final class HUDStore: ObservableObject {
             } else {
                 generation.copy(password, as: .password, for: ref)
                 setStatus("Password copied — the clipboard clears itself")
-                scheduleAutoCloseIfEnabled()
             }
             onStateChanged?()
         } catch {
@@ -516,7 +540,6 @@ final class HUDStore: ObservableObject {
         guard let result = generation.result else { return }
         generation.copy(result.password, as: .password, for: result.ref)
         setStatus("Password copied — the clipboard clears itself")
-        scheduleAutoCloseIfEnabled()
         onStateChanged?()
     }
 
@@ -574,11 +597,15 @@ final class HUDStore: ObservableObject {
     func deleteAccount(_ ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref) else { return }
+        // Read before the account goes: the scope is its credential, which the account
+        // carries and the store no longer has once it is deleted.
+        let scope = labelTarget(for: ref)?.scope
         isWorking = true
         busyTitle = "Deleting “\(ref.accountId)”…"
         defer { isWorking = false; busyTitle = nil }
         do {
             try await accounts.delete(account)
+            if let scope { labels.forget(scope) }
             generation.clearResult()
             if selection == ref { selection = nil }
             restoreSelectionIfNeeded()
@@ -617,8 +644,9 @@ final class HUDStore: ObservableObject {
     func saveRecoverySheet(for ref: AccountRef) {
         guard let account = accounts.account(ref) else { return }
         let description = devices.state(for: ref.devicePath).map { "\($0.device.displayName) — \($0.device.identityLabel)" }
+        let known = labelTarget(for: ref).map { labels.labels(for: $0.scope) } ?? []
         let sheet = RecoverySheet(account: account,
-                                  labels: labels.recent,
+                                  labels: known,
                                   deviceDescription: description)
         isPinnedOpen = true
         onRequestSaveRecoverySheet?(sheet)
@@ -645,7 +673,7 @@ final class HUDStore: ObservableObject {
                                                             deviceName: selectedDevice?.displayName ?? "Security key")) {
                 try await self.accounts.deriveEncryptionKey(for: account, label: label)
             }
-            labels.use(label)
+            if let target = labelTarget(for: ref) { labels.use(label, in: target) }
             let session = CryptoEditorSession(account: account, label: label, key: key, core: .shared)
             editorDevicePath = ref.devicePath
             onRequestOpenEditor?(session)
@@ -693,7 +721,10 @@ final class HUDStore: ObservableObject {
         closeEditor(ifBoundTo: path)
         accounts.drop(devicePath: path)
         generation.dropEverything(forDevicePath: path)
-        if selection?.devicePath == path { selection = nil }
+        if selection?.devicePath == path {
+            selection = nil
+            focusLabels(on: nil)
+        }
         // The backup key on screen was derived from the key that just went away; it must not
         // outlive it, and there is nothing to come back to.
         if case .backupKey = route {
@@ -713,6 +744,7 @@ final class HUDStore: ObservableObject {
         generation.dropEverything()
         accounts.dropAll()
         selection = nil
+        focusLabels(on: nil)
         route = .unlock
         onRequestClose?()
         onStateChanged?()
@@ -752,16 +784,6 @@ final class HUDStore: ObservableObject {
         }
     }
 
-    private func scheduleAutoCloseIfEnabled() {
-        guard preferences.autoCloseAfterCopy else { return }
-        autoCloseTask?.cancel()
-        autoCloseTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard !Task.isCancelled else { return }
-            guard let self, !self.isPinnedOpen, self.touch == nil else { return }
-            self.onRequestClose?()
-        }
-    }
 }
 
 private extension HUDRoute {

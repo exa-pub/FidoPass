@@ -1,4 +1,5 @@
 import Foundation
+import XCTest
 import FidoPassCore
 import TestSupport
 @testable import FidoPassApp
@@ -150,7 +151,7 @@ enum HUDTestFactory {
         defaults.removePersistentDomain(forName: suite)
         let preferences = Preferences(defaults: defaults)
         let labels = LabelStore(userDefaults: defaults,
-                                ubiStore: NSUbiquitousKeyValueStore(),
+                                ubiStore: InMemoryUbiquitousStore(),
                                 notificationCenter: NotificationCenter())
         return HUDStore(backend: backend,
                         preferences: preferences,
@@ -175,5 +176,18 @@ enum HUDTestFactory {
         store.pinDraft = "1234"
         await store.submitPin()
         return (store, backend, device)
+    }
+
+    /// Seeds label history for the account the store is currently pointed at.
+    ///
+    /// Labels are per account now, so a test that wants chips has to say which account they
+    /// belong to — there is no global list left to write into.
+    @MainActor
+    static func seedLabels(_ store: HUDStore, _ labels: [String]) {
+        guard let target = store.labelTarget(for: store.selection) else {
+            XCTFail("no account selected, so there is no history to seed")
+            return
+        }
+        for label in labels { store.labels.use(label, in: target) }
     }
 }

@@ -148,6 +148,10 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertEqual(store.preferences.lastUsed?.accountId, "vault")
         XCTAssertEqual(store.preferences.lastUsed?.label, "work")
         XCTAssertEqual(store.labels.recent.first, "work")
+        XCTAssertEqual(store.labels.labels(for: store.labelTarget(for: ref)!.scope), ["work"],
+                       "recorded against the account it was derived for")
+        XCTAssertEqual(store.labels.labels(for: store.labelTarget(for: AccountRef(accountId: "disk", devicePath: device.path))!.scope), [],
+                       "and against that one only — the same label is a different password elsewhere")
     }
 
     func testCopiedPasswordIsRecordedAgainstItsOwnAccount() async {
@@ -238,6 +242,64 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertEqual(store.route, .accounts)
     }
 
+    /// Deleting an account takes its labels with it: nothing may be left pointing at a
+    /// credential that no longer exists.
+    func testDeletingAnAccountForgetsItsLabels() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let ref = AccountRef(accountId: "disk", devicePath: device.path)
+        let scope = store.labelTarget(for: ref)!.scope
+        await store.copyPassword(for: ref, label: "disk-label")
+        XCTAssertEqual(store.labels.labels(for: scope), ["disk-label"])
+
+        await store.deleteAccount(ref)
+        XCTAssertEqual(store.labels.labels(for: scope), [])
+    }
+
+    /// Shortening the timeout is something a user does because they want the key to lock
+    /// sooner — including the key that is unlocked right now.
+    func testChangingTheLockTimeoutAppliesToTheKeyAlreadyUnlocked() async {
+        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        XCTAssertEqual(store.devices.pinTTL, 300)
+
+        store.preferences.lockTimeout = 60
+        XCTAssertEqual(store.devices.pinTTL, 60)
+    }
+
+    // MARK: - Labels
+
+    /// The chips have to follow the account. A label belonging to another one derives a
+    /// password that is perfectly valid and perfectly wrong.
+    func testSelectingAnAccountSwitchesItsLabelHistory() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let vault = AccountRef(accountId: "vault", devicePath: device.path)
+        let disk = AccountRef(accountId: "disk", devicePath: device.path)
+        await store.copyPassword(for: vault, label: "vault-label")
+        await store.copyPassword(for: disk, label: "disk-label")
+
+        store.select(vault)
+        XCTAssertEqual(store.labels.recent, ["vault-label"])
+        XCTAssertEqual(store.labels.current, "vault-label", "and the HUD opens on the one used here last")
+
+        store.select(disk)
+        XCTAssertEqual(store.labels.recent, ["disk-label"])
+        XCTAssertFalse(store.labels.chips.contains("vault-label"))
+    }
+
+    /// The sheet's whole purpose is to record what cannot be derived again — and it says
+    /// "labels used with this account", so it has to be true.
+    func testRecoverySheetCarriesOnlyThisAccountsLabels() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let vault = AccountRef(accountId: "vault", devicePath: device.path)
+        await store.copyPassword(for: vault, label: "vault-label")
+        await store.copyPassword(for: AccountRef(accountId: "disk", devicePath: device.path), label: "disk-label")
+
+        var saved: RecoverySheet?
+        store.onRequestSaveRecoverySheet = { saved = $0 }
+        store.saveRecoverySheet(for: vault)
+
+        XCTAssertEqual(saved?.labels, ["vault-label"])
+    }
+
     // MARK: - Keyboard navigation
 
     func testArrowsMoveBetweenAccounts() async {
@@ -261,8 +323,7 @@ final class HUDStoreTests: XCTestCase {
     /// with three or four positions, a key that does nothing at the edge is just a dead key.
     func testArrowsWalkTheChipsAndTheCustomFieldInARing() async {
         let (store, _, _) = await HUDTestFactory.unlockedStore()
-        store.labels.use("work")
-        store.labels.use("vault")          // chips: ["vault", "work"], current "vault"
+        HUDTestFactory.seedLabels(store, ["work", "vault"])   // chips: ["vault", "work"]
         let chips = store.labels.chips
         XCTAssertEqual(chips.count, 2)
 
@@ -289,7 +350,7 @@ final class HUDStoreTests: XCTestCase {
     /// A label typed by hand is the field's position, even before the field has focus.
     func testACustomLabelCountsAsBeingAtTheField() async {
         let (store, _, _) = await HUDTestFactory.unlockedStore()
-        store.labels.use("work")
+        HUDTestFactory.seedLabels(store, ["work"])
         store.setLabel("something-new")
         XCTAssertFalse(store.isEditingLabel)
 
@@ -303,10 +364,9 @@ final class HUDStoreTests: XCTestCase {
     /// Switching label must drop a password derived from the previous one, exactly as
     /// clicking a chip does — the keyboard is not a second, sloppier path.
     func testMovingBetweenLabelsDropsAStaleResult() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
-        store.labels.use("work")
-        store.labels.use("archive")   // two choices, or there is nothing to cycle between
-        await store.copyPassword(for: AccountRef(accountId: "vault", devicePath: device.path))
+        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        HUDTestFactory.seedLabels(store, ["work", "archive"])   // two choices, or there is nothing to cycle between
+        await store.copyPassword(for: store.selection)
         XCTAssertNotNil(store.generation.result)
 
         // Right, not left: the copy used the first chip, and there is nothing to its left.

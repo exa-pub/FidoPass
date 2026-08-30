@@ -183,6 +183,12 @@ struct AccountRowView: View {
         }
         .onAppear(perform: syncCustomField)
         .onChange(of: labels.current) { _ in syncCustomField() }
+        // The history can change under a row that stays selected — a reconnect, or the other
+        // key being picked. A draft belongs to the account it was typed for, so it does not
+        // travel with the row.
+        .onChange(of: labels.scope) { _ in
+            customText = labels.chips.contains(labels.current) ? "" : labels.current
+        }
         .onChange(of: store.isEditingLabel) { isEditing in
             syncCustomField()
             // Stepping back into the field means going back to what was typed there.

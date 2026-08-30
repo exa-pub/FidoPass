@@ -93,8 +93,16 @@ kept open across a save panel or a key touch, and does not give the PIN field fo
    action is in every state: with a key unlocked and an account preselected it must be
    "generate and copy", never "now choose an account". Changing that behaviour means arguing
    with `ai.tmp/HUD-PLAN.md` first.
-8. **Only the account id and label may be written to disk** (`Preferences.LastUsed`, opt-out
-   in Preferences). Passwords, PINs and backup keys never are — see rule 4.
+8. **Only account ids, labels and device signatures may be written to disk**
+   (`Preferences.LastUsed`, and `labelHistory.v2` — the label history, kept per account and
+   synced through iCloud). Both are clearable from Preferences. Passwords, PINs and backup
+   keys never are — see rule 4. Label history is scoped to `LabelScope` — the account's
+   `credentialIdB64` — rather than kept as one global list: a chip offered under the wrong
+   account derives a password that is valid and wrong, which is the failure mode the chips
+   exist to prevent. A vendor/product signature does not identify a key (two of a model
+   share it, and changing enabled interfaces changes it), and a device path identifies
+   nothing beyond the session — see "Working with hardware". Both are stored for display
+   only.
 
 ### Secrets on the clipboard
 

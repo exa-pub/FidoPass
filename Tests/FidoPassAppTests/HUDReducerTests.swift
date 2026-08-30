@@ -110,41 +110,13 @@ final class HUDSelectionResolutionTests: XCTestCase {
         XCTAssertEqual(ref?.accountId, "disk", "falls back to the first account, not to the wrong key's memory")
     }
 
-    func testLabelComesFromTheMemoryOfThatAccount() {
-        let memory = Preferences.LastUsed(deviceSignature: Preferences.signature(for: device),
-                                          accountId: "vault",
-                                          label: "work")
-        let ref = AccountRef(accountId: "vault", devicePath: "/dev/one")
-        XCTAssertEqual(HUDReducer.resolveLabel(for: ref,
-                                               accounts: accounts,
-                                               devices: [device],
-                                               memory: memory,
-                                               recent: ["other"]),
-                       "work")
+    func testLabelComesFromTheAccountsOwnHistory() {
+        XCTAssertEqual(HUDReducer.resolveLabel(recent: ["work", "older"]), "work")
     }
 
-    /// A label remembered for one account must not leak onto another: the same label means
-    /// a different password for a different account, and silently reusing it would be worse
-    /// than starting from the usual default.
-    func testLabelDoesNotLeakBetweenAccounts() {
-        let memory = Preferences.LastUsed(deviceSignature: Preferences.signature(for: device),
-                                          accountId: "vault",
-                                          label: "work")
-        let ref = AccountRef(accountId: "disk", devicePath: "/dev/one")
-        XCTAssertEqual(HUDReducer.resolveLabel(for: ref,
-                                               accounts: accounts,
-                                               devices: [device],
-                                               memory: memory,
-                                               recent: ["recent-one"]),
-                       "recent-one")
-    }
-
-    func testLabelFallsBackToTheConventionalDefault() {
-        XCTAssertEqual(HUDReducer.resolveLabel(for: nil,
-                                               accounts: accounts,
-                                               devices: [device],
-                                               memory: nil,
-                                               recent: []),
-                       "default")
+    /// A label used with one account must never be presented as this one's: the same label
+    /// derives a different password here, and the mistake looks like a working password.
+    func testAnAccountWithNoHistoryFallsBackToTheConventionalDefault() {
+        XCTAssertEqual(HUDReducer.resolveLabel(recent: []), "default")
     }
 }

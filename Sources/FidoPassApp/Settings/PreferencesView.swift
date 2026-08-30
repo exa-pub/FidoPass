@@ -38,13 +38,20 @@ struct PreferencesView: View {
             }
 
             Section {
-                Toggle("Close the HUD after copying", isOn: $preferences.autoCloseAfterCopy)
+                Picker("Lock the key after", selection: $preferences.lockTimeout) {
+                    ForEach(Preferences.lockTimeoutChoices, id: \.self) { timeout in
+                        Text(Self.timeoutLabel(timeout)).tag(timeout)
+                    }
+                }
             } header: {
-                Text("Behaviour")
+                Text("Security")
+            } footer: {
+                Text("The PIN is held in memory only while the key is unlocked, and every use of the key starts the countdown again. Locking your Mac or unplugging the key locks it immediately, whatever this says.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            // The two remembered things sit together on purpose: apart, "Remembered" and
-            // "Labels" read as the same thing said twice.
             Section {
                 Toggle("Preselect the last account and label", isOn: $preferences.rememberLastUsed)
 
@@ -57,24 +64,53 @@ struct PreferencesView: View {
                         }
                     }
                 }
-
-                LabeledContent("Label history") {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(labels.recent.isEmpty ? "none yet" : labels.recent.joined(separator: ", "))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Clear") { labels.clearRecent() }
-                            .disabled(labels.recent.isEmpty)
-                    }
-                }
             } header: {
                 Text("What FidoPass remembers")
             } footer: {
+                Text("The one account and label the HUD opens on, so the usual password is one keypress away. Stored on this Mac only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
+                if labels.histories.isEmpty {
+                    Text("No labels used yet")
+                        .foregroundStyle(.secondary)
+                } else {
+                    // Grouped by key, not listed flat: the same account id legitimately
+                    // lives on two keys — that is what a portable backup looks like — and
+                    // the two histories are different lists of labels.
+                    ForEach(keyGroups) { group in
+                        if keyGroups.count > 1 {
+                            Text(group.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(group.entries) { entry in
+                            LabeledContent {
+                                Text(entry.labels.joined(separator: ", "))
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } label: {
+                                Text(entry.accountId)
+                                    .padding(.leading, keyGroups.count > 1 ? 10 : 0)
+                            }
+                        }
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button("Clear label history") { labels.clearAll() }
+                    }
+                }
+            } header: {
+                Text("Label history")
+            } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("**Preselected** is the one account and label the HUD opens on, so the usual password is one keypress away. It is stored on this Mac only.")
-                    Text("**Label history** is every label you have used, offered as the chips you pick from. It syncs through iCloud when available.")
-                    Text("Neither holds a secret — no password, PIN or backup key is written anywhere. But a forgotten label makes its password unreproducible even with the key in hand, which is what the recovery sheet is for.")
+                    Text("Labels are kept per account — offered under another account, a label would derive a password that is valid and wrong. They sync through iCloud when available, together with the account ids they are grouped by.")
+                    Text("Nothing here is a secret: no password, PIN or backup key is written anywhere. But a forgotten label makes its password unreproducible even with the key in hand, which is what the recovery sheet is for.")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -101,6 +137,46 @@ struct PreferencesView: View {
         .formStyle(.grouped)
         .frame(width: 460)
         .onAppear { launchAtLogin = preferences.launchAtLogin }
+    }
+
+    /// One key's histories, under the name that key gave when they were recorded — which is
+    /// the only name available while the key itself is in a drawer.
+    private struct KeyGroup: Identifiable {
+        let signature: String
+        let title: String
+        let entries: [LabelStore.Entry]
+        var id: String { signature }
+    }
+
+    private var keyGroups: [KeyGroup] {
+        var order: [String] = []
+        var byKey: [String: [LabelStore.Entry]] = [:]
+        for entry in labels.histories {
+            // A history from a key that never named itself is still shown; it is grouped
+            // under the signature it was written with, and under nothing if it has none.
+            let signature = entry.deviceSignature ?? ""
+            if byKey[signature] == nil { order.append(signature) }
+            byKey[signature, default: []].append(entry)
+        }
+        return order.map { signature in
+            let entries = byKey[signature] ?? []
+            let name = entries.compactMap(\.deviceName).first
+            switch (name, signature.isEmpty) {
+            case (let name?, false): return KeyGroup(signature: signature, title: name, entries: entries)
+            case (let name?, true):  return KeyGroup(signature: signature, title: name, entries: entries)
+            case (nil, false):       return KeyGroup(signature: signature, title: signature, entries: entries)
+            case (nil, true):        return KeyGroup(signature: signature, title: "Unknown key", entries: entries)
+            }
+        }
+    }
+
+    private static func timeoutLabel(_ timeout: TimeInterval) -> String {
+        let minutes = Int(timeout / 60)
+        if minutes % 60 == 0 {
+            let hours = minutes / 60
+            return hours == 1 ? "1 hour" : "\(hours) hours"
+        }
+        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
 
     private var preselectionDescription: String {

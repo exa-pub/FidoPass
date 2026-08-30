@@ -104,13 +104,22 @@ generator, so an accidental change fails the build rather than silently invalida
 passwords already in use.
 
 ## Data Storage & Privacy
+- The PIN is kept in memory only, for as long as the key stays unlocked — 5 minutes of
+  inactivity by default, adjustable in Preferences → Security. Every use of the key restarts
+  the countdown; locking the Mac or unplugging the key locks it immediately.
 - Account metadata lives on the authenticator as resident credentials; the macOS app keeps only in-memory copies during a session.
-- Recent labels are synced via `UserDefaults` and `NSUbiquitousKeyValueStore` when iCloud is available.
+- Label history is kept **per account**, keyed by the credential id — which names one
+  credential on one key exactly — and synced via `UserDefaults` and
+  `NSUbiquitousKeyValueStore` when iCloud is available. The account id and the key's name
+  are stored alongside it for display. A label belongs to one account: offered under another it would derive a
+  password that is valid and wrong. Preferences → "Label history" lists what is stored and
+  clears it.
 - The account and label used last are written to `UserDefaults`, so the HUD can offer the
-  right action before the key is unlocked. That account id is the only account data that
-  reaches the disk, and it can be switched off — Preferences → "Remember the last account
-  and label", with "Forget last used" to erase what was already stored. No password, PIN or
-  backup key is ever written anywhere.
+  right action before the key is unlocked. It can be switched off — Preferences →
+  "Preselect the last account and label", with "Forget" to erase what was already stored.
+- Account ids, labels, credential ids and device names are therefore the only account data
+  that reaches the disk. A credential id is not a secret — it is sent to the relying party on
+  every assertion — but it is a stable unique identifier. No password, PIN or backup key is ever written anywhere.
 - Generated passwords are kept in memory only; copying moves them to the system clipboard where they follow normal macOS clipboard lifecycle rules.
 
 ## How It Works
