@@ -121,6 +121,32 @@ jobs:
             exit 1
           fi
 
+      - name: Verify the code signature
+        run: |
+          # The bundle's binaries are rewritten by install_name_tool and re-signed, which is
+          # where a bundle can end up passing every path check while carrying a broken seal.
+          codesign --verify --deep --strict --verbose=2 .build/release/FidoPass.app
+
+      - name: Record what was built
+        run: cat .build/release/FidoPass.app/Contents/Resources/DEPENDENCIES.txt
+
+      - name: Smoke-test the bundle
+        run: |
+          # Catches the class of failure that shipped a release crashing at launch with
+          # "Library not loaded": everything dyld needs must resolve inside the bundle.
+          binary=.build/release/FidoPass.app/Contents/MacOS/FidoPassApp
+          "$binary" &
+          pid=$!
+          sleep 5
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "the bundle launched and stayed up"
+            kill "$pid"
+          else
+            wait "$pid" || true
+            echo "::error::the bundled app exited immediately — see the crash above"
+            exit 1
+          fi
+
       - name: Create DMG
         run: bash ./scripts/create_dmg.sh
 

@@ -32,44 +32,67 @@ cp "${BUILD_DIR}/${PRODUCT}" "${MACOS_DIR}/${PRODUCT}"
 # Copy icon (expects it already generated)
 cp Sources/FidoPassApp/Resources/AppIcon.icns "${RES_DIR}/AppIcon.icns"
 
-# Bundle Homebrew dynamic libraries so the app runs without prerequisites.
+# Bundle the dynamic libraries the app needs so it runs without Homebrew installed.
+#
+# The set is discovered from the binaries themselves rather than listed by hand. A
+# hardcoded list carried the soname in it — `libcbor.0.13.dylib` — so the day Homebrew
+# moved to 0.14 the file simply was not there, the copy was skipped with a warning, and a
+# bundle missing libcbor shipped and crashed on launch with
+# "Library not loaded: @rpath/libcbor.0.14.dylib".
+#
+# Anything that cannot be bundled is now fatal: a broken bundle must never reach a release.
+
+# Prefixes whose libraries have to travel with the app. Everything under /usr/lib and
+# /System belongs to macOS and must be left alone.
+is_bundleable() {
+  case "$1" in
+    /opt/homebrew/*|/usr/local/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Non-system libraries a Mach-O file links against.
+direct_dependencies() {
+  otool -L "$1" | tail -n +2 | awk '{print $1}'
+}
+
 bundle_dependency() {
   local dylib_path="$1"
-  if [[ -z "$dylib_path" ]]; then return; fi
+  local name target
+  name="$(basename "$dylib_path")"
+  target="${FRAMEWORKS_DIR}/${name}"
 
-  local name="$(basename "$dylib_path")"
-  local target="${FRAMEWORKS_DIR}/${name}"
+  [[ -f "$target" ]] && return 0   # already bundled
 
   if [[ ! -f "$dylib_path" ]]; then
-    echo "[warn] dependency not found: $dylib_path" >&2
-    return
+    echo "[error] required library not found: $dylib_path" >&2
+    exit 1
   fi
 
   cp "$dylib_path" "$target"
   chmod 755 "$target"
   install_name_tool -id "@rpath/${name}" "$target"
 
-  if otool -L "${MACOS_DIR}/${PRODUCT}" | tail -n +2 | awk '{print $1}' | grep -Fxq "$dylib_path"; then
-    install_name_tool -change "$dylib_path" "@rpath/${name}" "${MACOS_DIR}/${PRODUCT}"
-  fi
-
-  # Re-point secondary dependencies inside the dylib itself.
+  # Follow this library's own dependencies, then repoint them at the bundle.
+  local dep dep_name
   while IFS= read -r dep; do
+    is_bundleable "$dep" || continue
     [[ "$dep" == "$dylib_path" ]] && continue
-    [[ "$dep" == /opt/homebrew/* ]] || continue
-    local dep_name="$(basename "$dep")"
+    bundle_dependency "$dep"
+    dep_name="$(basename "$dep")"
     install_name_tool -change "$dep" "@rpath/${dep_name}" "$target"
-  done < <(otool -L "$target" | tail -n +2 | awk '{print $1}')
+  done < <(direct_dependencies "$target")
 }
 
 # Ensure the executable looks inside the bundled Frameworks directory.
 install_name_tool -add_rpath "@executable_path/../Frameworks" "${MACOS_DIR}/${PRODUCT}" 2>/dev/null || true
 
-deps=(
-  "$(brew --prefix libfido2 2>/dev/null)/lib/libfido2.1.dylib"
-  "$(brew --prefix libcbor 2>/dev/null)/lib/libcbor.0.13.dylib"
-  "$(brew --prefix openssl@3 2>/dev/null)/lib/libcrypto.3.dylib"
-)
+# Start from the executable and pull in the transitive closure.
+while IFS= read -r dep; do
+  is_bundleable "$dep" || continue
+  bundle_dependency "$dep"
+  install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "${MACOS_DIR}/${PRODUCT}"
+done < <(direct_dependencies "${MACOS_DIR}/${PRODUCT}")
 
 # Write Info.plist
 cat > "${CONTENTS}/Info.plist" <<PLIST
@@ -92,10 +115,45 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-for dep in "${deps[@]}"; do
-  # shellcheck disable=SC2086
-  bundle_dependency "$dep"
-done
+# Nothing inside the bundle may still point outside it. This is the check that would have
+# caught the missing libcbor before it reached a release.
+leftovers=0
+while IFS= read -r -d '' macho; do
+  while IFS= read -r dep; do
+    if is_bundleable "$dep"; then
+      echo "[error] $(basename "$macho") still references $dep" >&2
+      leftovers=1
+    fi
+  done < <(direct_dependencies "$macho")
+done < <(find "${MACOS_DIR}" "${FRAMEWORKS_DIR}" -type f -print0)
+if [[ "$leftovers" -ne 0 ]]; then
+  echo "[error] the bundle is not self-contained" >&2
+  exit 1
+fi
+
+# Record exactly which libraries this build embedded.
+#
+# The versions come from whatever Homebrew had on the build machine, so without this a
+# released bundle cannot answer "which OpenSSL is inside 0.12.0?" — the answer changes
+# between builds of the same commit.
+MANIFEST="${RES_DIR}/DEPENDENCIES.txt"
+{
+  echo "FidoPass ${SHORT_VERSION} (build ${BUILD_VERSION})"
+  echo "Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  echo "macOS SDK: $(xcrun --show-sdk-version 2>/dev/null || echo unknown)"
+  echo "Swift: $(swift --version 2>/dev/null | head -1)"
+  echo
+  echo "Embedded libraries:"
+  for lib in "${FRAMEWORKS_DIR}"/*.dylib; do
+    [ -e "$lib" ] || continue
+    printf '  %-24s %s\n' "$(basename "$lib")" "$(shasum -a 256 "$lib" | awk '{print $1}')"
+  done
+  echo
+  echo "Homebrew formula versions at build time:"
+  for formula in libfido2 libcbor openssl@3; do
+    printf '  %-12s %s\n' "$formula" "$(brew list --versions "$formula" 2>/dev/null | tr ' ' '\n' | tail -n +2 | tr '\n' ' ' || echo unknown)"
+  done
+} > "$MANIFEST"
 
 # Re-sign the app bundle after mutating embedded dylibs (ad-hoc signature).
 if command -v codesign >/dev/null 2>&1; then
@@ -109,4 +167,15 @@ else
   echo "[warn] codesign tool not available; bundle will remain unsigned" >&2
 fi
 
+echo "Verifying the signature…"
+# The bundle's binaries are rewritten by install_name_tool and re-signed afterwards. That is
+# exactly the step where a bundle ends up passing every path check while carrying a broken
+# signature — and the failure would only appear on a user's machine, or during notarisation.
+if ! codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -3; then
+  echo "[error] the signed bundle does not verify" >&2
+  exit 1
+fi
+
+echo "Bundled libraries:"
+ls -1 "${FRAMEWORKS_DIR}"
 echo "Created ${APP_DIR}"
