@@ -25,8 +25,20 @@ public final class InMemoryUbiquitousStore: NSUbiquitousKeyValueStore {
         storage[aKey] = anObject
     }
 
+    public override func set(_ aData: Data?, forKey aKey: String) {
+        storage[aKey] = aData
+    }
+
+    public override func removeObject(forKey aKey: String) {
+        storage.removeValue(forKey: aKey)
+    }
+
     public override func array(forKey aKey: String) -> [Any]? {
         storage[aKey] as? [Any]
+    }
+
+    public override func data(forKey aKey: String) -> Data? {
+        storage[aKey] as? Data
     }
 
     public override func synchronize() -> Bool {

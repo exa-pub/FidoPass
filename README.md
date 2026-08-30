@@ -21,7 +21,11 @@ Hardware-backed password generator for macOS that delegates all sensitive operat
 ## Features
 - Derives deterministic passwords via a CTAP2/FIDO2 authenticator that advertises the `hmac-secret` extension.
 - Leaves secrets on the key; credential metadata stays on the authenticator and the app only caches it in memory while running.
-- SwiftUI app for macOS 13+ with device grouping, PIN-gated unlock, recent-label shortcuts, and live search.
+- Lives in the menu bar: a compact HUD opens with a global shortcut (⌘⌥P by default) or a
+  click on the key icon. The usual password reaches the clipboard in two clicks, or in two
+  keystrokes when the key is already unlocked.
+- Remembers the account and label used last, so unlocking continues the action you asked
+  for instead of dropping you on a list.
 - Portable accounts allow the master key material to be exported and re-imported on another authenticator.
 - Copy-to-clipboard helpers that mark the value as concealed, keep it off Universal
   Clipboard, and clear it automatically after a short delay.
@@ -49,19 +53,28 @@ brew install libfido2 pkg-config
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" # adjust if needed
 ```
 
-### 2. Build and launch the SwiftUI app
+### 2. Build and launch the app
+FidoPass is a menu-bar application: the status item and the activation policy only behave
+correctly from an app bundle, so `swift run` is not the way to start it.
+
 ```bash
-swift build --product FidoPassApp
-swift run FidoPassApp
+bash scripts/build_app.sh
+open .build/release/FidoPass.app
 ```
 
 ### 3. Enroll an account and generate passwords
 1. Plug in your authenticator and ensure it has a PIN configured.
-2. Use the sidebar to unlock the device (enter the PIN when prompted).
-3. Create a new account from the toolbar or **File → New account (⌘N)**.
-4. Provide a label (e.g., `example.com`) and click **Generate** to obtain a password. The app can copy the result directly to the clipboard.
+2. Open the HUD from the menu-bar key icon, or press ⌘⌥P.
+3. Enter the key PIN. It is kept in memory for five minutes.
+4. Press ⌘N (or use the ··· menu) to create an account — `vault`, say. Portable is the
+   default: its backup key can be entered on a second authenticator, so the passwords
+   survive losing this key. Write the backup key down when it is shown; it is shown once.
+5. Pick a label and press **Copy password**. The clipboard clears itself after 45 seconds,
+   and the menu-bar icon shows that a secret is still on it.
 
-The app maintains recent labels, groups accounts by physical device, and surfaces errors through standard macOS alerts.
+Rare actions — backup key, recovery sheet, text encryption, deleting an account — are on the
+right-click menu of an account row (and on the `···` button that appears on hover). The
+menu-bar icon also has a right-click menu with the same commands.
 
 ## FidoPassCore Library
 Applications can integrate `FidoPassCore` directly when they need a programmatic API:
@@ -91,8 +104,22 @@ generator, so an accidental change fails the build rather than silently invalida
 passwords already in use.
 
 ## Data Storage & Privacy
+- The PIN is kept in memory only, for as long as the key stays unlocked — 5 minutes of
+  inactivity by default, adjustable in Preferences → Security. Every use of the key restarts
+  the countdown; locking the Mac or unplugging the key locks it immediately.
 - Account metadata lives on the authenticator as resident credentials; the macOS app keeps only in-memory copies during a session.
-- Recent labels are synced via `UserDefaults` and `NSUbiquitousKeyValueStore` when iCloud is available.
+- Label history is kept **per account**, keyed by the credential id — which names one
+  credential on one key exactly — and synced via `UserDefaults` and
+  `NSUbiquitousKeyValueStore` when iCloud is available. The account id and the key's name
+  are stored alongside it for display. A label belongs to one account: offered under another it would derive a
+  password that is valid and wrong. Preferences → "Label history" lists what is stored and
+  clears it.
+- The account and label used last are written to `UserDefaults`, so the HUD can offer the
+  right action before the key is unlocked. It can be switched off — Preferences →
+  "Preselect the last account and label", with "Forget" to erase what was already stored.
+- Account ids, labels, credential ids and device names are therefore the only account data
+  that reaches the disk. A credential id is not a secret — it is sent to the relying party on
+  every assertion — but it is a stable unique identifier. No password, PIN or backup key is ever written anywhere.
 - Generated passwords are kept in memory only; copying moves them to the system clipboard where they follow normal macOS clipboard lifecycle rules.
 
 ## How It Works
@@ -114,8 +141,9 @@ Building locally with `scripts/build_app.sh` avoids this entirely.
 
 ## Roadmap
 - Notarised, Developer ID-signed releases so downloads open without a Gatekeeper warning.
-- On-key management: set and change the PIN, enrol fingerprints, show free credential slots.
-- Split `AccountsViewModel` into per-concern stores and finish the move to `async`/`await`.
+- On-key management: set and change the PIN, enrol fingerprints.
+- Real cancellation of a pending key operation (`fido_dev_cancel`); today the Cancel button
+  hides the prompt and discards the result while the call finishes in the background.
 - Editable password policies. Requires storing metadata on the authenticator first
   (`largeBlobs`) — see `AGENTS.md`, rule 6.
 - Localized interface (English/Russian) backed by resource bundles.

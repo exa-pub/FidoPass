@@ -24,10 +24,6 @@ public struct FidoDevice: Identifiable, Hashable, Codable {
         DeviceLabelFormatter.displayName(for: self)
     }
 
-    public var conciseName: String {
-        DeviceLabelFormatter.conciseName(for: self)
-    }
-
     public var identityLabel: String {
         DeviceLabelFormatter.identityLabel(for: self)
     }
