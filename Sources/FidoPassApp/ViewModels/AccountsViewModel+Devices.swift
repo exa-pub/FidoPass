@@ -141,6 +141,12 @@ extension AccountsViewModel {
     }
 
     func lockDevice(_ device: FidoDevice) {
+        // An open editor holds a live encryption key for one of this device's accounts.
+        // Locking the device has to take that key with it, or "locked" would only describe
+        // the account list while the secrets stayed reachable in another window.
+        if cryptoEditor != nil, selected?.devicePath == device.path {
+            closeCryptoEditor()
+        }
         if var state = deviceStates[device.path] {
             if let token = state.pinToken {
                 pinVault.remove(token: token)
@@ -166,7 +172,13 @@ extension AccountsViewModel {
         showDeleteConfirm = true
     }
 
+    /// Called when the macOS session locks or the screen goes to sleep.
     func lockAllDevices(reason: String? = nil) {
+        // Unconditionally, and before anything else: this runs when the user walks away
+        // from the machine, and an editing session left open would keep both the key and
+        // the plaintext on screen behind the lock screen.
+        closeCryptoEditor()
+
         let unlockedDevices = deviceStates.values.filter { $0.unlocked }.map { $0.device }
         guard !unlockedDevices.isEmpty else { return }
 

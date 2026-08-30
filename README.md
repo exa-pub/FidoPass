@@ -21,17 +21,21 @@ Hardware-backed password generator for macOS that delegates all sensitive operat
 ## Features
 - Derives deterministic passwords via a CTAP2/FIDO2 authenticator that advertises the `hmac-secret` extension.
 - Leaves secrets on the key; credential metadata stays on the authenticator and the app only caches it in memory while running.
-- SwiftUI app for macOS 12+ with device grouping, PIN-gated unlock, recent-label shortcuts, and live search.
+- SwiftUI app for macOS 13+ with device grouping, PIN-gated unlock, recent-label shortcuts, and live search.
 - Portable accounts allow the master key material to be exported and re-imported on another authenticator.
 - Copy-to-clipboard helpers that mark the value as concealed, keep it off Universal
   Clipboard, and clear it automatically after a short delay.
 - Shows how many PIN attempts remain before an authenticator locks itself permanently.
 - Exports a printable recovery sheet holding everything needed to reproduce an account's
   passwords — and no secrets.
+- Encrypts and decrypts short texts with the same key (AES-256-GCM), for secrets that have
+  to be stored somewhere you do not control.
+- Every release bundle carries `Contents/Resources/DEPENDENCIES.txt` recording the exact
+  libraries and versions it was built from.
 - Release bundles include `libfido2`, `libcbor`, and `libcrypto`, so users without Homebrew can run the packaged app.
 
 ## Requirements
-- macOS 12 Monterey or newer.
+- macOS 13 Ventura or newer.
 - Swift toolchain 5.9 or newer.
 - Homebrew packages: `libfido2` and `pkg-config` (brings in `libcbor`, `openssl@3`, etc.).
 - Xcode Command Line Tools for `install_name_tool`, `codesign`, and other build utilities.
