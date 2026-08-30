@@ -59,7 +59,7 @@ final class EnrollmentService: EnrollmentServiceProtocol {
                     fido_cred_set_user(credential,
                                         pointer.bindMemory(to: UInt8.self).baseAddress,
                                         packedId.count,
-                                        Self.credentialName(accountId: trimmedId),
+                                        Self.credentialName(kind: kind, accountId: trimmedId, portable: nil),
                                         Self.credentialDisplayName(kind: kind,
                                                                    accountId: trimmedId,
                                                                    displayName: displayName,
@@ -215,7 +215,9 @@ final class EnrollmentService: EnrollmentServiceProtocol {
                     fido_cred_set_user(residentCredential,
                                         pointer.bindMemory(to: UInt8.self).baseAddress,
                                         packedId.count,
-                                        Self.credentialName(accountId: account.id),
+                                        Self.credentialName(kind: account.kind,
+                                                            accountId: account.id,
+                                                            portable: account.portable),
                                         Self.credentialDisplayName(kind: account.kind,
                                                                    accountId: account.id,
                                                                    displayName: account.displayName,
@@ -236,9 +238,19 @@ final class EnrollmentService: EnrollmentServiceProtocol {
 
     // MARK: - Credential user fields
 
-    /// Machine identifier. Always the account id, for every kind.
-    private static func credentialName(accountId: String) -> String {
-        String(accountId.prefix(32))
+    /// Value written to the credential's `name` field.
+    ///
+    /// For a portable account this carries the key material, because that is where every
+    /// released version of FidoPass looks for it. Moving it elsewhere made accounts created
+    /// by this build unreadable by earlier ones, which failed with
+    /// "Portable userName must contain base64 External (32 bytes)".
+    private static func credentialName(kind: AccountKind,
+                                       accountId: String,
+                                       portable: PortablePayload?) -> String {
+        if kind == .portable, let portable {
+            return portable.base64
+        }
+        return String(accountId.prefix(32))
     }
 
     /// Never returns an empty string.
@@ -254,25 +266,38 @@ final class EnrollmentService: EnrollmentServiceProtocol {
         credentialDisplayName(kind: kind, accountId: accountId, displayName: displayName, portable: portable)
     }
 
+    static func credentialNameForTesting(kind: AccountKind,
+                                         accountId: String,
+                                         portable: PortablePayload?) -> String {
+        credentialName(kind: kind, accountId: accountId, portable: portable)
+    }
+
+    /// Value written to the credential's `displayName` field. Never empty.
+    ///
+    /// An empty display name makes `fido_dev_make_cred` fail with `FIDO_ERR_INVALID_LENGTH`
+    /// before the request even reaches the authenticator, so enrolment dies instantly with
+    /// an error that names no cause. Accounts are routinely created without a display name,
+    /// so the account id is the fallback.
+    ///
+    /// A portable account has no room for a human-readable name: its `name` field is taken
+    /// by the key material, so the account id goes here — the layout earlier versions write
+    /// and expect.
     private static func credentialDisplayName(kind: AccountKind,
                                               accountId: String,
                                               displayName: String,
                                               portable: PortablePayload?) -> String {
-        switch kind {
-        case .local:
-            return displayName.isEmpty ? accountId : displayName
-        case .portable:
-            guard let portable else { return displayName.isEmpty ? accountId : displayName }
-            return portablePayloadPrefix + portable.base64
+        if kind == .portable, portable != nil {
+            return accountId
         }
+        return displayName.isEmpty ? accountId : displayName
     }
 
-    /// Reads the two credential strings back, accepting both the current layout and the
-    /// one written before the fields were disentangled.
+    /// Reads the two credential strings back.
     ///
-    /// The pre-existing layout put the raw payload in `name` and the account id in
-    /// `displayName`. Accounts enrolled that way are still on users' keys and must keep
-    /// working — losing the payload would make their passwords unreproducible.
+    /// The written layout puts a portable payload in `name`, which is what every released
+    /// version reads. The prefixed `displayName` form is still accepted because builds
+    /// between the refactor and this fix wrote it, and those accounts are on real keys —
+    /// losing the payload would make their passwords unreproducible.
     static func decodeUserFields(kind: AccountKind,
                                          name: String,
                                          displayName: String) -> (displayName: String, portable: PortablePayload?) {

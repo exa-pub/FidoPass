@@ -85,14 +85,63 @@ final class CredentialUserFieldsTests: XCTestCase {
 /// default path rather than an edge case.
 extension CredentialUserFieldsTests {
 
+    /// The wire layout is an interoperability contract, not an internal detail: earlier
+    /// releases are still installed and read the portable payload from `name`. Writing it
+    /// anywhere else makes accounts created here fail in those versions with
+    /// "Portable userName must contain base64 External (32 bytes)".
+    func testPortablePayloadIsWrittenWhereEveryVersionLooksForIt() {
+        let payload = PortablePayload(external: Data(repeating: 0x5A, count: 32))!
+        let name = EnrollmentService.credentialNameForTesting(kind: .portable,
+                                                              accountId: "vault",
+                                                              portable: payload)
+        XCTAssertEqual(name, payload.base64, "the payload belongs in the name field")
+        XCTAssertEqual(Data(base64Encoded: name)?.count, 32,
+                       "older versions require exactly 32 base64-decoded bytes here")
+
+        let display = EnrollmentService.credentialDisplayNameForTesting(kind: .portable,
+                                                                        accountId: "vault",
+                                                                        displayName: "",
+                                                                        portable: payload)
+        XCTAssertEqual(display, "vault", "the account id goes in displayName for portable accounts")
+    }
+
+    func testLocalAccountKeepsTheAccountIdInName() {
+        XCTAssertEqual(EnrollmentService.credentialNameForTesting(kind: .local,
+                                                                  accountId: "vault",
+                                                                  portable: nil),
+                       "vault")
+    }
+
+    /// Before the payload exists — during `makeCredential`, ahead of the second touch —
+    /// there is nothing to write, and the fields must still be valid.
+    func testPortableWithoutPayloadYetFallsBackToTheAccountId() {
+        XCTAssertEqual(EnrollmentService.credentialNameForTesting(kind: .portable,
+                                                                  accountId: "vault",
+                                                                  portable: nil),
+                       "vault")
+    }
+
+    /// Round trip through the layout that is actually written.
+    func testWrittenLayoutReadsBack() {
+        let payload = PortablePayload(external: Data(repeating: 0x37, count: 32))!
+        let name = EnrollmentService.credentialNameForTesting(kind: .portable, accountId: "vault", portable: payload)
+        let display = EnrollmentService.credentialDisplayNameForTesting(kind: .portable,
+                                                                        accountId: "vault",
+                                                                        displayName: "",
+                                                                        portable: payload)
+        XCTAssertEqual(EnrollmentService.decodeUserFields(kind: .portable, name: name, displayName: display).portable,
+                       payload)
+    }
+
     func testDisplayNameIsNeverEmpty() {
         for kind in AccountKind.allCases {
-            let value = EnrollmentService.credentialDisplayNameForTesting(kind: kind,
-                                                                          accountId: "vault",
-                                                                          displayName: "",
-                                                                          portable: nil)
-            XCTAssertFalse(value.isEmpty, "\(kind) enrolment would fail with FIDO_ERR_INVALID_LENGTH")
-            XCTAssertEqual(value, "vault", "the account id is the fallback")
+            for payload in [nil, PortablePayload(external: Data(repeating: 0x11, count: 32))] {
+                let value = EnrollmentService.credentialDisplayNameForTesting(kind: kind,
+                                                                              accountId: "vault",
+                                                                              displayName: "",
+                                                                              portable: payload)
+                XCTAssertFalse(value.isEmpty, "\(kind) enrolment would fail with FIDO_ERR_INVALID_LENGTH")
+            }
         }
     }
 
@@ -104,15 +153,13 @@ extension CredentialUserFieldsTests {
         XCTAssertEqual(value, "Work vault")
     }
 
-    func testPortablePayloadTakesOverTheField() {
+    /// Builds between the refactor and this fix put a prefixed payload in `displayName`.
+    /// Those accounts exist on real keys and must keep opening.
+    func testPrefixedInterimLayoutIsStillAccepted() {
         let payload = PortablePayload(external: Data(repeating: 0x5A, count: 32))!
-        let value = EnrollmentService.credentialDisplayNameForTesting(kind: .portable,
-                                                                      accountId: "vault",
-                                                                      displayName: "",
-                                                                      portable: payload)
-        XCTAssertTrue(value.hasPrefix("fp-ext:v1:"))
-        XCTAssertEqual(EnrollmentService.decodeUserFields(kind: .portable, name: "vault", displayName: value).portable,
-                       payload,
-                       "what is written must read back identically")
+        let decoded = EnrollmentService.decodeUserFields(kind: .portable,
+                                                         name: "vault",
+                                                         displayName: "fp-ext:v1:" + payload.base64)
+        XCTAssertEqual(decoded.portable, payload)
     }
 }
