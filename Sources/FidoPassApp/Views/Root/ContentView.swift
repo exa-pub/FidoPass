@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var vm: AccountsViewModel
+    @Environment(\.openWindow) private var openWindow
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
@@ -16,6 +17,11 @@ struct ContentView: View {
         }
         .navigationViewStyle(.columns)
         .sheet(isPresented: $vm.showNewAccountSheet) { NewAccountView() }
+        .sheet(item: $vm.exportedMasterKey) { export in
+            MasterKeyExportView(export: export,
+                                onCopy: { vm.copyBackupKey($0) },
+                                onDismiss: { vm.exportedMasterKey = nil })
+        }
         .alert("Delete account?", isPresented: $vm.showDeleteConfirm, presenting: vm.accountPendingDeletion) { _ in
             Button("Cancel", role: .cancel) { vm.accountPendingDeletion = nil }
             Button("Delete", role: .destructive) {
@@ -33,6 +39,11 @@ struct ContentView: View {
         .onAppear {
             vm.reload()
             if vm.labelInput.isEmpty { vm.labelInput = "default" }
+        }
+        .onChange(of: vm.cryptoEditorOpenToken) { _ in
+            // The key is already derived by the time the token moves; bringing the window
+            // forward is all that is left.
+            openWindow(id: CryptoEditorSession.windowId)
         }
         .onChange(of: vm.selectedDevicePath) { newValue in
             if vm.selected?.devicePath != newValue {
@@ -53,8 +64,8 @@ struct ContentView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: vm.toastMessage)
     }
 
-    static func relativeTime(from date: Date) -> String {
-        relativeFormatter.localizedString(for: date, relativeTo: Date())
+    static func relativeTime(from date: Date, relativeTo reference: Date = Date()) -> String {
+        relativeFormatter.localizedString(for: date, relativeTo: reference)
     }
 }
 

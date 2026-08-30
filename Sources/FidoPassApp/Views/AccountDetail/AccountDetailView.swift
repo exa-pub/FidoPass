@@ -9,14 +9,15 @@ struct AccountDetailView: View {
         LazyVStack(alignment: .leading, spacing: 16) {
             AccountSummarySection(account: account,
                                   deviceName: deviceName,
-                                  lastCopied: viewModel.lastCopiedPasswordAt)
+                                  receipt: viewModel.copyReceipt)
             PasswordGenerationSection(viewModel: viewModel,
                                       accentColor: accountAccent,
                                       onGenerate: generatePassword,
                                       onGenerateAndCopy: generateAndCopy)
-            if account.rpId == "fidopass.portable" {
-                PortableAccountSection(onExport: exportMasterKey)
+            if account.kind == .portable {
+                PortableAccountSection(onExport: { viewModel.exportMasterKey(for: account) })
             }
+            RecoverySection(onExport: { viewModel.exportRecoverySheet(for: account) })
             PasswordResultSection(viewModel: viewModel)
         }
         .padding(.bottom, 12)
@@ -37,32 +38,6 @@ struct AccountDetailView: View {
         viewModel.generatePasswordAndCopy(for: account, label: viewModel.labelInput)
     }
 
-    private func exportMasterKey() {
-        Task {
-            guard let pinProvider = viewModel.makePinProvider(for: account.devicePath) else {
-                if let path = account.devicePath {
-                    viewModel.handlePinExpiration(for: path, notify: true)
-                }
-                return
-            }
-            do {
-                let imported = try viewModel.core.exportImportedKey(account,
-                                                                     requireUV: true,
-                                                                     pinProvider: pinProvider)
-                await MainActor.run {
-                    viewModel.generatedPassword = imported
-                    viewModel.showPlainPassword = false
-                    viewModel.showToast("Master key exported",
-                                         icon: "square.and.arrow.down",
-                                         style: .warning,
-                                         subtitle: "Revealed in the password field")
-                }
-            } catch {
-                await MainActor.run { viewModel.errorMessage = error.localizedDescription }
-            }
-        }
-    }
-
     private var accountAccent: Color {
         guard let path = account.devicePath,
               let device = viewModel.deviceStates[path]?.device else { return .accentColor }
@@ -73,7 +48,7 @@ struct AccountDetailView: View {
 struct AccountSummarySection: View {
     let account: Account
     let deviceName: String
-    let lastCopied: Date?
+    let receipt: AccountsViewModel.CopyReceipt?
 
     var body: some View {
         SectionCard(icon: "key.fill",
@@ -84,26 +59,27 @@ struct AccountSummarySection: View {
             VStack(alignment: .leading, spacing: 12) {
                 InfoRow(icon: "usb.cable", title: "Device", value: deviceName)
                 InfoRow(icon: "globe", title: "RP ID", value: rpDisplay)
-                if let copied = lastCopied {
-                    InfoRow(icon: "clock", title: "Last copied", value: ContentView.relativeTime(from: copied), accent: .secondary)
+                if let receipt, receipt.belongs(to: account) {
+                    InfoRow(icon: "clock",
+                            title: "Last copied",
+                            value: LiveRelativeText(date: receipt.copiedAt),
+                            accent: .secondary)
                 }
             }
         }
     }
 
-    private var rpDisplay: String {
-        if account.rpId.isEmpty { return "—" }
-        return account.rpId
-    }
+    private var rpDisplay: String { account.rpId }
 
     private var subtitle: String {
-        if account.rpId == "fidopass.portable" { return "Portable credential" }
-        if account.rpId.isEmpty || account.rpId == "fidopass.local" { return "Local credential" }
-        return "Domain · \(account.rpId)"
+        switch account.kind {
+        case .portable: return "Portable credential"
+        case .local:    return "Local credential"
+        }
     }
 
     private var trailingBadge: AnyView? {
-        guard account.rpId == "fidopass.portable" else { return nil }
+        guard account.kind == .portable else { return nil }
         return AnyView(
             Text("Portable")
                 .font(.caption2.weight(.semibold))
@@ -128,13 +104,18 @@ struct PasswordGenerationSection: View {
                     subtitle: "Use labels to derive deterministic passwords for this account.") {
             VStack(alignment: .leading, spacing: 12) {
                 LabelInputView(text: $viewModel.labelInput,
-                                recentLabels: $viewModel.recentLabels,
+                                recentLabels: viewModel.recentLabels,
                                 canSubmit: canSubmit,
-                                onSubmit: onGenerate)
+                                onSubmit: onGenerate,
+                                onClearHistory: { viewModel.clearRecentLabels() })
+                    .onChange(of: viewModel.labelInput) { _ in
+                        viewModel.invalidateGeneratedPasswordIfLabelChanged()
+                    }
                 PasswordActionsView(isGenerating: viewModel.generating,
                                      canSubmit: canSubmit,
                                      onGenerate: onGenerate,
-                                     onGenerateAndCopy: onGenerateAndCopy)
+                                     onGenerateAndCopy: onGenerateAndCopy,
+                                     onOpenEditor: { viewModel.openCryptoEditor() })
                 if !viewModel.recentLabels.isEmpty {
                     Text("Recent labels: \(viewModel.recentLabels.joined(separator: ", "))")
                         .font(.caption2)
@@ -173,6 +154,33 @@ struct PortableAccountSection: View {
     }
 }
 
+/// Offers the one piece of paper that makes this account survivable.
+struct RecoverySection: View {
+    let onExport: () -> Void
+
+    var body: some View {
+        SectionCard(icon: "doc.text",
+                    title: "Recovery sheet",
+                    accent: .blue,
+                    subtitle: "What you would otherwise have to remember to reproduce these passwords.") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Passwords are derived from the key plus the account id, the label and the policy. The key is in your pocket; the rest is only in your head and on this Mac. Keep a copy with the key.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Label("Contains no password, PIN or backup key — safe to print", systemImage: "checkmark.shield")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.green)
+                Button(action: onExport) {
+                    Label("Save recovery sheet…", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+}
+
 struct PasswordResultSection: View {
     @ObservedObject var viewModel: AccountsViewModel
 
@@ -186,18 +194,18 @@ struct PasswordResultSection: View {
                     PasswordField(showPlainPassword: viewModel.showPlainPassword,
                                   password: password,
                                   onToggleVisibility: { withAnimation { viewModel.showPlainPassword.toggle() } },
-                                  onCopy: {
-                                      ClipboardService.copy(password)
-                                      viewModel.markPasswordCopied()
-                                  })
-                    if let copied = viewModel.lastCopiedPasswordAt {
-                        Text("Copied \(ContentView.relativeTime(from: copied))")
+                                  onCopy: { viewModel.copyGeneratedPassword(password) })
+                    if let label = viewModel.generatedForLabel, !label.isEmpty {
+                        Text("For label “\(label)”")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+                    if let receipt = viewModel.copyReceipt {
+                        ClipboardStatusView(receipt: receipt)
+                    }
                 }
             } else {
-                Text("Generate a password above to display it here. It will remain hidden until you choose to reveal it.")
+                Text(emptyStateText)
                     .font(.callout)
                     .foregroundColor(.secondary)
             }
@@ -208,13 +216,20 @@ struct PasswordResultSection: View {
         if viewModel.generatedPassword == nil { return "No password generated yet" }
         return viewModel.showPlainPassword ? "Visible on screen" : "Hidden until revealed"
     }
+
+    private var emptyStateText: String {
+        "Generate a password above to display it here. It stays hidden until you choose to reveal it, and anything copied is removed from the clipboard automatically."
+    }
 }
 
 struct PasswordActionsView: View {
+    /// Below this width the editor button drops its title and keeps only the icon, so the
+    /// row never has to squeeze three labels into a narrow pane.
     let isGenerating: Bool
     let canSubmit: Bool
     let onGenerate: () -> Void
     let onGenerateAndCopy: () -> Void
+    let onOpenEditor: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -239,7 +254,34 @@ struct PasswordActionsView: View {
             if isGenerating {
                 ProgressView().controlSize(.small)
             }
+
+            // Separated from the two password actions: encrypting text is a different kind
+            // of operation on the same key, not a third way to produce a password.
+            Spacer(minLength: 8)
+
+            // Keeps the full title when there is room and falls back to the icon alone when
+            // there is not, so a narrow pane never has to fit three labels side by side.
+            ViewThatFits(in: .horizontal) {
+                editorButton(labelStyle: .titleAndIcon)
+                editorButton(labelStyle: .iconOnly)
+            }
         }
+    }
+}
+
+extension PasswordActionsView {
+    @ViewBuilder
+    fileprivate func editorButton(labelStyle: some LabelStyle) -> some View {
+        Button(action: onOpenEditor) {
+            Label("Encrypt text…", systemImage: "lock.rectangle")
+                .labelStyle(labelStyle)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Encrypt or decrypt text with this account and label (⌘E)")
+        .disabled(!canSubmit)
+        .keyboardShortcut("e", modifiers: [.command])
+        .fixedSize()
     }
 }
 
@@ -276,13 +318,13 @@ struct PasswordField: View {
     }
 }
 
-struct InfoRow: View {
+struct InfoRow<Value: View>: View {
     let icon: String
     let title: String
-    let value: String
+    let value: Value
     let accent: Color
 
-    init(icon: String, title: String, value: String, accent: Color = .accentColor) {
+    init(icon: String, title: String, value: Value, accent: Color = .accentColor) {
         self.icon = icon
         self.title = title
         self.value = value
@@ -298,9 +340,8 @@ struct InfoRow: View {
                 Text(title)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text(value)
+                value
                     .font(.body)
-                    .textSelection(.enabled)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -308,11 +349,67 @@ struct InfoRow: View {
     }
 }
 
+extension InfoRow where Value == Text {
+    init(icon: String, title: String, value: String, accent: Color = .accentColor) {
+        self.init(icon: icon, title: title, value: Text(value), accent: accent)
+    }
+}
+
+/// Relative timestamp that actually advances.
+///
+/// Rendering `RelativeDateTimeFormatter` once inside a view body produces text that is
+/// correct for a single instant and then never changes: SwiftUI has no reason to redraw,
+/// so "3 sec. ago" stays "3 sec. ago" for as long as the view is on screen. A timeline
+/// gives the redraw a source.
+struct LiveRelativeText: View {
+    let date: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: date, by: 1)) { context in
+            Text(ContentView.relativeTime(from: date, relativeTo: context.date))
+        }
+    }
+}
+
+/// Live state of the secret this account put on the clipboard.
+///
+/// While the clipboard still holds it the countdown ticks once a second; once it is gone
+/// the view settles on static text, so nothing keeps redrawing indefinitely.
+struct ClipboardStatusView: View {
+    let receipt: AccountsViewModel.CopyReceipt
+
+    var body: some View {
+        Group {
+            if receipt.clearsAt != nil {
+                TimelineView(.periodic(from: receipt.copiedAt, by: 1)) { context in
+                    label(at: context.date)
+                }
+            } else {
+                label(at: Date())
+            }
+        }
+        .font(.caption2)
+    }
+
+    @ViewBuilder
+    private func label(at now: Date) -> some View {
+        if let remaining = receipt.secondsUntilClear(at: now) {
+            Label("\(receipt.item.noun) on the clipboard — clears in \(remaining)s",
+                  systemImage: "clock.badge.exclamationmark")
+                .foregroundColor(remaining <= 10 ? .orange : .secondary)
+        } else {
+            Label("Clipboard cleared", systemImage: "checkmark.shield")
+                .foregroundColor(.green)
+        }
+    }
+}
+
 struct LabelInputView: View {
     @Binding var text: String
-    @Binding var recentLabels: [String]
+    let recentLabels: [String]
     let canSubmit: Bool
     let onSubmit: (() -> Void)?
+    let onClearHistory: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -329,7 +426,7 @@ struct LabelInputView: View {
                 }
                 if !recentLabels.isEmpty {
                     Divider()
-                    Button("Clear") { recentLabels.removeAll() }
+                    Button("Clear", action: onClearHistory)
                 }
             }
             .menuStyle(.borderlessButton)

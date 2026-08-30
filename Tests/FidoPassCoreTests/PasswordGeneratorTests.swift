@@ -35,8 +35,8 @@ final class PasswordGeneratorTests: XCTestCase {
         let imported = Data(repeating: 0xF0, count: 32)
         let external = Data(zip(imported, fixed).map { $0 ^ $1 })
         let account = Account.fixture(id: "portable",
-                                      rpId: "fidopass.portable",
-                                      userName: external.base64EncodedString())
+                                      kind: .portable,
+                                      portable: PortablePayload(external: external))
 
         let password = try generator.generatePassword(account: account,
                                                        label: "example",
@@ -83,7 +83,8 @@ final class PasswordGeneratorTests: XCTestCase {
         let secretService = MockSecretDerivationService()
         secretService.deriveFixedClosure = { _, _, _ in Data(repeating: 0x00, count: 32) }
         let generator = PasswordGenerator(secretDerivationService: secretService)
-        let account = Account.fixture(rpId: "fidopass.portable", userName: "invalid-b64")
+        // A portable account whose payload never made it back from the authenticator.
+        let account = Account.fixture(kind: .portable, portable: nil)
         XCTAssertThrowsError(try generator.generatePassword(account: account,
                                                              label: "label",
                                                              policy: nil,

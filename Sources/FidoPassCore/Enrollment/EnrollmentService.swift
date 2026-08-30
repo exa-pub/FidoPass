@@ -2,6 +2,14 @@ import Foundation
 import CLibfido2
 
 final class EnrollmentService: EnrollmentServiceProtocol {
+    /// Marks a portable payload stored in the credential's display-name field.
+    ///
+    /// CTAP gives a credential two free-form strings (`name`, `displayName`) and portable
+    /// accounts need three pieces of information: the account id, a human-readable name
+    /// and the exported key material. The prefix keeps the overloaded field
+    /// self-describing instead of relying on "base64 that happens to be 32 bytes".
+    private static let portablePayloadPrefix = "fp-ext:v1:"
+
     private let deviceRepository: DeviceRepositoryProtocol
 
     init(deviceRepository: DeviceRepositoryProtocol) {
@@ -9,17 +17,32 @@ final class EnrollmentService: EnrollmentServiceProtocol {
     }
 
     func enroll(accountId: String,
-                rpId: String,
-                userName: String,
+                kind: AccountKind,
+                displayName: String,
                 requireUV: Bool,
-                residentKey: Bool,
                 devicePath: String?,
                 askPIN: (() -> String?)?) throws -> Account {
-        try deviceRepository.withOpenedDevice(path: devicePath) { device, path in
-            try deviceRepository.ensureHmacSecretSupported(device)
-            guard residentKey else {
-                throw FidoPassError.invalidState("Non-resident credentials are not supported without local storage")
+        let trimmedId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedId.isEmpty else {
+            throw FidoPassError.invalidState("Account ID must not be empty")
+        }
+
+        // Reject duplicates before writing anything. Two credentials sharing an account id
+        // on one authenticator are indistinguishable in the UI and permanently occupy a
+        // resident-key slot each. Enumeration needs no user presence, so this costs one
+        // silent round-trip. It runs before the device is opened for makeCredential —
+        // nesting two opens on the same device would fail.
+        if let path = devicePath, let pin = askPIN?(), !pin.isEmpty {
+            // Best-effort: a key that cannot list its credentials still deserves to be
+            // enrolled, so a failure to check is not a failure to create.
+            let existing = (try? enumerateAccounts(rpId: kind.rpId, devicePath: path, pin: pin)) ?? []
+            if existing.contains(where: { $0.id == trimmedId }) {
+                throw FidoPassError.invalidState("An account named ‘\(trimmedId)’ already exists on this device")
             }
+        }
+
+        return try deviceRepository.withOpenedDevice(path: devicePath) { device, path in
+            try deviceRepository.ensureHmacSecretSupported(device)
             guard let credential = fido_cred_new() else {
                 throw FidoPassError.invalidState("cred_new")
             }
@@ -28,18 +51,19 @@ final class EnrollmentService: EnrollmentServiceProtocol {
 
             try Libfido2Context.check(fido_cred_set_type(credential, COSE_ES256), operation: "cred_set_type")
             try Libfido2Context.check(fido_cred_set_extensions(credential, Int32(FIDO_EXT_HMAC_SECRET)), operation: "cred_set_extensions(hmac-secret)")
-            try Libfido2Context.check(fido_cred_set_rp(credential, rpId, "FidoPass"), operation: "cred_set_rp")
+            try Libfido2Context.check(fido_cred_set_rp(credential, kind.rpId, "FidoPass"), operation: "cred_set_rp")
 
-            let packedId = try encodeUserId(accountId)
-            let shortName = String(accountId.prefix(32))
-            let displayName = userName.isEmpty ? accountId : userName
+            let packedId = try Self.encodeUserId(trimmedId)
             try packedId.withUnsafeBytes { pointer in
                 try Libfido2Context.check(
                     fido_cred_set_user(credential,
                                         pointer.bindMemory(to: UInt8.self).baseAddress,
                                         packedId.count,
-                                        shortName,
-                                        displayName,
+                                        Self.credentialName(kind: kind, accountId: trimmedId, portable: nil),
+                                        Self.credentialDisplayName(kind: kind,
+                                                                   accountId: trimmedId,
+                                                                   displayName: displayName,
+                                                                   portable: nil),
                                         nil),
                     operation: "cred_set_user")
             }
@@ -56,109 +80,85 @@ final class EnrollmentService: EnrollmentServiceProtocol {
                     operation: "cred_set_clientdata_hash")
             }
 
-            var pinCString: UnsafePointer<CChar>? = nil
-            if requireUV, let pin = askPIN?() {
-                pinCString = UnsafePointer(strdup(pin))
+            try PinScope.withPIN(requireUV ? askPIN?() : nil) { pinCString in
+                try Libfido2Context.check(fido_dev_make_cred(device, credential, pinCString), operation: "dev_make_cred")
             }
-            defer {
-                if let pinCString {
-                    free(UnsafeMutableRawPointer(mutating: pinCString))
-                }
-            }
-
-            try Libfido2Context.check(fido_dev_make_cred(device, credential, pinCString), operation: "dev_make_cred")
 
             guard let idPointer = fido_cred_id_ptr(credential) else {
                 throw FidoPassError.invalidState("cred_id_ptr")
             }
-            let length = fido_cred_id_len(credential)
-            let credentialId = Data(bytes: idPointer, count: length)
+            let credentialId = Data(bytes: idPointer, count: fido_cred_id_len(credential))
 
-            return Account(id: accountId,
-                           rpId: rpId,
-                           userName: userName,
+            return Account(id: trimmedId,
+                           kind: kind,
+                           displayName: displayName,
                            credentialIdB64: credentialId.base64EncodedString(),
                            revision: 1,
                            policy: PasswordPolicy(),
-                           devicePath: path)
+                           devicePath: path,
+                           portable: nil)
         }
     }
 
+    /// Reads the accounts stored on an authenticator.
+    ///
+    /// Uses credential management rather than a silent assertion. An assertion made with
+    /// `up = false` returns only `user.id`: CTAP withholds `name` and `displayName` unless
+    /// user presence is confirmed, so the portable payload — which lives in `displayName` —
+    /// came back empty and portable accounts lost their key material on every reload.
+    /// Credential management returns the full user entity and still needs no touch, only
+    /// the PIN.
     func enumerateAccounts(rpId: String,
                            devicePath: String,
                            pin: String?) throws -> [Account] {
-        try deviceRepository.withOpenedDevice(path: devicePath) { device, path in
-            guard let assertion = fido_assert_new() else {
-                throw FidoPassError.invalidState("assert_new")
-            }
-            var assert: OpaquePointer? = assertion
-            defer { fido_assert_free(&assert) }
+        guard let kind = AccountKind(rpId: rpId) else {
+            throw FidoPassError.invalidState("Unknown relying-party id ‘\(rpId)’")
+        }
+        guard let pin, !pin.isEmpty else {
+            throw FidoPassError.invalidState("A PIN is required to list accounts on the key")
+        }
 
-            try Libfido2Context.check(fido_assert_set_rp(assertion, rpId), operation: "assert_set_rp")
-            let challenge = CryptoHelpers.randomBytes(count: 32)
-            try challenge.withUnsafeBytes { pointer in
-                try Libfido2Context.check(
-                    fido_assert_set_clientdata_hash(assertion,
-                                                    pointer.bindMemory(to: UInt8.self).baseAddress,
-                                                    challenge.count),
-                    operation: "assert_set_clientdata_hash")
+        return try deviceRepository.withOpenedDevice(path: devicePath) { device, path in
+            guard let rawList = fido_credman_rk_new() else {
+                throw FidoPassError.invalidState("credman_rk_new")
             }
-            try Libfido2Context.check(fido_assert_set_up(assertion, FIDO_OPT_FALSE), operation: "assert_set_up")
+            var residentKeys: OpaquePointer? = rawList
+            defer { fido_credman_rk_free(&residentKeys) }
 
-            if pin != nil {
-                _ = fido_assert_set_uv(assertion, FIDO_OPT_TRUE)
-            }
-
-            var pinCString: UnsafePointer<CChar>? = nil
-            if let pin {
-                pinCString = UnsafePointer(strdup(pin))
-            }
-            defer {
-                if let pinCString {
-                    free(UnsafeMutableRawPointer(mutating: pinCString))
-                }
-            }
-
-            let rc = fido_dev_get_assert(device, assertion, pinCString)
+            let rc = PinScope.withPIN(pin) { fido_credman_get_dev_rk(device, rpId, rawList, $0) }
+            // An authenticator with nothing stored for this relying party reports it as an
+            // error rather than an empty list.
             if rc == FIDO_ERR_NO_CREDENTIALS { return [] }
-            try Libfido2Context.check(rc, operation: "dev_get_assert(enumerate)")
+            if rc == FIDO_ERR_INVALID_COMMAND || rc == FIDO_ERR_UNSUPPORTED_OPTION {
+                throw FidoPassError.unsupported("This key does not support credential management")
+            }
+            try Libfido2Context.check(rc, operation: "credman_get_dev_rk")
 
-            let count = Int(fido_assert_count(assertion))
+            let count = fido_credman_rk_count(rawList)
             var accounts: [Account] = []
             accounts.reserveCapacity(count)
 
             for index in 0..<count {
-                guard let credentialPointer = fido_assert_id_ptr(assertion, index) else { continue }
-                let length = fido_assert_id_len(assertion, index)
-                let credential = Data(bytes: credentialPointer, count: length)
+                guard let credential = fido_credman_rk(rawList, index),
+                      let credentialPointer = fido_cred_id_ptr(credential),
+                      let userIdPointer = fido_cred_user_id_ptr(credential) else { continue }
 
-                let displayName = fido_assert_user_display_name(assertion, index).map { String(cString: $0) } ?? ""
-                let userNamePtr = fido_assert_user_name(assertion, index)
-                let accountId: String
-                if let userIdPointer = fido_assert_user_id_ptr(assertion, index) {
-                    let userIdLength = fido_assert_user_id_len(assertion, index)
-                    let data = Data(bytes: userIdPointer, count: userIdLength)
-                    guard let decoded = decodeUserId(data) else { continue }
-                    accountId = decoded
-                } else {
-                    continue
-                }
+                let credentialId = Data(bytes: credentialPointer, count: fido_cred_id_len(credential))
+                let userId = Data(bytes: userIdPointer, count: fido_cred_user_id_len(credential))
+                guard let accountId = String(data: userId, encoding: .utf8) else { continue }
 
-                var finalUserName = displayName
-                if rpId == "fidopass.portable", let userNamePtr {
-                    let candidate = String(cString: userNamePtr)
-                    if let data = Data(base64Encoded: candidate), data.count == 32 {
-                        finalUserName = candidate
-                    }
-                }
+                let rawName = fido_cred_user_name(credential).map { String(cString: $0) } ?? ""
+                let rawDisplayName = fido_cred_display_name(credential).map { String(cString: $0) } ?? ""
+                let decoded = Self.decodeUserFields(kind: kind, name: rawName, displayName: rawDisplayName)
 
                 accounts.append(Account(id: accountId,
-                                         rpId: rpId,
-                                         userName: finalUserName,
-                                         credentialIdB64: credential.base64EncodedString(),
-                                         revision: 1,
-                                         policy: PasswordPolicy(),
-                                         devicePath: path))
+                                        kind: kind,
+                                        displayName: decoded.displayName,
+                                        credentialIdB64: credentialId.base64EncodedString(),
+                                        revision: 1,
+                                        policy: PasswordPolicy(),
+                                        devicePath: path,
+                                        portable: decoded.portable))
             }
             return accounts
         }
@@ -169,21 +169,13 @@ final class EnrollmentService: EnrollmentServiceProtocol {
             throw FidoPassError.invalidState("Credential ID is not valid base64")
         }
         try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
-            var pinCString: UnsafePointer<CChar>? = nil
-            if let pin {
-                pinCString = UnsafePointer(strdup(pin))
-            }
-            defer {
-                if let pinCString {
-                    free(UnsafeMutableRawPointer(mutating: pinCString))
+            let rc = PinScope.withPIN(pin) { pinCString in
+                credId.withUnsafeBytes { pointer -> Int32 in
+                    fido_credman_del_dev_rk(device,
+                                            pointer.bindMemory(to: UInt8.self).baseAddress,
+                                            credId.count,
+                                            pinCString)
                 }
-            }
-
-            let rc = credId.withUnsafeBytes { pointer -> Int32 in
-                fido_credman_del_dev_rk(device,
-                                        pointer.bindMemory(to: UInt8.self).baseAddress,
-                                        credId.count,
-                                        pinCString)
             }
             if rc == FIDO_ERR_INVALID_COMMAND {
                 throw FidoPassError.unsupported("Credential Management is not supported by the device")
@@ -195,19 +187,18 @@ final class EnrollmentService: EnrollmentServiceProtocol {
         }
     }
 
-    func updateCredentialUserName(account: Account,
-                                  newUserName: String,
+    func updateCredentialUserInfo(account: Account,
                                   requireUV: Bool,
                                   pinProvider: (() -> String?)?) throws {
-        guard let credentialId = Data(base64Encoded: account.credentialIdB64) else { return }
+        guard let credentialId = Data(base64Encoded: account.credentialIdB64) else {
+            throw FidoPassError.invalidState("Credential ID is not valid base64")
+        }
         try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
             guard let residentCredential = fido_cred_new() else {
                 throw FidoPassError.invalidState("cred_new")
             }
-            defer {
-                var cred: OpaquePointer? = residentCredential
-                fido_cred_free(&cred)
-            }
+            var cred: OpaquePointer? = residentCredential
+            defer { fido_cred_free(&cred) }
 
             try Libfido2Context.check(fido_cred_set_rp(residentCredential, account.rpId, "FidoPass"), operation: "cred_set_rp(update)")
             try credentialId.withUnsafeBytes { pointer in
@@ -218,41 +209,116 @@ final class EnrollmentService: EnrollmentServiceProtocol {
                     operation: "cred_set_id")
             }
 
-            let metadata = (try? encodeUserId(account.id)) ?? Data()
-            try metadata.withUnsafeBytes { pointer in
+            let packedId = try Self.encodeUserId(account.id)
+            try packedId.withUnsafeBytes { pointer in
                 try Libfido2Context.check(
                     fido_cred_set_user(residentCredential,
                                         pointer.bindMemory(to: UInt8.self).baseAddress,
-                                        metadata.count,
-                                        newUserName,
-                                        account.id,
+                                        packedId.count,
+                                        Self.credentialName(kind: account.kind,
+                                                            accountId: account.id,
+                                                            portable: account.portable),
+                                        Self.credentialDisplayName(kind: account.kind,
+                                                                   accountId: account.id,
+                                                                   displayName: account.displayName,
+                                                                   portable: account.portable),
                                         nil),
                     operation: "cred_set_user(update)")
             }
             try Libfido2Context.check(fido_cred_set_type(residentCredential, COSE_ES256), operation: "cred_set_type(update)")
 
-            var pinCString: UnsafePointer<CChar>? = nil
-            if requireUV, let pin = pinProvider?() {
-                pinCString = UnsafePointer(strdup(pin))
+            // The result used to be discarded, so a rejected write looked like success and
+            // the change silently vanished on the next reload.
+            try PinScope.withPIN(requireUV ? pinProvider?() : nil) { pinCString in
+                try Libfido2Context.check(fido_credman_set_dev_rk(device, residentCredential, pinCString),
+                                          operation: "credman_set_dev_rk")
             }
-            defer {
-                if let pinCString {
-                    free(UnsafeMutableRawPointer(mutating: pinCString))
-                }
-            }
-            _ = fido_credman_set_dev_rk(device, residentCredential, pinCString)
         }
     }
 
-    private func encodeUserId(_ accountId: String) throws -> Data {
+    // MARK: - Credential user fields
+
+    /// Value written to the credential's `name` field.
+    ///
+    /// For a portable account this carries the key material, because that is where every
+    /// released version of FidoPass looks for it. Moving it elsewhere made accounts created
+    /// by this build unreadable by earlier ones, which failed with
+    /// "Portable userName must contain base64 External (32 bytes)".
+    private static func credentialName(kind: AccountKind,
+                                       accountId: String,
+                                       portable: PortablePayload?) -> String {
+        if kind == .portable, let portable {
+            return portable.base64
+        }
+        return String(accountId.prefix(32))
+    }
+
+    /// Never returns an empty string.
+    ///
+    /// An empty display name makes `fido_dev_make_cred` fail with
+    /// `FIDO_ERR_INVALID_LENGTH` before the request even reaches the authenticator, so
+    /// enrolment dies instantly with an error that names no cause. Accounts are routinely
+    /// created without a display name, so the account id is the fallback.
+    static func credentialDisplayNameForTesting(kind: AccountKind,
+                                                accountId: String,
+                                                displayName: String,
+                                                portable: PortablePayload?) -> String {
+        credentialDisplayName(kind: kind, accountId: accountId, displayName: displayName, portable: portable)
+    }
+
+    static func credentialNameForTesting(kind: AccountKind,
+                                         accountId: String,
+                                         portable: PortablePayload?) -> String {
+        credentialName(kind: kind, accountId: accountId, portable: portable)
+    }
+
+    /// Value written to the credential's `displayName` field. Never empty.
+    ///
+    /// An empty display name makes `fido_dev_make_cred` fail with `FIDO_ERR_INVALID_LENGTH`
+    /// before the request even reaches the authenticator, so enrolment dies instantly with
+    /// an error that names no cause. Accounts are routinely created without a display name,
+    /// so the account id is the fallback.
+    ///
+    /// A portable account has no room for a human-readable name: its `name` field is taken
+    /// by the key material, so the account id goes here — the layout earlier versions write
+    /// and expect.
+    private static func credentialDisplayName(kind: AccountKind,
+                                              accountId: String,
+                                              displayName: String,
+                                              portable: PortablePayload?) -> String {
+        if kind == .portable, portable != nil {
+            return accountId
+        }
+        return displayName.isEmpty ? accountId : displayName
+    }
+
+    /// Reads the two credential strings back.
+    ///
+    /// The written layout puts a portable payload in `name`, which is what every released
+    /// version reads. The prefixed `displayName` form is still accepted because builds
+    /// between the refactor and this fix wrote it, and those accounts are on real keys —
+    /// losing the payload would make their passwords unreproducible.
+    static func decodeUserFields(kind: AccountKind,
+                                         name: String,
+                                         displayName: String) -> (displayName: String, portable: PortablePayload?) {
+        guard kind == .portable else {
+            return (displayName, nil)
+        }
+        if displayName.hasPrefix(portablePayloadPrefix) {
+            let encoded = String(displayName.dropFirst(portablePayloadPrefix.count))
+            return ("", PortablePayload(base64: encoded))
+        }
+        if let legacy = PortablePayload(base64: name) {
+            return ("", legacy)
+        }
+        return (displayName, nil)
+    }
+
+    private static func encodeUserId(_ accountId: String) throws -> Data {
         let data = Data(accountId.utf8)
         if data.isEmpty || data.count > 64 {
-            throw FidoPassError.invalidState("accountId length invalid")
+            throw FidoPassError.invalidState("Account ID must be 1–64 bytes when UTF-8 encoded")
         }
         return data
-    }
-
-    private func decodeUserId(_ data: Data) -> String? {
-        String(data: data, encoding: .utf8)
     }
 }

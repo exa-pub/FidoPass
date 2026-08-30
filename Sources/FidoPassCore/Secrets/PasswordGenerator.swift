@@ -15,7 +15,7 @@ final class PasswordGenerator: PasswordGenerating {
                           pinProvider: (() -> String?)?) throws -> String {
         let policy = override ?? account.policy
         let secret: Data
-        if account.rpId == "fidopass.portable" {
+        if account.kind == .portable {
             secret = try portableSecret(account: account,
                                         label: label,
                                         requireUV: requireUV,
@@ -35,16 +35,16 @@ final class PasswordGenerator: PasswordGenerating {
                                  label: String,
                                  requireUV: Bool,
                                  pinProvider: (() -> String?)?) throws -> Data {
-        guard let external = Data(base64Encoded: account.userName), external.count == 32 else {
-            throw FidoPassError.invalidState("Portable userName must contain base64 External (32 bytes)")
+        guard let payload = account.portable else {
+            throw FidoPassError.invalidState("Portable account is missing its key material")
         }
         let fixed = try secretDerivationService.deriveFixedComponent(account: account,
                                                                      requireUV: requireUV,
                                                                      pinProvider: pinProvider)
-        guard fixed.count == 32 else {
-            throw FidoPassError.invalidState("Fixed component size !=32")
+        guard fixed.count == PortablePayload.externalByteCount else {
+            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
         }
-        let imported = Data(zip(fixed, external).map { $0 ^ $1 })
+        let imported = Data(zip(fixed, payload.external).map { $0 ^ $1 })
         let salt = SaltFactory.portableLabelSalt(label)
         let mac = HMAC<SHA256>.authenticationCode(for: salt, using: SymmetricKey(data: imported))
         return Data(mac)

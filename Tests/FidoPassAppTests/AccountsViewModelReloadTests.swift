@@ -12,26 +12,26 @@ final class AccountsViewModelReloadTests: XCTestCase {
                                 vendorId: 1,
                                 productId: 2)
 
-        let deviceRepository = MockDeviceRepository()
-        deviceRepository.devices = [device]
+        let deviceLister = MockDeviceLister()
+        deviceLister.devices = [device]
 
         let enrollment = MockEnrollmentService()
         enrollment.enumerateClosure = { rpId, devicePath, _ in
-            switch rpId {
-            case "fidopass.local":
+            switch AccountKind(rpId: rpId) {
+            case .local:
                 return [
-                    Account.fixture(id: "acct1", rpId: rpId, userName: "user1", devicePath: devicePath),
-                    Account.fixture(id: "acct2", rpId: rpId, userName: "user2", devicePath: devicePath)
+                    Account.fixture(id: "acct1", kind: .local, displayName: "user1", devicePath: devicePath),
+                    Account.fixture(id: "acct2", kind: .local, displayName: "user2", devicePath: devicePath)
                 ]
-            case "fidopass.portable":
-                return [Account.fixture(id: "portable", rpId: rpId, userName: "payload", devicePath: devicePath)]
-            default:
+            case .portable:
+                return [Account.fixture(id: "portable", kind: .portable, devicePath: devicePath)]
+            case nil:
                 return []
             }
         }
 
         let portable = MockPortableEnrollmentService()
-        let context = makeViewModel(deviceRepository: deviceRepository,
+        let context = makeViewModel(deviceLister: deviceLister,
                                     enrollment: enrollment,
                                     portable: portable,
                                     device: device)
@@ -55,11 +55,11 @@ final class AccountsViewModelReloadTests: XCTestCase {
     }
 
     @MainActor
-    private func makeViewModel(deviceRepository: MockDeviceRepository,
+    private func makeViewModel(deviceLister: MockDeviceLister,
                                enrollment: MockEnrollmentService,
                                portable: MockPortableEnrollmentService,
                                device: FidoDevice) -> (viewModel: AccountsViewModel, deviceState: AccountsViewModel.DeviceState) {
-        let core = FidoPassCore(deviceRepository: deviceRepository,
+        let core = FidoPassCore(deviceLister: deviceLister,
                                 enrollmentService: enrollment,
                                 portableEnrollmentService: portable,
                                 secretDerivationService: MockSecretDerivationService(),

@@ -4,19 +4,23 @@ public final class FidoPassCore {
     public static let shared = FidoPassCore()
 
     private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceLister: DeviceListing
     private let enrollmentService: EnrollmentServiceProtocol
     private let portableEnrollmentService: PortableEnrollmentServiceProtocol
     private let passwordGenerator: PasswordGenerating
+    private let secretEncryption: SecretEncrypting
 
-    public init(deviceRepository: DeviceRepositoryProtocol? = nil,
+    public init(deviceLister: DeviceListing? = nil,
                 enrollmentService: EnrollmentServiceProtocol? = nil,
                 portableEnrollmentService: PortableEnrollmentServiceProtocol? = nil,
                 secretDerivationService: SecretDerivationServiceProtocol? = nil,
-                passwordGenerator: PasswordGenerating? = nil) {
+                passwordGenerator: PasswordGenerating? = nil,
+                secretEncryption: SecretEncrypting? = nil) {
         Libfido2Context.initialize()
 
-        let resolvedDeviceRepository = deviceRepository ?? DeviceRepository()
+        let resolvedDeviceRepository = DeviceRepository()
         self.deviceRepository = resolvedDeviceRepository
+        self.deviceLister = deviceLister ?? resolvedDeviceRepository
 
         let resolvedEnrollment = enrollmentService ?? EnrollmentService(deviceRepository: resolvedDeviceRepository)
         self.enrollmentService = resolvedEnrollment
@@ -30,24 +34,36 @@ public final class FidoPassCore {
 
         let resolvedPasswordGenerator = passwordGenerator ?? PasswordGenerator(secretDerivationService: resolvedSecretDerivation)
         self.passwordGenerator = resolvedPasswordGenerator
+
+        self.secretEncryption = secretEncryption ?? SecretEncryptionService(secretDerivationService: resolvedSecretDerivation)
     }
 
     public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
-        try deviceRepository.listDevices(limit: limit)
+        try deviceLister.listDevices(limit: limit)
+    }
+
+    /// Reads authenticator state that needs no user interaction: PIN attempts left,
+    /// whether a PIN exists, hmac-secret support and free credential slots.
+    public func status(devicePath: String) throws -> DeviceStatus {
+        try deviceRepository.status(devicePath: devicePath)
+    }
+
+    /// Convenience for the most safety-critical field. `nil` means the authenticator did
+    /// not report it — never treat that as "plenty left".
+    public func pinRetriesRemaining(devicePath: String) throws -> Int? {
+        try status(devicePath: devicePath).pinRetriesRemaining
     }
 
     public func enroll(accountId: String,
-                       rpId: String = "fidopass.local",
-                       userName: String = "",
+                       kind: AccountKind = .local,
+                       displayName: String = "",
                        requireUV: Bool = true,
-                       residentKey: Bool = true,
                        devicePath: String? = nil,
                        askPIN: (() -> String?)? = nil) throws -> Account {
         try enrollmentService.enroll(accountId: accountId,
-                                     rpId: rpId,
-                                     userName: userName,
+                                     kind: kind,
+                                     displayName: displayName,
                                      requireUV: requireUV,
-                                     residentKey: residentKey,
                                      devicePath: devicePath,
                                      askPIN: askPIN)
     }
@@ -56,12 +72,14 @@ public final class FidoPassCore {
                                requireUV: Bool = true,
                                devicePath: String? = nil,
                                askPIN: (() -> String?)? = nil,
-                               importedKeyB64: String?) throws -> (Account, String?) {
+                               importedKeyB64: String?,
+                               onStep: ((PortableEnrollmentStep) -> Void)? = nil) throws -> (Account, String?) {
         try portableEnrollmentService.enrollPortable(accountId: accountId,
                                                      requireUV: requireUV,
                                                      devicePath: devicePath,
                                                      askPIN: askPIN,
-                                                     importedKeyB64: importedKeyB64)
+                                                     importedKeyB64: importedKeyB64,
+                                                     onStep: onStep)
     }
 
     public func generatePassword(account: Account,
@@ -76,10 +94,10 @@ public final class FidoPassCore {
                                                pinProvider: pinProvider)
     }
 
-    public func enumerateAccounts(rpId: String = "fidopass.local",
+    public func enumerateAccounts(kind: AccountKind = .local,
                                   devicePath: String,
                                   pin: String?) throws -> [Account] {
-        try enrollmentService.enumerateAccounts(rpId: rpId,
+        try enrollmentService.enumerateAccounts(rpId: kind.rpId,
                                                 devicePath: devicePath,
                                                 pin: pin)
     }
@@ -90,6 +108,25 @@ public final class FidoPassCore {
         try portableEnrollmentService.exportImportedKey(account,
                                                         requireUV: requireUV,
                                                         pinProvider: pinProvider)
+    }
+
+    /// Derives the key used by the text editor. Costs one touch of the authenticator.
+    public func deriveEncryptionKey(account: Account,
+                                    label: String,
+                                    requireUV: Bool = true,
+                                    pinProvider: (() -> String?)? = nil) throws -> EncryptionKey {
+        try secretEncryption.deriveEncryptionKey(account: account,
+                                                 label: label,
+                                                 requireUV: requireUV,
+                                                 pinProvider: pinProvider)
+    }
+
+    public func seal(_ plaintext: String, with key: EncryptionKey) throws -> String {
+        try secretEncryption.seal(plaintext, with: key)
+    }
+
+    public func open(_ envelopeB64: String, with key: EncryptionKey) throws -> String {
+        try secretEncryption.open(envelopeB64, with: key)
     }
 
     public func deleteAccount(_ account: Account, pin: String?) throws {

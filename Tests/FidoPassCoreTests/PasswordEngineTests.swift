@@ -8,7 +8,6 @@ final class PasswordEngineTests: XCTestCase {
                                      useUpper: true,
                                      useDigits: false,
                                      useSymbols: true,
-                                     avoidAmbiguous: true,
                                      version: 1)
         let alphabet = PasswordEngine.alphabet(policy: policy)
         XCTAssertFalse(alphabet.contains(where: { CharacterSet.lowercaseLetters.contains($0.unicodeScalars.first!) }))
@@ -22,7 +21,6 @@ final class PasswordEngineTests: XCTestCase {
                                      useUpper: true,
                                      useDigits: true,
                                      useSymbols: true,
-                                     avoidAmbiguous: true,
                                      version: 1)
         let material = Data((0..<128).map { UInt8($0) })
         let password = PasswordEngine.mapToPassword(material, policy: policy)
@@ -39,7 +37,6 @@ final class PasswordEngineTests: XCTestCase {
                                      useUpper: false,
                                      useDigits: false,
                                      useSymbols: false,
-                                     avoidAmbiguous: true,
                                      version: 1)
         let material = Data((0..<32).map { UInt8($0) })
         let password = PasswordEngine.mapToPassword(material, policy: policy)

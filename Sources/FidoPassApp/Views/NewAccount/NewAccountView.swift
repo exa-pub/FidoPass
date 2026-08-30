@@ -5,27 +5,32 @@ struct NewAccountView: View {
     @EnvironmentObject var vm: AccountsViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var accountId = ""
-    @State private var mode: AccountMode = .standard
+    // Portable is the default on purpose. These credentials produce vault master
+    // passwords and disk keys, which have no reset path: if the only authenticator that
+    // can derive them is lost, everything behind them is gone. A portable account can be
+    // reproduced on a second key, so it is the safe default even though it costs one
+    // extra touch during enrolment.
+    @State private var mode: AccountMode = .portable
     @State private var importedKeyB64 = ""
     @State private var keyError: String? = nil
     @FocusState private var focused: Field?
 
     private enum Field { case account }
     private enum AccountMode: String, CaseIterable, Identifiable {
-        case standard
         case portable
+        case standard
 
         var id: AccountMode { self }
         var title: String {
             switch self {
-            case .standard: return "Standard"
             case .portable: return "Portable"
+            case .standard: return "Standard"
             }
         }
         var description: String {
             switch self {
-            case .standard: return "Credential stored on this device"
-            case .portable: return "fidopass.portable (import/export)"
+            case .portable: return "Can be copied onto a second key, so passwords survive losing this one"
+            case .standard: return "Bound to this key only — passwords cannot be recovered if it is lost"
             }
         }
     }

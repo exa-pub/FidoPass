@@ -7,10 +7,14 @@ final class AccountsViewModel: ObservableObject {
     @Published var accounts: [Account] = []
     @Published var selected: Account? = nil {
         didSet {
-            if oldValue?.id != selected?.id {
+            if oldValue != selected {
                 generatedPassword = nil
+                generatedForLabel = nil
                 generatingAccountId = nil
                 showPlainPassword = false
+                // The receipt belongs to the account it was produced for. Leaving it in
+                // place made another account claim a copy that never happened to it.
+                copyReceipt = nil
             }
         }
     }
@@ -28,11 +32,26 @@ final class AccountsViewModel: ObservableObject {
     @Published var accountPendingDeletion: Account? = nil
     @Published var accountSearch: String = ""
     @Published var showPlainPassword: Bool = false
-    @Published var lastCopiedPasswordAt: Date? = nil
+    /// What was last copied for the selected account, and whether it is still on the
+    /// clipboard. Replaces a bare timestamp that outlived both its account and its secret.
+    @Published var copyReceipt: CopyReceipt? = nil
     @Published var focusSearchFieldToken: Int = 0
     @Published var reloading: Bool = false
     @Published var toastMessage: ToastMessage? = nil
     @Published var enrollmentPhase: EnrollmentPhase = .idle
+    /// Per-device read failures from the last refresh, keyed by device path. Kept separate
+    /// from `errorMessage` so one unreadable key does not blank the whole account list.
+    @Published var deviceErrors: [String: String] = [:]
+    /// Label the currently shown password was derived from, so a stale result can be
+    /// dropped when the label changes.
+    @Published var generatedForLabel: String? = nil
+    /// Master key awaiting the user's attention, shown in its own sheet.
+    @Published var exportedMasterKey: MasterKeyExport? = nil
+    /// Live text-encryption session, or nil when the editor is closed.
+    @Published var cryptoEditor: CryptoEditorSession? = nil
+    /// Bumped to ask the scene to bring the editor window forward. A counter rather than a
+    /// flag so reopening for a different label is not swallowed as "no change".
+    @Published var cryptoEditorOpenToken: Int = 0
 
     enum EnrollmentPhase: Equatable {
         case idle
@@ -61,7 +80,55 @@ final class AccountsViewModel: ObservableObject {
         var unlocked: Bool = false
         var pinToken: SecurePinVault.Token? = nil
         var pinDraft: String = ""
+        /// PIN attempts the authenticator says are left, or `nil` when unknown.
+        ///
+        /// Never treat `nil` as "plenty": some authenticators decline to report it, and
+        /// the cost of guessing wrong is a permanently locked key.
+        var pinRetriesRemaining: Int? = nil
         var id: String { device.path }
+    }
+
+    /// A record of a secret placed on the clipboard for a specific account.
+    struct CopyReceipt: Equatable {
+        enum Item: Equatable {
+            case password
+            case backupKey
+
+            var noun: String {
+                switch self {
+                case .password:  return "Password"
+                case .backupKey: return "Backup key"
+                }
+            }
+        }
+
+        let accountId: String
+        let devicePath: String?
+        let item: Item
+        let copiedAt: Date
+        /// Nil once the clipboard no longer holds the value.
+        var clearsAt: Date?
+
+        func belongs(to account: Account) -> Bool {
+            accountId == account.id && devicePath == account.devicePath
+        }
+
+        /// Whole seconds left before the clipboard is wiped, or nil once it is gone.
+        func secondsUntilClear(at now: Date) -> Int? {
+            guard let clearsAt else { return nil }
+            let remaining = clearsAt.timeIntervalSince(now)
+            return remaining > 0 ? Int(remaining.rounded(.up)) : nil
+        }
+    }
+
+    /// A portable account's master key, surfaced deliberately and never as a "password".
+    struct MasterKeyExport: Identifiable, Equatable {
+        enum Reason { case created, exported }
+
+        let id = UUID()
+        let accountId: String
+        let key: String
+        let reason: Reason
     }
 
     struct ToastMessage: Identifiable, Equatable {
@@ -177,6 +244,9 @@ final class AccountsViewModel: ObservableObject {
 
     func handlePinExpiration(for path: String, notify: Bool) {
         guard var state = deviceStates[path], state.unlocked else { return }
+        if cryptoEditor != nil, selected?.devicePath == path {
+            closeCryptoEditor()
+        }
         state.unlocked = false
         state.pinToken = nil
         state.pinDraft = ""

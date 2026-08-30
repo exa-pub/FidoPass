@@ -86,7 +86,7 @@ final class AccountsViewModelPasswordsTests: XCTestCase {
     private func makeViewModel(passwordGenerator: MockPasswordGenerator,
                                pin: String,
                                device: FidoDevice) -> (viewModel: AccountsViewModel, deviceState: AccountsViewModel.DeviceState) {
-        let core = FidoPassCore(deviceRepository: MockDeviceRepository(),
+        let core = FidoPassCore(deviceLister: MockDeviceLister(),
                                 enrollmentService: MockEnrollmentService(),
                                 portableEnrollmentService: MockPortableEnrollmentService(),
                                 secretDerivationService: MockSecretDerivationService(),

@@ -30,7 +30,8 @@ struct AccountListView: View {
             guard account.devicePath == devicePath else { return false }
             guard !query.isEmpty else { return true }
             return account.id.localizedCaseInsensitiveContains(query)
-            || account.rpId.localizedCaseInsensitiveContains(query)
+            || account.displayName.localizedCaseInsensitiveContains(query)
+            || account.kind.rawValue.localizedCaseInsensitiveContains(query)
         }
     }
 }
@@ -72,7 +73,7 @@ struct AccountRowView: View {
     @State private var isHovering = false
 
     var body: some View {
-        let isPortable = account.rpId == "fidopass.portable"
+        let isPortable = account.kind == .portable
         let isSelected = viewModel.selected?.id == account.id && viewModel.selected?.devicePath == account.devicePath
         let accentColor = isPortable ? Color.orange : Color.accentColor
         let iconFill = isPortable ? Color.orange : Color.accentColor
@@ -138,20 +139,14 @@ struct AccountRowView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("\(account.id), \(isPortable ? "Portable" : (account.rpId.isEmpty ? "No RP" : account.rpId))"))
+        .accessibilityLabel(Text("\(account.id), \(subtitle)"))
         .accessibilityHint(Text("Select to view account details"))
     }
 
     private var subtitle: String {
-        if account.rpId == "fidopass.portable" {
-            return "Portable credential"
+        switch account.kind {
+        case .portable: return "Portable credential"
+        case .local:    return "Local credential"
         }
-        if account.rpId.isEmpty {
-            return "Local credential"
-        }
-        if account.rpId == "fidopass.local" {
-            return "Local credential"
-        }
-        return "Domain · \(account.rpId)"
     }
 }

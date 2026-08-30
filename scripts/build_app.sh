@@ -6,7 +6,16 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 cd "${PROJECT_ROOT}"
 
 PRODUCT=FidoPassApp
-BUNDLE_ID=com.example.FidoPass
+# Version strings come from the git tag when there is one, so released bundles can be
+# identified. Without them the app reports no version at all.
+RAW_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+SHORT_VERSION="${RAW_VERSION#v}"
+BUILD_VERSION="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# Read the deployment target from the single place that defines it. Hardcoding it here too
+# let the two drift: the plist still claimed 12.0 after the package moved to 13.
+MIN_MACOS="$(sed -n 's/.*\.macOS(\.v\([0-9][0-9]*\)).*/\1/p' Package.swift | head -1)"
+MIN_MACOS="${MIN_MACOS:-13}.0"
+BUNDLE_ID="${FIDOPASS_BUNDLE_ID:-pub.exa.FidoPass}"
 BUILD_DIR=".build/release"
 APP_DIR="${BUILD_DIR}/FidoPass.app"
 CONTENTS="${APP_DIR}/Contents"
@@ -71,10 +80,13 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleName</key><string>FidoPass</string>
   <key>CFBundleDisplayName</key><string>FidoPass</string>
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
+  <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>CFBundleExecutable</key><string>${PRODUCT}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
@@ -92,7 +104,7 @@ if command -v codesign >/dev/null 2>&1; then
       codesign --force --sign - --timestamp=none "$dylib"
     done < <(find "$FRAMEWORKS_DIR" -type f -name '*.dylib' -print0)
   fi
-  codesign --force --deep --sign - --timestamp=none "$APP_DIR"
+  codesign --force --sign - --timestamp=none "$APP_DIR"
 else
   echo "[warn] codesign tool not available; bundle will remain unsigned" >&2
 fi

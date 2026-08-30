@@ -2,10 +2,9 @@ import Foundation
 
 public protocol EnrollmentServiceProtocol {
     func enroll(accountId: String,
-                rpId: String,
-                userName: String,
+                kind: AccountKind,
+                displayName: String,
                 requireUV: Bool,
-                residentKey: Bool,
                 devicePath: String?,
                 askPIN: (() -> String?)?) throws -> Account
 
@@ -15,8 +14,7 @@ public protocol EnrollmentServiceProtocol {
 
     func deleteAccount(_ account: Account, pin: String?) throws
 
-    func updateCredentialUserName(account: Account,
-                                  newUserName: String,
+    func updateCredentialUserInfo(account: Account,
                                   requireUV: Bool,
                                   pinProvider: (() -> String?)?) throws
 }
