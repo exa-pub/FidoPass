@@ -111,6 +111,9 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>${MIN_MACOS}</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- FidoPass lives in the menu bar: no Dock icon, no window at launch. The "Show in
+       Dock" preference flips the activation policy at runtime when a user wants one. -->
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 PLIST

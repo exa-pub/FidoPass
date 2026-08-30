@@ -24,12 +24,16 @@ this framing first.
 
 ```bash
 swift build --product FidoPassApp     # build
-swift run FidoPassApp                 # run (GUI)
 swift test                            # full suite, no hardware needed
 swift test --filter GoldenVectors     # password-derivation contract
-bash scripts/build_app.sh             # .app bundle
+bash scripts/build_app.sh             # .app bundle — this is how you run it
+open .build/release/FidoPass.app      # run
 bash scripts/create_dmg.sh            # distributable DMG
 ```
+
+`swift run FidoPassApp` is not a useful way to start the app any more: it is a menu-bar
+application, and the status item, the activation policy (`LSUIElement`) and window
+activation only behave correctly from a bundle.
 
 Requires `brew install libfido2 pkg-config`. Set `PKG_CONFIG_PATH` if pkg-config cannot
 find libfido2.
@@ -39,20 +43,37 @@ find libfido2.
 Two modules, one direction of dependency:
 
 ```
-FidoPassApp  (SwiftUI)  ──depends on──▶  FidoPassCore  ──▶  CLibfido2 (system)
+FidoPassApp  (AppKit shell + SwiftUI)  ──depends on──▶  FidoPassCore  ──▶  CLibfido2 (system)
 ```
 
 - `FidoPassCore` — domain logic. No AppKit, no SwiftUI, no UI state.
-- `FidoPassApp` — UI only. Talks to the core through the facade or injected protocols.
+- `FidoPassApp` — UI only. Talks to the core through `KeyBackend`, never directly.
 - `CLibfido2` — system-library shim.
+
+The app is a menu-bar HUD, not a window. Its shape:
+
+```
+AppDelegate ─▶ HUDController ─▶ HUDPanel (NSPanel + NSHostingController)
+                    │                        └─▶ HUDRootView (SwiftUI)
+                    └─▶ NSStatusItem, global hotkey, save panel, aux windows
+
+HUDStore ──owns──▶ DeviceStore · AccountStore · GenerationStore · LabelStore · Preferences
+   │                    └────────────▶ KeyBackend ──▶ FidoPassCore
+   └─ route, pending intent, touch prompt, the one entry point for key operations
+```
+
+`MenuBarExtra` is deliberately not used: it cannot be opened from a global hotkey, cannot be
+kept open across a save panel or a key touch, and does not give the PIN field focus.
 
 ### Hard rules
 
 1. **`import CLibfido2` only inside `FidoPassCore`.** The app layer must never see a raw C
    type. No `OpaquePointer` in any `public` signature.
-2. **Views never call `FidoPassCore` directly.** UI goes through the view model. A view
-   reaching into the core is a bug, not a shortcut — the one place that did forgot to
-   raise the touch prompt, so the app looked frozen while the key waited to be tapped.
+2. **Views never call `FidoPassCore` directly, and never call a store's key operation
+   directly either.** Everything that makes the authenticator wait for a finger goes through
+   `HUDStore.withTouchPrompt`. A view reaching past it is a bug, not a shortcut — the one
+   place that did forgot to raise the touch prompt, so the app looked frozen while the key
+   waited to be tapped.
 3. **Never change password derivation for `policy.version == 1`.** Derivation is a
    compatibility contract: changing it silently invalidates every password a user already
    relies on, and for a vault master password there is no reset path. New behaviour goes
@@ -68,6 +89,12 @@ FidoPassApp  (SwiftUI)  ──depends on──▶  FidoPassCore  ──▶  CLib
    them. This is safe only while policy stays a per-generation choice. A persistent
    per-account policy editor needs key-side metadata storage (`largeBlobs`) first — note
    that `credBlob` cannot serve: it is write-once at credential creation.
+7. **The click budget is a test, not a preference.** `HUDReducerTests` pins what the primary
+   action is in every state: with a key unlocked and an account preselected it must be
+   "generate and copy", never "now choose an account". Changing that behaviour means arguing
+   with `ai.tmp/HUD-PLAN.md` first.
+8. **Only the account id and label may be written to disk** (`Preferences.LastUsed`, opt-out
+   in Preferences). Passwords, PINs and backup keys never are — see rule 4.
 
 ### Secrets on the clipboard
 
@@ -78,8 +105,9 @@ user copied afterwards.
 
 ### Known, deliberate gaps
 
-- `AccountsViewModel` has not been split into stores, and the app still mixes GCD with
-  `Task` / `Task.detached`. Prefer `async`/`await` in new code.
+- A pending key operation cannot really be cancelled. libfido2 has `fido_dev_cancel`, but
+  `DeviceRepository.withOpenedDevice` never surfaces the handle, so `HUDStore.abandonTouch`
+  only hides the prompt and discards the result — the call finishes in the background.
 - `PasswordEngine` does not actually guarantee that every enabled character class appears;
   the top-up step can overwrite its own fixes. Failure rate is ~3% at length 8 and
   effectively zero at the default 20. Recorded in `CharacterClassInvariantTests` as an
@@ -98,18 +126,20 @@ Sources/FidoPassCore/
   Support/      salts, crypto helpers, libfido2 context
 
 Sources/FidoPassApp/
-  App/          entry point, commands
-  ViewModels/   AccountsViewModel plus one extension per concern
-  Views/        one folder per screen; shared pieces in Views/Shared
-  Components/   reusable presentation-only views
-  Services/     system integrations, error presentation, recovery sheet
+  App/              AppDelegate — entry point, activation policy, main menu, hotkey
+  Stores/           KeyBackend seam, DeviceStore, AccountStore, GenerationStore,
+                    LabelStore, Preferences, HUDStore (navigation), HUDReducer (pure)
+  HUD/Presentation/ NSStatusItem, NSPanel, icon states, Carbon hotkey, aux windows
+  HUD/Views/        the panel's SwiftUI screens
+  Settings/         Preferences and onboarding windows
+  ViewModels/       CryptoEditorSession
+  Views/CryptoEditor/  the separate editor window
+  Services/         system integrations, error presentation, recovery sheet
 ```
 
-`AccountsViewModel` is still a single observable object holding all app state, split
-across extensions by concern. It is bigger than it should be — every published change
-invalidates every observing view. Splitting it into per-concern stores is planned but not
-done; keep new state grouped with the extension that owns it rather than adding unrelated
-fields to the top-level type.
+The stores are separate observable objects on purpose: a clipboard countdown ticking once a
+second must not redraw the whole panel. Keep new state in the store that owns it, and keep
+`HUDReducer` pure — it is where the click budget is asserted.
 
 One type per file, file named after the type. New screens follow the existing folder shape.
 
