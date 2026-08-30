@@ -53,6 +53,15 @@ final class Preferences: ObservableObject {
     @Published var hotkeyEnabled: Bool { didSet { defaults.set(hotkeyEnabled, forKey: Key.hotkeyEnabled); onHotkeyChanged?() } }
     @Published var hotkey: HotkeyCombo { didSet { store(hotkey, forKey: Key.hotkey); onHotkeyChanged?() } }
     @Published private(set) var lastUsed: LastUsed?
+    /// Set when the system refused to register the shortcut — almost always because another
+    /// application already owns it.
+    @Published var hotkeyRegistrationFailed = false
+    /// True while the settings window is capturing a new combination.
+    ///
+    /// The global shortcut is released meanwhile: Carbon dispatches a registered hot key
+    /// before any window sees the key, so pressing the *current* combination would fire the
+    /// HUD instead of being recorded as the new one.
+    @Published var isRecordingHotkey = false { didSet { onHotkeyChanged?() } }
     @Published var hasOnboarded: Bool { didSet { defaults.set(hasOnboarded, forKey: Key.hasOnboarded) } }
 
     var onHotkeyChanged: (() -> Void)?

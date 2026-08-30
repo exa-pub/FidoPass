@@ -30,7 +30,13 @@ struct HUDRootView: View {
                 HUDHeaderView(store: store, devices: devices, accounts: accounts)
                 Divider()
                 content
-                HUDFooterView(status: store.statusText, error: store.errorText)
+                // One strip at the bottom: what just happened, or — when nothing did — what
+                // the keyboard can do here.
+                if store.statusText != nil || store.errorText != nil {
+                    HUDFooterView(status: store.statusText, error: store.errorText)
+                } else {
+                    HUDHintsView(hints: store.keyboardHints)
+                }
             }
         }
         .frame(width: HUDMetrics.width)
@@ -78,6 +84,20 @@ struct HUDRootView: View {
         Group {
             Button("") { Task { await store.revealPassword(for: store.selection) } }
                 .keyboardShortcut(.return, modifiers: [.command])
+
+            // While the custom-label field has the keyboard, the arrows are its own: it
+            // forwards up and down back here, and hands left back only from the caret's
+            // starting position.
+            if store.effectiveRoute == .accounts, !store.isEditingLabel {
+                Button("") { store.moveSelection(by: 1) }
+                    .keyboardShortcut(.downArrow, modifiers: [])
+                Button("") { store.moveSelection(by: -1) }
+                    .keyboardShortcut(.upArrow, modifiers: [])
+                Button("") { store.moveLabelFocus(by: 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                Button("") { store.moveLabelFocus(by: -1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+            }
             Button("") { store.show(.enroll) }
                 .keyboardShortcut("n", modifiers: [.command])
             Button("") { if let ref = store.selection { Task { await store.openEncryptEditor(for: ref) } } }

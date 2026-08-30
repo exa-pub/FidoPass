@@ -39,6 +39,16 @@ final class LabelStore: ObservableObject {
         if let observer { notificationCenter.removeObserver(observer) }
     }
 
+    /// The labels shown as chips. The keyboard walks exactly this list, so it and the view
+    /// can never disagree about what comes next.
+    var chips: [String] { Array(recent.prefix(3)) }
+
+    /// Everything reachable in one step: the chips, plus the current label when it is
+    /// something typed by hand rather than one of them.
+    var choices: [String] {
+        chips.contains(current) ? chips : [current] + chips
+    }
+
     func use(_ label: String) {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

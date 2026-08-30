@@ -238,6 +238,111 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertEqual(store.route, .accounts)
     }
 
+    // MARK: - Keyboard navigation
+
+    func testArrowsMoveBetweenAccounts() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        store.select(AccountRef(accountId: "disk", devicePath: device.path))
+
+        store.moveSelection(by: -1)
+        XCTAssertEqual(store.selection?.accountId, "disk", "first account: nothing above it")
+
+        store.moveSelection(by: 1)
+        XCTAssertEqual(store.selection?.accountId, "vault")
+
+        // Clamped rather than wrapping: with two accounts, jumping from the last back to the
+        // first is a way to derive the wrong password without noticing.
+        store.moveSelection(by: 1)
+        XCTAssertEqual(store.selection?.accountId, "vault")
+    }
+
+    /// The arrows walk the whole row — chips first, then the custom field, which is a
+    /// position like any other rather than a dead end past the last chip. The row is a ring:
+    /// with three or four positions, a key that does nothing at the edge is just a dead key.
+    func testArrowsWalkTheChipsAndTheCustomFieldInARing() async {
+        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        store.labels.use("work")
+        store.labels.use("vault")          // chips: ["vault", "work"], current "vault"
+        let chips = store.labels.chips
+        XCTAssertEqual(chips.count, 2)
+
+        store.moveLabelFocus(by: 1)
+        XCTAssertEqual(store.labels.current, chips[1])
+        XCTAssertFalse(store.isEditingLabel)
+
+        store.moveLabelFocus(by: 1)
+        XCTAssertTrue(store.isEditingLabel, "past the last chip lies the custom field")
+
+        store.moveLabelFocus(by: 1)
+        XCTAssertFalse(store.isEditingLabel)
+        XCTAssertEqual(store.labels.current, chips[0], "and past the field, back to the first chip")
+
+        store.moveLabelFocus(by: -1)
+        XCTAssertTrue(store.isEditingLabel, "left from the first chip wraps onto the field")
+        XCTAssertTrue(store.labelFieldCaretAtEnd, "arriving from the right, the caret waits at the end")
+
+        store.moveLabelFocus(by: -1)
+        XCTAssertFalse(store.isEditingLabel)
+        XCTAssertEqual(store.labels.current, chips.last)
+    }
+
+    /// A label typed by hand is the field's position, even before the field has focus.
+    func testACustomLabelCountsAsBeingAtTheField() async {
+        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        store.labels.use("work")
+        store.setLabel("something-new")
+        XCTAssertFalse(store.isEditingLabel)
+
+        store.moveLabelFocus(by: -1)
+        XCTAssertEqual(store.labels.current, "work", "left steps back onto the last chip")
+
+        store.moveLabelFocus(by: 1)
+        XCTAssertTrue(store.isEditingLabel, "and right returns to the field holding that text")
+    }
+
+    /// Switching label must drop a password derived from the previous one, exactly as
+    /// clicking a chip does — the keyboard is not a second, sloppier path.
+    func testMovingBetweenLabelsDropsAStaleResult() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        store.labels.use("work")
+        store.labels.use("archive")   // two choices, or there is nothing to cycle between
+        await store.copyPassword(for: AccountRef(accountId: "vault", devicePath: device.path))
+        XCTAssertNotNil(store.generation.result)
+
+        // Right, not left: the copy used the first chip, and there is nothing to its left.
+        store.moveLabelFocus(by: 1)
+        XCTAssertNil(store.generation.result)
+    }
+
+    /// A shortcut nobody knows about is the same as one that does not exist.
+    func testHintsNameTheNonObviousShortcuts() async {
+        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        XCTAssertTrue(store.keyboardHints.contains("⏎ copy"))
+        XCTAssertTrue(store.keyboardHints.contains("↑↓ account"))
+
+        store.lockSelectedKey()
+        XCTAssertEqual(store.keyboardHints, ["⏎ unlock"])
+    }
+
+    /// One account, one label: no arrows are advertised, because there is nowhere to go.
+    func testHintsOmitArrowsWhenThereIsNothingToMoveBetween() async {
+        let device = MockKeyBackend.device()
+        let single = [Account.fixture(id: "vault", kind: .portable, devicePath: device.path)]
+        let (store, _, _) = await HUDTestFactory.unlockedStore(accounts: single)
+
+        XCTAssertFalse(store.keyboardHints.contains("↑↓ account"))
+    }
+
+    /// Escape on a pushed screen goes back; only at the top level does it close the panel.
+    func testEscapeLeavesTheScreenBeforeItLeavesTheApp() async {
+        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        store.show(.confirmDelete(AccountRef(accountId: "vault", devicePath: device.path)))
+
+        XCTAssertTrue(store.handleEscape())
+        XCTAssertEqual(store.effectiveRoute, .accounts)
+        XCTAssertFalse(store.handleEscape(), "at the top level the panel itself should close")
+    }
+
     // MARK: - What the panel is allowed to show
 
     /// The panel is drawn as soon as it opens, before the refresh behind it finishes. A

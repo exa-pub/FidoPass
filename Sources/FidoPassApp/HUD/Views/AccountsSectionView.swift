@@ -72,7 +72,8 @@ struct AccountRowView: View {
     let isOnlyAccount: Bool
 
     @State private var isHovering = false
-    @State private var isEditingLabel = false
+    /// Text of the inline custom field. Empty whenever the current label is one of the chips.
+    @State private var customText = ""
 
     private var result: GenerationStore.Result? {
         guard let result = generation.result, result.ref == ref else { return nil }
@@ -144,31 +145,62 @@ struct AccountRowView: View {
         }
     }
 
+    /// Chips and the field for anything else, on one line: the recent labels and "something
+    /// I have not used before" are the same choice, and splitting them behind a mode switch
+    /// made the second one look like a different feature.
     private var labelRow: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Text("LABEL")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 0)
-                Button(isEditingLabel ? "Recent" : "Custom…") {
-                    isEditingLabel.toggle()
-                }
-                .buttonStyle(.plain)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
+            Text("LABEL")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
 
-            if isEditingLabel || labels.recent.isEmpty {
-                TextField("label", text: Binding(get: { labels.current },
-                                                 set: { store.setLabel($0) }))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
-                    .onSubmit { Task { await store.copyPassword(for: ref) } }
-            } else {
-                LabelChipsView(labels: labels, onPick: { store.setLabel($0) })
+            HStack(spacing: 4) {
+                ForEach(labels.chips, id: \.self) { label in
+                    LabelChip(label: label,
+                              isCurrent: label == labels.current && !store.isEditingLabel,
+                              action: {
+                                  store.isEditingLabel = false
+                                  store.setLabel(label)
+                              })
+                }
+
+                LabelTextField(text: $customText,
+                               isFocused: Binding(get: { store.isEditingLabel },
+                                                  set: { store.isEditingLabel = $0 }),
+                               placeholder: "custom…",
+                               caretAtEnd: store.labelFieldCaretAtEnd,
+                               onSubmit: {
+                                   // Leaving the field lets the label graduate into a chip
+                                   // instead of sitting on screen twice, as text and as chip.
+                                   store.isEditingLabel = false
+                                   Task { await store.copyPassword(for: ref) }
+                               },
+                               onExitLeft: { store.moveLabelFocus(by: -1) },
+                               onExitRight: { store.moveLabelFocus(by: 1) },
+                               onMoveAccount: { store.moveSelection(by: $0) })
+                    .frame(minWidth: 64, maxHeight: 20)
             }
         }
+        .onAppear(perform: syncCustomField)
+        .onChange(of: labels.current) { _ in syncCustomField() }
+        .onChange(of: store.isEditingLabel) { isEditing in
+            syncCustomField()
+            // Stepping back into the field means going back to what was typed there.
+            let draft = customText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if isEditing, !draft.isEmpty { store.setLabel(draft) }
+        }
+        .onChange(of: customText) { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            store.setLabel(trimmed)
+        }
+    }
+
+    /// Text typed here is a draft: it survives losing focus and picking a chip, because
+    /// retyping a label is exactly the mistake that derives a different password.
+    private func syncCustomField() {
+        guard !store.isEditingLabel, !labels.chips.contains(labels.current) else { return }
+        customText = labels.current
     }
 
     private var actionRow: some View {
@@ -183,6 +215,9 @@ struct AccountRowView: View {
                         Image(systemName: "doc.on.doc.fill").font(.system(size: 10))
                     }
                     Text("Copy password")
+                    Text("⏎")
+                        .font(.system(size: 10))
+                        .opacity(0.7)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -219,40 +254,30 @@ struct KindTag: View {
     }
 }
 
-/// Recent labels as chips: one click to switch, no menu to open.
-struct LabelChipsView: View {
-    @ObservedObject var labels: LabelStore
-    let onPick: (String) -> Void
-
-    /// A label typed by hand is not in the history yet; leaving it out would hide what the
-    /// next password is actually going to be derived from.
-    private var shown: [String] {
-        var list = labels.recent.contains(labels.current) ? [] : [labels.current]
-        list += labels.recent
-        return Array(list.prefix(4))
-    }
+/// One recent label: a click away, no menu to open.
+struct LabelChip: View {
+    let label: String
+    let isCurrent: Bool
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(shown, id: \.self) { label in
-                Button { onPick(label) } label: {
-                    Text(label)
-                        .font(.system(size: 11))
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                }
-                .buttonStyle(.plain)
-                .background {
-                    Capsule().fill(label == labels.current ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06))
-                }
-                .overlay {
-                    Capsule().stroke(label == labels.current ? Color.accentColor.opacity(0.5) : .clear)
-                }
-                .foregroundStyle(label == labels.current ? Color.accentColor : Color.primary)
-            }
-            Spacer(minLength: 0)
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
         }
+        .buttonStyle(.plain)
+        .background {
+            Capsule().fill(isCurrent ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06))
+        }
+        .overlay {
+            Capsule().stroke(isCurrent ? Color.accentColor.opacity(0.5) : .clear)
+        }
+        .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
+        .help("Use the label “\(label)”")
     }
 }
 

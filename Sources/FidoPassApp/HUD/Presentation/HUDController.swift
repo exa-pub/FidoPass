@@ -137,6 +137,9 @@ final class HUDController: NSObject, NSWindowDelegate {
         // appears behind whatever the user was working in.
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        // The first placement uses the panel's placeholder height, because SwiftUI has not
+        // laid the content out yet. Place it again once it has.
+        DispatchQueue.main.async { [weak self] in self?.position(panel) }
         Task { await store.prepareForDisplay(intent: intent) }
     }
 
@@ -153,7 +156,12 @@ final class HUDController: NSObject, NSWindowDelegate {
         controller.sizingOptions = [.preferredContentSize]
         let panel = HUDPanel(contentViewController: controller)
         panel.delegate = self
-        panel.onCancel = { [weak self] in self?.hide() }
+        panel.onCancel = { [weak self] in
+            guard let self else { return }
+            // On a pushed screen Escape means "back"; only on the top level does it close
+            // the panel.
+            if !self.store.handleEscape() { self.hide() }
+        }
         self.hosting = controller
         self.panel = panel
 
@@ -179,7 +187,16 @@ final class HUDController: NSObject, NSWindowDelegate {
     private func position(_ panel: HUDPanel) {
         guard let button = statusItem?.button,
               let buttonWindow = button.window,
-              let screen = buttonWindow.screen ?? NSScreen.main else { return }
+              let screen = buttonWindow.screen ?? NSScreen.main else {
+            // No status item geometry yet. Anywhere near the menu bar beats the middle of
+            // the screen, which is where an unplaced window lands.
+            if let screen = NSScreen.main {
+                let visible = screen.visibleFrame
+                panel.setFrameOrigin(NSPoint(x: visible.maxX - panel.frame.width - 12,
+                                             y: visible.maxY - panel.frame.height - 6))
+            }
+            return
+        }
 
         let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
         let size = panel.frame.size

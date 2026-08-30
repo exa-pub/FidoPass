@@ -113,6 +113,23 @@ final class PreferencesTests: XCTestCase {
         XCTAssertNil(preferences.lastUsed, "with the switch off, nothing new may be recorded either")
     }
 
+    /// Recording a new shortcut has to release the old one first: Carbon dispatches a
+    /// registered hot key before any window sees the key, so pressing the current
+    /// combination would fire the HUD instead of being recorded.
+    @MainActor
+    func testRecordingAShortcutAsksForTheOldOneToBeReleased() {
+        let preferences = Preferences(defaults: Self.defaults())
+        var reapplied = 0
+        preferences.onHotkeyChanged = { reapplied += 1 }
+
+        preferences.isRecordingHotkey = true
+        XCTAssertEqual(reapplied, 1, "starting to record must re-apply — that is what unregisters it")
+
+        preferences.hotkey = HotkeyCombo(keyCode: 4, modifiers: 0x0100, display: "⌘H")
+        preferences.isRecordingHotkey = false
+        XCTAssertEqual(reapplied, 3, "and finishing must re-apply again, with whatever the combination now is")
+    }
+
     private static func defaults() -> UserDefaults {
         let suite = "Preferences-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

@@ -53,6 +53,13 @@ final class HUDStore: ObservableObject {
     /// Set while a system panel or a deliberate reading screen is up: the panel must not
     /// close under the user's hands.
     @Published private(set) var isPinnedOpen = false
+    /// True while the label is being typed rather than picked. Arrow keys belong to the text
+    /// field then, not to the list behind it.
+    @Published var isEditingLabel = false
+    /// Where the caret goes when the arrows move focus into the custom field: at the end when
+    /// arriving from the right, so the next press keeps moving in the same direction instead
+    /// of bouncing straight back out.
+    @Published private(set) var labelFieldCaretAtEnd = false
 
     struct EnrollDraft: Equatable {
         var accountId: String = ""
@@ -263,6 +270,49 @@ final class HUDStore: ObservableObject {
                                                  recent: labels.recent)
     }
 
+    /// Moves the selection by one row. Clamped rather than wrapping: with two or three
+    /// accounts, silently jumping from the last to the first is a way to derive the wrong
+    /// password without noticing.
+    func moveSelection(by offset: Int) {
+        let refs = visibleAccounts.compactMap(AccountRef.init)
+        guard !refs.isEmpty else { return }
+        let current = selection.flatMap { refs.firstIndex(of: $0) } ?? 0
+        let next = min(max(current + offset, 0), refs.count - 1)
+        guard next != current || selection == nil else { return }
+        select(refs[next])
+    }
+
+    /// Walks the label row: chip, chip, …, and then the custom field.
+    ///
+    /// The field is a position like any other, so the arrows reach it instead of stopping at
+    /// the last chip. It is the last one, and once inside, the caret decides — the field
+    /// itself only hands control back when the caret is already at the start.
+    func moveLabelFocus(by offset: Int) {
+        let chips = labels.chips
+        let fieldIndex = chips.count          // the custom field is the last position
+        let count = fieldIndex + 1
+        guard count > 1 else { return }
+
+        // Standing on the field means either typing in it, or having a label that is not one
+        // of the chips — that text lives there whether or not it has focus.
+        let current = isEditingLabel || !chips.contains(labels.current)
+            ? fieldIndex
+            : (chips.firstIndex(of: labels.current) ?? 0)
+
+        // Wraps: with three or four positions, a dead end at each edge is just a key that
+        // does nothing.
+        let next = (current + offset + count) % count
+        guard next != current || offset == 0 else { return }
+
+        if next == fieldIndex {
+            labelFieldCaretAtEnd = offset < 0
+            isEditingLabel = true
+        } else {
+            isEditingLabel = false
+            setLabel(chips[next])
+        }
+    }
+
     func selectAccount(at index: Int) {
         let refs = visibleAccounts.compactMap(AccountRef.init)
         guard refs.indices.contains(index) else { return }
@@ -279,6 +329,49 @@ final class HUDStore: ObservableObject {
     func setLabel(_ label: String) {
         labels.current = label
         if let selection { generation.invalidateResult(unless: selection, label: label) }
+    }
+
+    /// Escape: leave the screen, not the app.
+    ///
+    /// - Returns: true when the store handled it; false means the panel should close.
+    func handleEscape() -> Bool {
+        if isEditingLabel {
+            isEditingLabel = false
+            return true
+        }
+        switch route {
+        case .accounts, .unlock:
+            return false
+        case .enroll, .backupKey, .confirmDelete, .keyInfo:
+            backToAccounts()
+            return true
+        }
+    }
+
+    /// Shortcuts worth printing at the bottom of the panel.
+    ///
+    /// Nothing about "⏎ copies the password" is guessable, and a shortcut nobody knows about
+    /// is the same as one that does not exist.
+    var keyboardHints: [String] {
+        switch effectiveRoute {
+        case .unlock:
+            return ["⏎ unlock"]
+        case .enroll:
+            return ["⏎ create", "esc cancel"]
+        case .backupKey, .keyInfo:
+            return ["esc back"]
+        case .confirmDelete:
+            return ["esc cancel"]
+        case .accounts:
+            guard !devices.devices.isEmpty else { return [] }
+            guard !visibleAccounts.isEmpty else { return ["⌘N new account"] }
+            if isEditingLabel { return ["⏎ copy", "esc done"] }
+            var hints = ["⏎ copy", "⌘⏎ show"]
+            if visibleAccounts.count > 1 { hints.append("↑↓ account") }
+            if !labels.chips.isEmpty { hints.append("←→ label") }
+            hints.append("⌘N new")
+            return hints
+        }
     }
 
     // MARK: - The primary action

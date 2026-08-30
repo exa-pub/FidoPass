@@ -35,15 +35,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             await store.refresh()
+            // Starting is not an event: the app appears in the menu bar and waits. Only the
+            // very first run explains itself, and only because a menu-bar app with no Dock
+            // icon is otherwise impossible to find.
             if !store.preferences.hasOnboarded {
                 AuxiliaryWindows.shared.showOnboarding(store: store) { [weak self] in
+                    // Finishing onboarding is a deliberate click, so the panel opens once —
+                    // anchored under its icon, which is the thing being taught.
                     self?.hud.show()
                 }
-            } else if !store.preferences.launchAtLogin {
-                // Started by hand: show the HUD once, or a menu-bar app with no Dock icon is
-                // invisible to the person who just launched it. A login-item launch gets
-                // nothing — that one happens while the user is doing something else.
-                hud.show()
             }
         }
     }
@@ -57,10 +57,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyHotkey() {
 #if canImport(Carbon)
         GlobalHotkeyService.shared.unregister()
-        guard store.preferences.hotkeyEnabled else { return }
+        // Nothing is registered while the user is typing a replacement.
+        guard !store.preferences.isRecordingHotkey else { return }
+        guard store.preferences.hotkeyEnabled else {
+            store.preferences.hotkeyRegistrationFailed = false
+            return
+        }
         let registered = GlobalHotkeyService.shared.register(store.preferences.hotkey) { [weak self] in
             Task { @MainActor in self?.hud.toggle() }
         }
+        store.preferences.hotkeyRegistrationFailed = !registered
         if !registered {
             store.errorText = "The shortcut \(store.preferences.hotkey.display) is already taken by another application."
         }

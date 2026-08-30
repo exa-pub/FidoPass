@@ -3,36 +3,82 @@ import SwiftUI
 import AppKit
 #endif
 
+/// The settings window.
+///
+/// Every explanation lives in its section's footer rather than in a row of its own: a row is
+/// laid out against the form's label column and gets squeezed, a footer is free to wrap.
 struct PreferencesView: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var labels: LabelStore
-    @State private var launchAtLogin: Bool = false
+    @State private var launchAtLogin = false
 
     var body: some View {
         Form {
             Section {
-                Toggle("Global shortcut", isOn: $preferences.hotkeyEnabled)
-                HotkeyRecorderView(combo: $preferences.hotkey)
-                    .disabled(!preferences.hotkeyEnabled)
-                Text("Opens the HUD from any application. Registered without Accessibility permission.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle("Open with a global shortcut", isOn: $preferences.hotkeyEnabled)
+                LabeledContent("Shortcut") {
+                    HotkeyRecorderView(preferences: preferences)
+                }
+                .disabled(!preferences.hotkeyEnabled)
+
+                if preferences.hotkeyRegistrationFailed, preferences.hotkeyEnabled {
+                    Label("\(preferences.hotkey.display) is already taken by another application. Pick a different one.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } header: {
                 Text("Shortcut")
+            } footer: {
+                Text("Opens the HUD from any application. Registered without asking for Accessibility permission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
                 Toggle("Close the HUD after copying", isOn: $preferences.autoCloseAfterCopy)
-                Toggle("Remember the last account and label", isOn: $preferences.rememberLastUsed)
-                Text("Remembering costs one thing: the account id is written to this Mac's preferences. Nothing else about it is — no password, PIN or backup key ever leaves the key.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if preferences.lastUsed != nil {
-                    Button("Forget last used") { preferences.forgetLastUsed() }
-                        .controlSize(.small)
-                }
             } header: {
                 Text("Behaviour")
+            }
+
+            // The two remembered things sit together on purpose: apart, "Remembered" and
+            // "Labels" read as the same thing said twice.
+            Section {
+                Toggle("Preselect the last account and label", isOn: $preferences.rememberLastUsed)
+
+                LabeledContent("Preselected") {
+                    HStack(spacing: 8) {
+                        Text(preselectionDescription)
+                            .foregroundStyle(.secondary)
+                        if preferences.lastUsed != nil {
+                            Button("Forget") { preferences.forgetLastUsed() }
+                        }
+                    }
+                }
+
+                LabeledContent("Label history") {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(labels.recent.isEmpty ? "none yet" : labels.recent.joined(separator: ", "))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Clear") { labels.clearRecent() }
+                            .disabled(labels.recent.isEmpty)
+                    }
+                }
+            } header: {
+                Text("What FidoPass remembers")
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("**Preselected** is the one account and label the HUD opens on, so the usual password is one keypress away. It is stored on this Mac only.")
+                    Text("**Label history** is every label you have used, offered as the chips you pick from. It syncs through iCloud when available.")
+                    Text("Neither holds a secret — no password, PIN or backup key is written anywhere. But a forgotten label makes its password unreproducible even with the key in hand, which is what the recovery sheet is for.")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
@@ -42,51 +88,55 @@ struct PreferencesView: View {
                                                             preferences.launchAtLogin = newValue
                                                         }))
                 Toggle("Show in Dock", isOn: $preferences.showInDock)
-                Text("FidoPass lives in the menu bar. Without launch at login the global shortcut only works after you start it by hand.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             } header: {
                 Text("Startup")
+            } footer: {
+                Text("FidoPass lives in the menu bar. Without launch at login the shortcut only works once you have started the app by hand.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section {
-                Text(labels.recent.isEmpty ? "No labels recorded yet." : labels.recent.joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Clear label history") { labels.clearRecent() }
-                    .controlSize(.small)
-                    .disabled(labels.recent.isEmpty)
-                Text("Labels are not secret, but forgetting one makes its password unreproducible. The recovery sheet exists to keep a copy off this machine.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } header: {
-                Text("Labels")
-            }
         }
         .formStyle(.grouped)
         .frame(width: 460)
         .onAppear { launchAtLogin = preferences.launchAtLogin }
     }
+
+    private var preselectionDescription: String {
+        guard preferences.rememberLastUsed else { return "off" }
+        guard let lastUsed = preferences.lastUsed else { return "nothing yet" }
+        return "\(lastUsed.accountId) · “\(lastUsed.label)”"
+    }
 }
 
 /// Records a key combination by watching the next key press.
+///
+/// Sized and bordered like a control rather than drawn as a row of its own: inside a form it
+/// sits in the value column, where a shortcut field belongs.
 struct HotkeyRecorderView: View {
-    @Binding var combo: HotkeyCombo
-    @State private var isRecording = false
+    @ObservedObject var preferences: Preferences
 #if canImport(AppKit)
     @State private var monitor: Any?
 #endif
 
+    private var isRecording: Bool { preferences.isRecordingHotkey }
+
     var body: some View {
-        HStack {
-            Text("Shortcut")
-            Spacer()
-            Button(isRecording ? "Press keys…" : combo.display) {
+        HStack(spacing: 6) {
+            Button {
                 isRecording ? stop() : start()
+            } label: {
+                Text(isRecording ? "Press keys…" : preferences.hotkey.display)
+                    .font(.system(size: 12, design: isRecording ? .default : .monospaced))
+                    .foregroundStyle(isRecording ? Color.accentColor : Color.primary)
+                    .frame(width: 96)
             }
-            .frame(width: 130)
+            .help(isRecording ? "Press the combination, or Escape to cancel" : "Click, then press a new combination")
+
+            Button("Reset") { preferences.hotkey = .default }
+                .disabled(preferences.hotkey == .default || isRecording)
+                .help("Back to \(HotkeyCombo.default.display)")
         }
 #if canImport(AppKit)
         .onDisappear(perform: stop)
@@ -95,10 +145,17 @@ struct HotkeyRecorderView: View {
 
     private func start() {
 #if canImport(AppKit)
-        isRecording = true
+        // Releases the global shortcut, so pressing the current combination records it
+        // instead of firing it.
+        preferences.isRecordingHotkey = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard let recorded = HotkeyRecorderView.combo(from: event) else { return event }
-            combo = recorded
+            // Escape leaves the old combination alone rather than recording an unusable one.
+            if event.keyCode == 53 {
+                stop()
+                return nil
+            }
+            guard let recorded = HotkeyRecorderView.combo(from: event) else { return nil }
+            preferences.hotkey = recorded
             stop()
             return nil
         }
@@ -107,9 +164,11 @@ struct HotkeyRecorderView: View {
 
     private func stop() {
 #if canImport(AppKit)
-        isRecording = false
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        // Re-registers whatever the combination now is — the new one, or the old one when
+        // the recording was cancelled.
+        preferences.isRecordingHotkey = false
 #endif
     }
 
@@ -121,10 +180,10 @@ struct HotkeyRecorderView: View {
         if event.modifierFlags.contains(.option)  { carbon |= 0x0800; display += "⌥" }
         if event.modifierFlags.contains(.shift)   { carbon |= 0x0200; display += "⇧" }
         if event.modifierFlags.contains(.command) { carbon |= 0x0100; display += "⌘" }
-        // A shortcut without modifiers would fire while typing in any other application.
+        // Without a modifier the shortcut would fire while typing in any other application.
         guard carbon != 0 else { return nil }
         let character = (event.charactersIgnoringModifiers ?? "").uppercased()
-        guard !character.isEmpty else { return nil }
+        guard !character.isEmpty, character.rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
         return HotkeyCombo(keyCode: UInt32(event.keyCode), modifiers: carbon, display: display + character)
     }
 #endif

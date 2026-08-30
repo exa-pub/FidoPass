@@ -63,9 +63,9 @@ final class AuxiliaryWindows {
             present(preferencesWindow)
             return
         }
-        let window = makeWindow(title: "FidoPass Preferences",
+        let window = makeWindow(title: "FidoPass Settings",
                                 content: AnyView(PreferencesView(preferences: store.preferences, labels: store.labels)),
-                                size: NSSize(width: 460, height: 430),
+                                size: nil,
                                 resizable: false)
         onClose(of: window) { [weak self] in self?.preferencesWindow = nil }
         preferencesWindow = window
@@ -84,7 +84,7 @@ final class AuxiliaryWindows {
                                     onFinish()
                                     AuxiliaryWindows.shared.closeOnboarding()
                                 })),
-                                size: NSSize(width: 460, height: 430),
+                                size: nil,
                                 resizable: false)
         onClose(of: window) { [weak self] in self?.onboardingWindow = nil }
         onboardingWindow = window
@@ -98,12 +98,26 @@ final class AuxiliaryWindows {
 
     // MARK: - Plumbing
 
-    private func makeWindow(title: String, content: AnyView, size: NSSize, resizable: Bool) -> NSWindow {
+    /// - Parameter size: an explicit content size, or nil to let the SwiftUI content decide.
+    ///   Guessing a height is how a settings form ends up clipped the moment it grows.
+    private func makeWindow(title: String, content: AnyView, size: NSSize?, resizable: Bool) -> NSWindow {
         let controller = NSHostingController(rootView: content)
-        let window = NSWindow(contentViewController: controller)
+        if size == nil { controller.sizingOptions = [.preferredContentSize] }
+
+        // The style mask is set at construction rather than afterwards: changing it on a
+        // live window re-lays out the content against the previous title-bar geometry, which
+        // is how a window ends up looking a few points wrong everywhere.
+        let style: NSWindow.StyleMask = resizable
+            ? [.titled, .closable, .miniaturizable, .resizable]
+            : [.titled, .closable]
+        let contentSize = size ?? controller.view.fittingSize
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: contentSize),
+                              styleMask: style,
+                              backing: .buffered,
+                              defer: false)
+        window.contentViewController = controller
         window.title = title
-        window.setContentSize(size)
-        window.styleMask = resizable ? [.titled, .closable, .miniaturizable, .resizable] : [.titled, .closable]
+        window.setContentSize(contentSize)
         window.isReleasedWhenClosed = false
         window.center()
         return window
