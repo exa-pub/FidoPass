@@ -3,153 +3,116 @@
 [![Build & Release](https://github.com/exa-pub/FidoPass/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/exa-pub/FidoPass/actions/workflows/build.yml)
 [![Latest Release](https://img.shields.io/github/v/release/exa-pub/FidoPass?display_name=tag&sort=semver)](https://github.com/exa-pub/FidoPass/releases/latest)
 
-Hardware-backed password generator for macOS that delegates all sensitive operations to a FIDO2 authenticator via the `hmac-secret` extension. FidoPass never writes derived secrets to disk—only deterministic metadata lives on the machine.
+**A menu-bar app for macOS that turns your security key into a password generator.**
 
-## Table of Contents
-- [Features](#features)
-- [Requirements](#requirements)
-- [Getting Started](#getting-started)
-- [FidoPassCore Library](#fidopasscore-library)
-- [Command-Line Notes](#command-line-notes)
-- [Building & Packaging](#building--packaging)
-- [Data Storage & Privacy](#data-storage--privacy)
-- [How It Works](#how-it-works)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+Press ⌘⌥P, touch your key — a strong password lands on your clipboard. The same key and the
+same label always give the same password, so there is nothing to store and nothing to sync.
+The password does not exist until you ask for it, and then it lives only in memory and on
+the clipboard, which clears itself after 45 seconds.
 
-## Features
-- Derives deterministic passwords via a CTAP2/FIDO2 authenticator that advertises the `hmac-secret` extension.
-- Leaves secrets on the key; credential metadata stays on the authenticator and the app only caches it in memory while running.
-- Lives in the menu bar: a compact HUD opens with a global shortcut (⌘⌥P by default) or a
-  click on the key icon. The usual password reaches the clipboard in two clicks, or in two
-  keystrokes when the key is already unlocked.
-- Remembers the account and label used last, so unlocking continues the action you asked
-  for instead of dropping you on a list.
-- Portable accounts allow the master key material to be exported and re-imported on another authenticator.
-- Copy-to-clipboard helpers that mark the value as concealed, keep it off Universal
-  Clipboard, and clear it automatically after a short delay.
-- Shows how many PIN attempts remain before an authenticator locks itself permanently.
-- Exports a printable recovery sheet holding everything needed to reproduce an account's
-  passwords — and no secrets.
-- Encrypts and decrypts short texts with the same key (AES-256-GCM), for secrets that have
-  to be stored somewhere you do not control.
-- Every release bundle carries `Contents/Resources/DEPENDENCIES.txt` recording the exact
-  libraries and versions it was built from.
-- Release bundles include `libfido2`, `libcbor`, and `libcrypto`, so users without Homebrew can run the packaged app.
+## What it is for
 
-## Requirements
+The handful of passwords you cannot keep in a password manager, because they are what
+*opens* the password manager: a vault master password, a FileVault passphrase, a recovery
+key.
+
+It is deliberately not a manager for every website — no autofill, no browser extension. For
+hundreds of site logins a real vault does the job better. FidoPass protects the one password
+that vault depends on. And since these passwords often get typed by hand, the alphabet
+leaves out characters that are easy to confuse: `i l o I L O 0 1`.
+
+## What you need
+
 - macOS 13 Ventura or newer.
-- Swift toolchain 5.9 or newer.
-- Homebrew packages: `libfido2` and `pkg-config` (brings in `libcbor`, `openssl@3`, etc.).
-- Xcode Command Line Tools for `install_name_tool`, `codesign`, and other build utilities.
-- A CTAP2/FIDO2 authenticator with `hmac-secret` support (YubiKey 5, Nitrokey 3, SoloKeys, …).
+- A FIDO2 security key with `hmac-secret` support and a PIN set — YubiKey 5, Nitrokey 3,
+  SoloKey 2 and most modern keys qualify.
 
-## Getting Started
+## Install
 
-### 1. Install prerequisites
+Download the DMG from the [latest release](https://github.com/exa-pub/FidoPass/releases/latest)
+and drag FidoPass into Applications.
+
+Releases are signed and notarised by Apple, so the DMG opens normally. The first launch
+asks for confirmation because the app was downloaded from the internet — that is the usual
+macOS prompt, not an error.
+
+## First run
+
+1. Plug in your security key.
+2. Press **⌘⌥P**, or click the key icon in the menu bar.
+3. Enter the key's PIN. It stays in memory for five minutes of inactivity and is never
+   written anywhere; locking the Mac or unplugging the key clears it at once.
+4. Press **⌘N** to create an account — `vault`, say. Leave it **portable**: such an account
+   shows a backup key once, and that backup key entered on a second security key reproduces
+   the same passwords. Write it down.
+5. Type a label and press **Copy password**. Touch the key when it blinks.
+
+The same account plus the same label always produce the same password, so keep labels
+consistent — `vault` and `Vault` are two different passwords.
+
+## Everyday use
+
+⌘⌥P opens the HUD from anywhere, and it remembers the account and label you used last: with
+the key already unlocked, ⏎ generates and copies in a single keystroke. Inside the HUD,
+**↑↓** pick an account, **←→** move between its labels, **⌘1–⌘3** jump to the first three,
+and **⌘E** encrypts a piece of text with the same key — for notes or recovery codes you have
+to keep somewhere you do not control.
+
+The menu-bar icon shows while a secret is still on the clipboard. Copied secrets are marked
+concealed, so clipboard-history apps skip them, and they stay off Universal Clipboard.
+
+The HUD also shows how many PIN attempts remain. **A FIDO2 key locks itself permanently
+after 8 wrong PINs** — there is no reset.
+
+## If you lose your key
+
+There is no reset, so plan for it in advance:
+
+- **Keep the backup key** of a portable account. Entered on another FIDO2 key, it makes that
+  key produce the same passwords.
+- **Print the recovery sheet** (right-click an account). It holds everything needed to
+  reproduce that account's passwords and contains no secrets, so it is safe to file with
+  your documents — and useless without the key or the backup key.
+
+## What is stored
+
+Never written to disk: passwords, PINs, backup keys, anything derived from your security
+key. Account metadata lives on the key itself, as resident credentials.
+
+The app keeps only two things locally, both clearable in Preferences: the labels you have
+used, per account, so it can suggest them; and the account and label used last, so the HUD
+can offer the right action before the key is unlocked.
+
+## How it works
+
+Enrollment creates a resident credential with the `hmac-secret` extension. Generating a
+password asks the key for an assertion with a salt derived from `label + rpId + accountId`;
+the key answers with 32 bytes that never leave it in any other form, which are stretched
+with HKDF and mapped into a password. Portable accounts XOR an imported master key with the
+key-derived secret, which is what lets a second authenticator reproduce the same passwords.
+
+Derivation for policy version 1 is a frozen contract: the output will never change. Golden
+vectors pin the salts, the character mapping and the generator, so an accidental change
+fails the build instead of silently invalidating passwords already in use.
+
+## Building from source
+
 ```bash
 brew install libfido2 pkg-config
-export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" # adjust if needed
-```
-
-### 2. Build and launch the app
-FidoPass is a menu-bar application: the status item and the activation policy only behave
-correctly from an app bundle, so `swift run` is not the way to start it.
-
-```bash
 bash scripts/build_app.sh
 open .build/release/FidoPass.app
 ```
 
-### 3. Enroll an account and generate passwords
-1. Plug in your authenticator and ensure it has a PIN configured.
-2. Open the HUD from the menu-bar key icon, or press ⌘⌥P.
-3. Enter the key PIN. It is kept in memory for five minutes.
-4. Press ⌘N (or use the ··· menu) to create an account — `vault`, say. Portable is the
-   default: its backup key can be entered on a second authenticator, so the passwords
-   survive losing this key. Write the backup key down when it is shown; it is shown once.
-5. Pick a label and press **Copy password**. The clipboard clears itself after 45 seconds,
-   and the menu-bar icon shows that a secret is still on it.
-
-Rare actions — backup key, recovery sheet, text encryption, deleting an account — are on the
-right-click menu of an account row (and on the `···` button that appears on hover). The
-menu-bar icon also has a right-click menu with the same commands.
-
-## FidoPassCore Library
-Applications can integrate `FidoPassCore` directly when they need a programmatic API:
-
-```swift
-import FidoPassCore
-
-let core = FidoPassCore.shared
-let device = try core.listDevices().first
-let account = try core.enroll(accountId: "demo", kind: .portable, devicePath: device?.path)
-let password = try core.generatePassword(account: account, label: "vault")
-```
-
-`Account` models are Codable and can be persisted using any storage backend your app provides.
-
-## Building & Packaging
-- `swift build -c release --product FidoPassApp` produces a release binary in `.build/release/FidoPassApp`.
-- `scripts/build_app.sh` assembles a relocatable `.app` bundle, copying the required dynamic libraries and applying an ad-hoc codesign signature. Adjust the `BUNDLE_ID` in the script before distributing a release build.
-- `scripts/create_dmg.sh` stages the bundle into a distributable DMG image (`FidoPass.dmg`). Both scripts determine the project root automatically, so they can be executed from any working directory.
-- Packaging requires `brew` in `PATH`, `codesign`, and `hdiutil` (macOS default).
-- `scripts/update_icon.sh /path/to/AppIcon.icns` (an `.iconset` directory or a high-resolution `.png`) swaps in a new app icon and refreshes the editable `Icon.iconset` when `iconutil` is available. The `Icon.iconset` folder is only used as a source asset for maintainers; the build consumes the generated `AppIcon.icns`.
-
-## Compatibility
-Password derivation is a frozen contract: for `PasswordPolicy.version == 1` the output will
-never change. `GoldenVectorsTests` pins the salts, the character mapping and the full
-generator, so an accidental change fails the build rather than silently invalidating
-passwords already in use.
-
-## Data Storage & Privacy
-- The PIN is kept in memory only, for as long as the key stays unlocked — 5 minutes of
-  inactivity by default, adjustable in Preferences → Security. Every use of the key restarts
-  the countdown; locking the Mac or unplugging the key locks it immediately.
-- Account metadata lives on the authenticator as resident credentials; the macOS app keeps only in-memory copies during a session.
-- Label history is kept **per account**, keyed by the credential id — which names one
-  credential on one key exactly — and synced via `UserDefaults` and
-  `NSUbiquitousKeyValueStore` when iCloud is available. The account id and the key's name
-  are stored alongside it for display. A label belongs to one account: offered under another it would derive a
-  password that is valid and wrong. Preferences → "Label history" lists what is stored and
-  clears it.
-- The account and label used last are written to `UserDefaults`, so the HUD can offer the
-  right action before the key is unlocked. It can be switched off — Preferences →
-  "Preselect the last account and label", with "Forget" to erase what was already stored.
-- Account ids, labels, credential ids and device names are therefore the only account data
-  that reaches the disk. A credential id is not a secret — it is sent to the relying party on
-  every assertion — but it is a stable unique identifier. No password, PIN or backup key is ever written anywhere.
-- Generated passwords are kept in memory only; copying moves them to the system clipboard where they follow normal macOS clipboard lifecycle rules.
-
-## How It Works
-- Enrollment issues `makeCredential` with `FIDO_EXT_HMAC_SECRET`, creating a resident credential by default.
-- Password generation calls `getAssertion` with the saved credential ID, enabling `hmac-secret` and supplying a deterministic salt derived from `label + rpId + accountId`.
-- The authenticator returns a 32-byte secret that is stretched via HKDF and mapped into a password respecting the configured policy (length, character classes, ambiguity filters).
-- Portable accounts XOR an imported key with the device-derived secret so the same password material can be regenerated on another authenticator.
-
-## Installing a Release Build
-Release DMGs are signed ad-hoc rather than notarised, so Gatekeeper quarantines them after
-download and reports the app as damaged. Until notarisation is in place, either right-click
-the app and choose **Open**, or clear the quarantine flag:
-
-```bash
-xattr -d com.apple.quarantine /Applications/FidoPass.app
-```
-
-Building locally with `scripts/build_app.sh` avoids this entirely.
-
-## Roadmap
-- Notarised, Developer ID-signed releases so downloads open without a Gatekeeper warning.
-- On-key management: set and change the PIN, enrol fingerprints.
-- Real cancellation of a pending key operation (`fido_dev_cancel`); today the Cancel button
-  hides the prompt and discards the result while the call finishes in the background.
-- Editable password policies. Requires storing metadata on the authenticator first
-  (`largeBlobs`) — see `AGENTS.md`, rule 6.
-- Localized interface (English/Russian) backed by resource bundles.
+FidoPass is a menu-bar app and has to start from the bundle — `swift run` will not behave
+correctly. `swift test` runs the whole suite and needs no hardware. The domain logic ships
+as `FidoPassCore`, a library with no UI dependencies.
 
 ## Contributing
-Issues and pull requests are welcome. If you intend to work on authenticator communication, make sure you can test with real hardware so that changes can be validated end-to-end.
+
+Issues and pull requests are welcome. [AGENTS.md](AGENTS.md) describes the architecture and
+the invariants that must not be broken. If you plan to work on authenticator communication,
+make sure you can test against real hardware.
 
 ## License
-FidoPass is available under the MIT License. Embedded `libfido2` remains under the BSD-2-Clause license.
+
+MIT. Embedded `libfido2` remains under the BSD-2-Clause license.
