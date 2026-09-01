@@ -60,9 +60,9 @@ final class HUDStore: ObservableObject {
     /// The reset wizard, or nil when none is running.
     @Published var resetFlow: ResetFlow?
     @Published private(set) var enrollStep: String?
-    /// Set while a system panel or a deliberate reading screen is up: the panel must not
-    /// close under the user's hands.
-    @Published private(set) var isPinnedOpen = false
+    /// Set while a system panel of our own is up — a save dialog takes key status away, and
+    /// the HUD must not vanish behind it.
+    @Published private(set) var isShowingSystemPanel = false
     /// True while the label is being typed rather than picked. Arrow keys belong to the text
     /// field then, not to the list behind it.
     @Published var isEditingLabel = false
@@ -128,6 +128,8 @@ final class HUDStore: ObservableObject {
         var current: String = ""
         var new: String = ""
         var confirm: String = ""
+
+        var isEmpty: Bool { current.isEmpty && new.isEmpty && confirm.isEmpty }
 
         mutating func clear() {
             current = ""
@@ -263,6 +265,11 @@ final class HUDStore: ObservableObject {
     /// "no accounts on this key" under a header that says the key is locked — its account
     /// list is not empty, it is unread, and the two must never look the same.
     var effectiveRoute: HUDRoute {
+        // Ahead of the "is a key present" check, because no key is a *step* of this wizard:
+        // it asks the user to unplug, and the key being gone is what it waits for. Falling
+        // through to "No security key connected" made the wizard vanish at exactly the moment
+        // it was doing its job.
+        if resetFlow != nil, case .resetKey = route { return .resetKey }
         guard !devices.devices.isEmpty else { return .accounts }
         // Key info is read without a PIN and without a touch, so it stays available whatever
         // else is true of the key.
@@ -270,9 +277,6 @@ final class HUDStore: ObservableObject {
         // A key that says it must have its PIN changed will refuse every other operation, and
         // silent refusals are impossible to explain. Changing it proves knowledge of the old
         // PIN, so this works on a locked key too.
-        // A reset in flight outranks everything: the key is mid-operation, and any other
-        // screen would be describing a state that is about to stop existing.
-        if resetFlow != nil, case .resetKey = route { return .resetKey }
         if devices.selectedState?.forcePINChange == true { return .changePIN }
         guard isSelectedKeyUnlocked else {
             // A key with no PIN cannot be unlocked at all; offering the field would be a dead
@@ -391,8 +395,27 @@ final class HUDStore: ObservableObject {
 
     func show(_ route: HUDRoute) {
         self.route = route
-        isPinnedOpen = route.holdsPanelOpen
         if case .backupKey = route {} else { backupKey = nil }
+    }
+
+    /// Whether clicking away must leave the panel open.
+    ///
+    /// Derived from what is on screen, not remembered from the last `show(_:)`. It used to be
+    /// stored, and then a screen the user never navigated to — unplugging the key turns the
+    /// reset wizard into "no security key" — left the panel pinned by a route nobody could
+    /// see. The result was a HUD that would not close and gave no reason why.
+    var isPinnedOpen: Bool {
+        if isShowingSystemPanel { return true }
+        switch effectiveRoute {
+        case .accounts, .unlock:
+            return false
+        case .setPIN, .changePIN:
+            // These can appear on their own — a key with no PIN, a key demanding a change —
+            // so they hold the panel only once there is typing in them to lose.
+            return !pinForm.isEmpty
+        case .enroll, .backupKey, .confirmDelete, .keyInfo, .resetKey:
+            return true
+        }
     }
 
     func backToAccounts() {
@@ -947,12 +970,12 @@ final class HUDStore: ObservableObject {
         let sheet = RecoverySheet(account: account,
                                   labels: known,
                                   deviceDescription: description)
-        isPinnedOpen = true
+        isShowingSystemPanel = true
         onRequestSaveRecoverySheet?(sheet)
     }
 
     func recoverySheetFinished(saved: Bool) {
-        isPinnedOpen = route.holdsPanelOpen
+        isShowingSystemPanel = false
         if saved { setStatus("Recovery sheet saved — it contains no secrets") }
     }
 
@@ -1104,13 +1127,4 @@ final class HUDStore: ObservableObject {
 
 }
 
-private extension HUDRoute {
-    /// Screens the panel must not close under: the user is reading or typing something they
-    /// cannot get back with one click.
-    var holdsPanelOpen: Bool {
-        switch self {
-        case .accounts, .unlock: return false
-        case .setPIN, .changePIN, .enroll, .backupKey, .confirmDelete, .keyInfo, .resetKey: return true
-        }
-    }
-}
+

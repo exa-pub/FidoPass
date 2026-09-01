@@ -292,6 +292,45 @@ final class PinManagementTests: XCTestCase {
         XCTAssertTrue(backend.resetCalls.isEmpty, "a cancelled wizard must not still fire")
     }
 
+    /// The wizard tells the user to unplug the key. When they do, it must still be the thing
+    /// on screen — it used to fall through to "No security key connected", which made it look
+    /// as though the operation had been forgotten.
+    func testTheWizardStaysOnScreenWhileTheKeyIsOut() async {
+        let (store, backend, _) = await armedResetStore()
+
+        backend.devices = []
+        await store.devices.refresh()
+
+        XCTAssertEqual(store.effectiveRoute, .resetKey)
+        XCTAssertEqual(store.resetFlow?.stage, .replug)
+    }
+
+    /// The panel stays open under a wizard, and — this is the part that broke — stops staying
+    /// open the moment the wizard is gone. Pinning used to be remembered from the last
+    /// `show(_:)`, so a route nobody could see kept the HUD on screen with no way to explain it.
+    func testPinningFollowsWhatIsOnScreen() async {
+        let (store, backend, _) = await armedResetStore()
+        XCTAssertTrue(store.isPinnedOpen)
+
+        backend.devices = []
+        await store.devices.refresh()
+        XCTAssertTrue(store.isPinnedOpen, "the wizard is still up, waiting for the key")
+
+        store.cancelReset()
+        XCTAssertFalse(store.isPinnedOpen, "nothing is left to protect — clicking away must close it")
+    }
+
+    /// The bootstrap screen appears on its own, just by plugging in a new key. It may not
+    /// make the panel unclosable before the user has typed anything into it.
+    func testTheBootstrapScreenOnlyPinsThePanelOnceItHasTyping() async {
+        let (store, _, _) = await freshKeyStore()
+        XCTAssertEqual(store.effectiveRoute, .setPIN)
+        XCTAssertFalse(store.isPinnedOpen)
+
+        store.pinForm.new = "12"
+        XCTAssertTrue(store.isPinnedOpen, "half a PIN is something the user cannot get back")
+    }
+
     /// An arming that outlived its screen would fire on the next key plugged in, whatever it
     /// was brought out for.
     func testClosingThePanelDisarmsTheReset() async {
