@@ -276,6 +276,22 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertEqual(store.primaryAction, .unlock(devicePath: device.path))
     }
 
+    /// The same budget for a key that has never been used: with no PIN on it, the one thing
+    /// worth doing is giving it one — not offering a field no PIN can satisfy.
+    func testThePrimaryActionOfAKeyWithoutAPinIsToSetOne() async {
+        let backend = MockKeyBackend()
+        let device = MockKeyBackend.device()
+        backend.devices = [device]
+        backend.statusByPath[device.path] = DeviceStatus(pinRetriesRemaining: nil,
+                                                         hasPIN: false,
+                                                         supportsHmacSecret: true,
+                                                         remainingResidentKeys: 25)
+        let store = HUDTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
+
+        XCTAssertEqual(store.primaryAction, .setPIN(devicePath: device.path))
+    }
+
     // MARK: - Labels
 
     /// The chips have to follow the account. A label belonging to another one derives a

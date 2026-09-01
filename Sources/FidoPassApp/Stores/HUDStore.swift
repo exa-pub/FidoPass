@@ -5,10 +5,15 @@ import Foundation
 enum HUDRoute: Equatable {
     case accounts
     case unlock
+    /// The key has no PIN. Nothing else on it works until it does.
+    case setPIN
+    case changePIN
     case enroll
     case backupKey(AccountRef)
     case confirmDelete(AccountRef)
     case keyInfo
+    /// Erasing the key: a wizard, because the key itself imposes the steps.
+    case resetKey
 }
 
 /// The key is waiting to be touched.
@@ -42,6 +47,9 @@ final class HUDStore: ObservableObject {
     @Published private(set) var statusText: String?
     @Published var selection: AccountRef?
     @Published var pinDraft: String = ""
+    /// Fields of the set/change PIN screens. Separate from `pinDraft`, which is the unlock
+    /// field: a half-typed new PIN must never be submitted as an unlock attempt.
+    @Published var pinForm = PinForm()
     @Published private(set) var isWorking = false
     /// What the app is doing while it makes the user wait, when no key touch is involved.
     /// A touch has its own prompt; this covers the silent waits, above all PIN verification.
@@ -49,10 +57,12 @@ final class HUDStore: ObservableObject {
     /// Value being shown on the backup-key screen. Never persisted, dropped on leaving.
     @Published private(set) var backupKey: String?
     @Published var enrollDraft = EnrollDraft()
+    /// The reset wizard, or nil when none is running.
+    @Published var resetFlow: ResetFlow?
     @Published private(set) var enrollStep: String?
-    /// Set while a system panel or a deliberate reading screen is up: the panel must not
-    /// close under the user's hands.
-    @Published private(set) var isPinnedOpen = false
+    /// Set while a system panel of our own is up — a save dialog takes key status away, and
+    /// the HUD must not vanish behind it.
+    @Published private(set) var isShowingSystemPanel = false
     /// True while the label is being typed rather than picked. Arrow keys belong to the text
     /// field then, not to the list behind it.
     @Published var isEditingLabel = false
@@ -60,6 +70,73 @@ final class HUDStore: ObservableObject {
     /// arriving from the right, so the next press keeps moving in the same direction instead
     /// of bouncing straight back out.
     @Published private(set) var labelFieldCaretAtEnd = false
+
+    /// A reset in progress.
+    ///
+    /// Reset is the one operation that destroys more than the delete screen does, and the key
+    /// dictates its shape: most authenticators accept a reset only within seconds of power-up,
+    /// so a physical reconnect is part of the flow rather than a nicety.
+    struct ResetFlow: Equatable {
+        enum Stage: Equatable {
+            /// Reading what will be lost, and confirming it.
+            case confirm
+            /// "Unplug the key" — waiting for it to disappear.
+            case unplug
+            /// "Plug it back in" — the reset fires the instant it returns.
+            case replug
+            case running
+        }
+
+        struct Doomed: Equatable, Identifiable {
+            let ref: AccountRef
+            let kind: AccountKind
+            var id: String { ref.accountId }
+        }
+
+        var stage: Stage = .confirm
+        var deviceName: String
+        /// Checked inside the reset itself, after the reconnect. A different AAGUID means a
+        /// different key came back; a matching one proves nothing.
+        var expectedAAGUID: String?
+        /// What is on the key, when it could be read. A locked key cannot be enumerated — and
+        /// a locked-out key is the most common reason to reset one — so this may be empty for
+        /// a key that is anything but.
+        var doomed: [Doomed]
+        var accountsReadable: Bool
+        /// Label histories to forget afterwards. Collected now: they are keyed by credential
+        /// id, and after the reset there is nothing left to ask for one.
+        var scopes: [LabelScope]
+        var acknowledged = false
+        var typed = ""
+
+        var hasLocalAccounts: Bool { doomed.contains { $0.kind == .local } }
+
+        /// A local account's passwords cannot be recovered by any means, so erasing one asks
+        /// for more than a click. Portable accounts have a backup key; an unreadable key has
+        /// nothing to enumerate and nothing to spell out.
+        var requiresTypedConfirmation: Bool { hasLocalAccounts }
+
+        var canProceed: Bool {
+            guard acknowledged || doomed.isEmpty else { return false }
+            guard requiresTypedConfirmation else { return true }
+            return typed == "RESET"
+        }
+    }
+
+    /// What the PIN screens are holding. Wiped on leaving them — see `panelDidClose`.
+    struct PinForm: Equatable {
+        var current: String = ""
+        var new: String = ""
+        var confirm: String = ""
+
+        var isEmpty: Bool { current.isEmpty && new.isEmpty && confirm.isEmpty }
+
+        mutating func clear() {
+            current = ""
+            new = ""
+            confirm = ""
+        }
+    }
 
     struct EnrollDraft: Equatable {
         var accountId: String = ""
@@ -100,6 +177,8 @@ final class HUDStore: ObservableObject {
     /// Device whose key the open editor session belongs to, or nil when no editor is open.
     private(set) var editorDevicePath: String?
     private var statusTask: Task<Void, Never>?
+    /// The reset triggered by the key reappearing, while it runs.
+    private(set) var resetTask: Task<Void, Never>?
 
     /// The stores are built here rather than injected as defaults: a default argument is
     /// evaluated outside the main actor, and every one of these is main-actor bound.
@@ -127,6 +206,12 @@ final class HUDStore: ObservableObject {
         devices.onKeyClosed = { [weak self] path in self?.handleKeyClosed(path) }
         devices.onSessionLocked = { [weak self] in self?.handleSessionLocked() }
         devices.onDeviceListChanged = { [weak self] in self?.onStateChanged?() }
+        devices.onArmedKeyAppeared = { [weak self] device in
+            // Held so the work is reachable: the reset starts from a hot-plug callback, and
+            // without a handle nothing — a test, or a later step of the wizard — can tell
+            // whether it has finished.
+            self?.resetTask = Task { @MainActor [weak self] in await self?.performArmedReset(on: device) }
+        }
     }
 
     // MARK: - Derived state
@@ -160,6 +245,7 @@ final class HUDStore: ObservableObject {
         HUDSnapshot(hasDevices: !devices.devices.isEmpty,
                     selectedDevicePath: devices.selectedPath,
                     isUnlocked: isSelectedKeyUnlocked,
+                    keyHasPIN: devices.selectedState?.hasPIN,
                     accountRefs: visibleAccounts.compactMap(AccountRef.init),
                     selection: selection)
     }
@@ -179,10 +265,24 @@ final class HUDStore: ObservableObject {
     /// "no accounts on this key" under a header that says the key is locked — its account
     /// list is not empty, it is unread, and the two must never look the same.
     var effectiveRoute: HUDRoute {
+        // Ahead of the "is a key present" check, because no key is a *step* of this wizard:
+        // it asks the user to unplug, and the key being gone is what it waits for. Falling
+        // through to "No security key connected" made the wizard vanish at exactly the moment
+        // it was doing its job.
+        if resetFlow != nil, case .resetKey = route { return .resetKey }
         guard !devices.devices.isEmpty else { return .accounts }
+        // Key info is read without a PIN and without a touch, so it stays available whatever
+        // else is true of the key.
+        if case .keyInfo = route { return .keyInfo }
+        // A key that says it must have its PIN changed will refuse every other operation, and
+        // silent refusals are impossible to explain. Changing it proves knowledge of the old
+        // PIN, so this works on a locked key too.
+        if devices.selectedState?.forcePINChange == true { return .changePIN }
         guard isSelectedKeyUnlocked else {
-            // Key info is read without a PIN and without a touch, so it stays available.
-            if case .keyInfo = route { return .keyInfo }
+            // A key with no PIN cannot be unlocked at all; offering the field would be a dead
+            // end, which is exactly what it used to be.
+            if devices.selectedState?.hasPIN == false { return .setPIN }
+            if case .changePIN = route { return .changePIN }
             return .unlock
         }
         return route
@@ -203,6 +303,7 @@ final class HUDStore: ObservableObject {
         errorText = nil
         await devices.refresh()
         if let failure = devices.refreshError { errorText = failure }
+        await readStatusOfLockedKey()
         await reloadAccountsIfNeeded()
         restoreSelectionIfNeeded()
 
@@ -216,10 +317,31 @@ final class HUDStore: ObservableObject {
 
     func panelDidClose() {
         pinDraft = ""
+        pinForm.clear()
         errorText = nil
         backupKey = nil
         enrollStep = nil
+        // An armed reset with no screen to explain it would fire on the next key plugged in,
+        // whatever it was brought out for. It only survives while its wizard is visible.
+        if resetFlow != nil {
+            devices.disarmReset()
+            resetFlow = nil
+        }
         if case .accounts = route {} else { route = .accounts }
+    }
+
+    /// Asks the selected key about itself — but only when the panel is being opened.
+    ///
+    /// Opening a key seizes it from every other process on macOS, so the app may not do it
+    /// merely because a key was plugged in: that is how a running FidoPass used to make
+    /// `ykman fido reset` impossible. Opening the panel *is* a request, and it is the moment
+    /// the answers are needed — whether the key has a PIN decides which screen to show, and
+    /// the attempts left have to be on screen before one is spent.
+    ///
+    /// Skipped for an unlocked key: it demonstrably has a PIN, and its state is already known.
+    private func readStatusOfLockedKey() async {
+        guard let device = selectedDevice, devices.selectedState?.unlocked != true else { return }
+        await devices.refreshStatus(for: device)
     }
 
     private func reloadAccountsIfNeeded() async {
@@ -273,11 +395,38 @@ final class HUDStore: ObservableObject {
 
     func show(_ route: HUDRoute) {
         self.route = route
-        isPinnedOpen = route.holdsPanelOpen
         if case .backupKey = route {} else { backupKey = nil }
     }
 
+    /// Whether clicking away must leave the panel open.
+    ///
+    /// Derived from what is on screen, not remembered from the last `show(_:)`. It used to be
+    /// stored, and then a screen the user never navigated to — unplugging the key turns the
+    /// reset wizard into "no security key" — left the panel pinned by a route nobody could
+    /// see. The result was a HUD that would not close and gave no reason why.
+    var isPinnedOpen: Bool {
+        if isShowingSystemPanel { return true }
+        switch effectiveRoute {
+        case .accounts, .unlock:
+            return false
+        case .setPIN, .changePIN:
+            // These can appear on their own — a key with no PIN, a key demanding a change —
+            // so they hold the panel only once there is typing in them to lose.
+            return !pinForm.isEmpty
+        case .enroll, .backupKey, .confirmDelete, .keyInfo, .resetKey:
+            return true
+        }
+    }
+
     func backToAccounts() {
+        // A reset in progress is a wizard the user was pulled out of — to fetch a backup key
+        // they are seconds away from losing. Landing them on the account list would abandon
+        // it silently, leaving a flow armed with nothing on screen to say so.
+        if resetFlow != nil {
+            show(.resetKey)
+            errorText = nil
+            return
+        }
         show(.accounts)
         errorText = nil
     }
@@ -363,6 +512,23 @@ final class HUDStore: ObservableObject {
         switch route {
         case .accounts, .unlock:
             return false
+        case .setPIN:
+            // There is nowhere to go back to: every other screen needs a PIN this key has not
+            // got. Escape closes the panel, as it does on the account list.
+            return false
+        case .changePIN:
+            // Unless the key insists — then leaving is not a choice the app can offer.
+            guard devices.selectedState?.forcePINChange != true else { return true }
+            pinForm.clear()
+            backToAccounts()
+            return true
+        case .resetKey:
+            // Cancellable right up until the key is being erased — a user who unplugged and
+            // then thought better of it must not be held in the wizard. Once the reset itself
+            // is running there is nothing left to cancel: the key is doing it.
+            guard resetFlow?.stage != .running else { return true }
+            cancelReset()
+            return true
         case .enroll, .backupKey, .confirmDelete, .keyInfo:
             backToAccounts()
             return true
@@ -377,10 +543,16 @@ final class HUDStore: ObservableObject {
         switch effectiveRoute {
         case .unlock:
             return ["⏎ unlock"]
+        case .setPIN:
+            return ["⏎ set PIN"]
+        case .changePIN:
+            return devices.selectedState?.forcePINChange == true ? ["⏎ change PIN"] : ["⏎ change PIN", "esc cancel"]
         case .enroll:
             return ["⏎ create", "esc cancel"]
         case .backupKey, .keyInfo:
             return ["esc back"]
+        case .resetKey:
+            return resetFlow?.stage == .running ? [] : ["esc cancel"]
         case .confirmDelete:
             return ["esc cancel"]
         case .accounts:
@@ -424,6 +596,94 @@ final class HUDStore: ObservableObject {
         } catch {
             isWorking = false
             pinDraft = ""
+            let presented = FidoPassErrorPresenter.message(for: error)
+            errorText = presented.fullText(retriesRemaining: devices.selectedState?.pinRetriesRemaining)
+        }
+    }
+
+    // MARK: - PIN management
+
+    /// The rules this key enforces on its own PIN.
+    var pinPolicy: PinPolicy { devices.selectedState?.pinPolicy ?? PinPolicy() }
+
+    /// Why the PIN being typed cannot be submitted yet — in words for the person typing.
+    ///
+    /// Judged here rather than by the key. For setting a first PIN that only changes *when*
+    /// the user finds out, since libfido2 rejects a bad length before it sends anything. For
+    /// a change it matters far more: a new PIN that was never going to be accepted must not
+    /// cost one of the eight attempts standing between this key and a permanent lock-out.
+    func pinFormIssue(forChange: Bool) -> String? {
+        let old = forChange && !pinForm.current.isEmpty ? pinForm.current : nil
+        if let issue = pinPolicy.validate(pinForm.new, oldPIN: old) {
+            // "Enter a PIN" under an empty field is noise, not help.
+            return issue == .empty ? nil : issue.message
+        }
+        if !pinForm.confirm.isEmpty, pinForm.new != pinForm.confirm {
+            return "The two PINs do not match."
+        }
+        return nil
+    }
+
+    func canSubmitPinForm(forChange: Bool) -> Bool {
+        guard !isWorking, pinFormIssue(forChange: forChange) == nil else { return false }
+        guard !pinForm.new.isEmpty, pinForm.new == pinForm.confirm else { return false }
+        return forChange ? !pinForm.current.isEmpty : true
+    }
+
+    /// Bootstrap: this key has never had a PIN.
+    func setInitialPIN() async {
+        // Return reaches here from the field and from the default button both.
+        guard !isWorking, let device = selectedDevice, canSubmitPinForm(forChange: false) else { return }
+        let newPIN = pinForm.new
+        isWorking = true
+        busyTitle = "Setting the PIN…"
+        defer { busyTitle = nil }
+        do {
+            try await devices.setInitialPIN(for: device, newPIN: newPIN)
+            pinForm.clear()
+            errorText = nil
+            await reloadAccountsIfNeeded()
+            restoreSelectionIfNeeded()
+            route = .accounts
+            isWorking = false
+            setStatus("PIN set — this key is ready to use")
+            onStateChanged?()
+            await runPendingIntentIfPossible()
+        } catch {
+            isWorking = false
+            present(error, whenRefused: "This key already has a PIN. Use “Change PIN…” instead.")
+        }
+    }
+
+    /// Replaces the PIN, having been told the current one.
+    ///
+    /// The current PIN is asked for even when it is sitting in the vault. It is the only thing
+    /// standing between an unattended unlocked Mac and a key whose PIN its owner no longer
+    /// knows — and this screen is reached about once a year, so the extra field costs nothing
+    /// worth counting.
+    func changePIN() async {
+        guard !isWorking, let device = selectedDevice, canSubmitPinForm(forChange: true) else { return }
+        let current = pinForm.current
+        let newPIN = pinForm.new
+        isWorking = true
+        busyTitle = "Changing the PIN…"
+        defer { busyTitle = nil }
+        do {
+            try await devices.changePIN(for: device, oldPIN: current, newPIN: newPIN)
+            pinForm.clear()
+            errorText = nil
+            await reloadAccountsIfNeeded()
+            restoreSelectionIfNeeded()
+            route = .accounts
+            isWorking = false
+            setStatus("PIN changed — your passwords are unaffected")
+            onStateChanged?()
+            await runPendingIntentIfPossible()
+        } catch {
+            isWorking = false
+            // Only the current PIN is cleared: retyping a new PIN that was fine is busywork,
+            // and the failure was about the old one.
+            pinForm.current = ""
             let presented = FidoPassErrorPresenter.message(for: error)
             errorText = presented.fullText(retriesRemaining: devices.selectedState?.pinRetriesRemaining)
         }
@@ -601,6 +861,84 @@ final class HUDStore: ObservableObject {
         }
     }
 
+    // MARK: - Reset
+
+    /// Opens the reset wizard for the selected key.
+    ///
+    /// Refuses outright with more than one key connected. After the reconnect this flow needs,
+    /// the path is different and a vendor signature only names a model — there is no way left
+    /// to prove which key came back, and an operation that erases everything may not proceed
+    /// on a guess.
+    func beginReset() async {
+        guard !isWorking, let device = selectedDevice else { return }
+        guard devices.devices.count == 1 else {
+            errorText = "Resetting works with one key connected. Unplug the others first — after the key is reconnected there is no way to tell two apart, and this erases everything on whichever one is there."
+            return
+        }
+        // A user request, so opening the key here is allowed — and the AAGUID it returns is
+        // the only thing that will notice a different key coming back.
+        await devices.refreshStatus(for: device)
+
+        let onKey = accounts.accounts(onDevice: device.path)
+        let readable = isSelectedKeyUnlocked && devices.state(for: device.path)?.hasPIN != false
+        resetFlow = ResetFlow(deviceName: device.displayName,
+                              expectedAAGUID: devices.state(for: device.path)?.aaguid,
+                              doomed: onKey.compactMap { account in
+                                  AccountRef(account).map { ResetFlow.Doomed(ref: $0, kind: account.kind) }
+                              },
+                              accountsReadable: readable,
+                              scopes: onKey.map { LabelScope(credentialId: $0.credentialIdB64) })
+        show(.resetKey)
+    }
+
+    /// Confirmed. From here on the key is what drives the flow.
+    func armReset() {
+        guard var flow = resetFlow, flow.stage == .confirm, flow.canProceed else { return }
+        flow.stage = .unplug
+        resetFlow = flow
+        devices.armReset(expectedAAGUID: flow.expectedAAGUID)
+        errorText = nil
+    }
+
+    func cancelReset() {
+        devices.disarmReset()
+        resetFlow = nil
+        backToAccounts()
+    }
+
+    /// The key came back while a reset was armed. This runs on the millisecond, not after the
+    /// usual refresh: the window in which most keys accept a reset is a few seconds wide.
+    private func performArmedReset(on device: FidoDevice) async {
+        guard var flow = resetFlow, flow.stage == .unplug || flow.stage == .replug else { return }
+        devices.disarmReset()
+        flow.stage = .running
+        resetFlow = flow
+        let scopes = flow.scopes
+
+        do {
+            try await withTouchPrompt(TouchPrompt(title: "Touch the key to confirm the reset",
+                                                  message: "This erases everything on it. The key gives you about 30 seconds.",
+                                                  deviceName: device.displayName)) {
+                try await self.devices.resetKey(device, expectedAAGUID: flow.expectedAAGUID)
+            }
+            // The credential ids these histories are keyed by will never exist again, so the
+            // histories would be orphaned for good. Everything else on the key was already
+            // dropped by `adoptResetKey` closing it.
+            for scope in scopes { labels.forget(scope) }
+            preferences.forgetLastUsed()
+            resetFlow = nil
+            // The key now has no PIN, which is where `effectiveRoute` sends it — straight into
+            // bootstrap. Leaving the user on an empty account list would be the dead end this
+            // whole plan exists to remove.
+            route = .accounts
+            setStatus("Key erased — set a new PIN to use it")
+            onStateChanged?()
+        } catch {
+            resetFlow?.stage = .replug
+            present(error, whenRefused: "The key had already been awake too long — most keys only accept a reset in the first seconds after being plugged in. Unplug it and plug it back in to try again.")
+        }
+    }
+
     // MARK: - Backup key and recovery
 
     func showBackupKey(for ref: AccountRef) async {
@@ -632,12 +970,12 @@ final class HUDStore: ObservableObject {
         let sheet = RecoverySheet(account: account,
                                   labels: known,
                                   deviceDescription: description)
-        isPinnedOpen = true
+        isShowingSystemPanel = true
         onRequestSaveRecoverySheet?(sheet)
     }
 
     func recoverySheetFinished(saved: Bool) {
-        isPinnedOpen = route.holdsPanelOpen
+        isShowingSystemPanel = false
         if saved { setStatus("Recovery sheet saved — it contains no secrets") }
     }
 
@@ -699,6 +1037,11 @@ final class HUDStore: ObservableObject {
     // MARK: - Housekeeping
 
     private func handleKeyClosed(_ path: String) {
+        // The wizard is waiting for exactly this: the key has gone, so the next thing to
+        // happen is it coming back.
+        if resetFlow?.stage == .unplug, devices.armedReset != nil {
+            resetFlow?.stage = .replug
+        }
         // An open editor holds a derived key for one of this key's accounts. Locking has to
         // take that with it, or "locked" would describe the account list while the secrets
         // stayed reachable in another window.
@@ -758,6 +1101,20 @@ final class HUDStore: ObservableObject {
         errorText = FidoPassErrorPresenter.message(for: error).fullText()
     }
 
+    /// Presents an error, supplying the meaning of a bare refusal.
+    ///
+    /// `FIDO_ERR_NOT_ALLOWED` means "not in this state", and which state depends entirely on
+    /// what was attempted — a PIN that already exists, a reset window that has closed. The
+    /// status mapping cannot know that; the operation can.
+    private func present(_ error: Error, whenRefused meaning: String) {
+        let presented = FidoPassErrorPresenter.message(for: error)
+        guard presented.kind == .notAllowed else {
+            errorText = presented.fullText(retriesRemaining: devices.selectedState?.pinRetriesRemaining)
+            return
+        }
+        errorText = [presented.title, meaning].joined(separator: "\n\n")
+    }
+
     private func setStatus(_ text: String) {
         statusText = text
         statusTask?.cancel()
@@ -770,13 +1127,4 @@ final class HUDStore: ObservableObject {
 
 }
 
-private extension HUDRoute {
-    /// Screens the panel must not close under: the user is reading or typing something they
-    /// cannot get back with one click.
-    var holdsPanelOpen: Bool {
-        switch self {
-        case .accounts, .unlock: return false
-        case .enroll, .backupKey, .confirmDelete, .keyInfo: return true
-        }
-    }
-}
+

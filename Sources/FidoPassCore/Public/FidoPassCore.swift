@@ -9,13 +9,15 @@ public final class FidoPassCore {
     private let portableEnrollmentService: PortableEnrollmentServiceProtocol
     private let passwordGenerator: PasswordGenerating
     private let secretEncryption: SecretEncrypting
+    private let deviceManagement: DeviceManaging
 
     public init(deviceLister: DeviceListing? = nil,
                 enrollmentService: EnrollmentServiceProtocol? = nil,
                 portableEnrollmentService: PortableEnrollmentServiceProtocol? = nil,
                 secretDerivationService: SecretDerivationServiceProtocol? = nil,
                 passwordGenerator: PasswordGenerating? = nil,
-                secretEncryption: SecretEncrypting? = nil) {
+                secretEncryption: SecretEncrypting? = nil,
+                deviceManagement: DeviceManaging? = nil) {
         Libfido2Context.initialize()
 
         let resolvedDeviceRepository = DeviceRepository()
@@ -36,6 +38,7 @@ public final class FidoPassCore {
         self.passwordGenerator = resolvedPasswordGenerator
 
         self.secretEncryption = secretEncryption ?? SecretEncryptionService(secretDerivationService: resolvedSecretDerivation)
+        self.deviceManagement = deviceManagement ?? DeviceManagementService(deviceRepository: resolvedDeviceRepository)
     }
 
     public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
@@ -131,5 +134,27 @@ public final class FidoPassCore {
 
     public func deleteAccount(_ account: Account, pin: String?) throws {
         try enrollmentService.deleteAccount(account, pin: pin)
+    }
+
+    // MARK: - Key management
+
+    /// Gives a key that has none its first PIN. Nothing on the key can be used without one.
+    public func setInitialPIN(devicePath: String, newPIN: String) throws {
+        try deviceManagement.setInitialPIN(devicePath: devicePath, newPIN: newPIN)
+    }
+
+    /// Replaces the PIN. Derived passwords are unaffected — the PIN opens the key, it is not
+    /// an input to the derivation.
+    public func changePIN(devicePath: String, oldPIN: String, newPIN: String) throws {
+        try deviceManagement.changePIN(devicePath: devicePath, oldPIN: oldPIN, newPIN: newPIN)
+    }
+
+    /// Erases every credential on the key and its PIN. There is no way back from this.
+    public func resetDevice(devicePath: String,
+                            expectedAAGUID: String? = nil,
+                            timeout: Duration = .seconds(35)) throws {
+        try deviceManagement.reset(devicePath: devicePath,
+                                   expectedAAGUID: expectedAAGUID,
+                                   timeout: timeout)
     }
 }

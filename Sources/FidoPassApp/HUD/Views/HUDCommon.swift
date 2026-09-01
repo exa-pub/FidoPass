@@ -178,16 +178,20 @@ struct HUDFooterView: View {
 struct HUDScreenHeader: View {
     let title: String
     var subtitle: String?
-    let onBack: () -> Void
+    /// Omitted when there is nowhere to go back to. A visible arrow that does nothing is
+    /// worse than no arrow — it reads as a screen that has stopped responding.
+    var onBack: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold))
+            if let onBack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Back")
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.system(size: 13, weight: .semibold))

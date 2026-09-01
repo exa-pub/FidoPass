@@ -67,12 +67,28 @@ final class DeviceRepository: DeviceRepositoryProtocol {
             try Libfido2Context.check(fido_dev_get_cbor_info(device, info), operation: "get_cbor_info")
 
             let rkRemaining = fido_cbor_info_rk_remaining(info)
+            // Zero is what a key reports when it does not enforce a minimum of its own, and
+            // "0" as a minimum PIN length would let an empty PIN through the UI.
+            let declaredMinPIN = fido_cbor_info_minpinlen(info)
 
             return DeviceStatus(pinRetriesRemaining: remainingPINAttempts,
                                 hasPIN: Self.option(named: "clientPin", in: info) == true,
                                 supportsHmacSecret: Self.hasExtension(named: "hmac-secret", in: info),
-                                remainingResidentKeys: rkRemaining >= 0 ? Int(rkRemaining) : nil)
+                                remainingResidentKeys: rkRemaining >= 0 ? Int(rkRemaining) : nil,
+                                minPINLength: declaredMinPIN > 0 ? Int(declaredMinPIN) : nil,
+                                forcePINChange: fido_cbor_info_new_pin_required(info),
+                                aaguid: Self.aaguid(in: info))
         }
+    }
+
+    /// The 16-byte model identifier, hex-encoded. Not an identity — see `DeviceStatus.aaguid`.
+    private static func aaguid(in info: OpaquePointer?) -> String? {
+        let length = fido_cbor_info_aaguid_len(info)
+        guard length > 0, let pointer = fido_cbor_info_aaguid_ptr(info) else { return nil }
+        let bytes = UnsafeBufferPointer(start: pointer, count: length)
+        // An all-zero AAGUID is what a key reports when it declines to identify its model.
+        guard bytes.contains(where: { $0 != 0 }) else { return nil }
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func option(named name: String, in info: OpaquePointer?) -> Bool? {
@@ -97,6 +113,16 @@ final class DeviceRepository: DeviceRepositoryProtocol {
             }
         }
         return false
+    }
+
+    func aaguid(of device: OpaquePointer) throws -> String? {
+        guard let rawInfo = fido_cbor_info_new() else {
+            throw FidoPassError.invalidState("cbor_info_new")
+        }
+        var info: OpaquePointer? = rawInfo
+        defer { fido_cbor_info_free(&info) }
+        try Libfido2Context.check(fido_dev_get_cbor_info(device, info), operation: "get_cbor_info")
+        return Self.aaguid(in: info)
     }
 
     func ensureHmacSecretSupported(_ device: OpaquePointer) throws {

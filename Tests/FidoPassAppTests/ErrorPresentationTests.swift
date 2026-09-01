@@ -56,6 +56,33 @@ final class ErrorPresentationTests: XCTestCase {
         XCTAssertEqual(FidoPassErrorPresenter.message(for: Boom()).title, "boom")
     }
 
+    /// The difference that decides whether a user dares try again: a PIN the key threw out
+    /// for being weak cost nothing, while a PIN it failed to verify cost one of eight.
+    func testAPinRejectedByPolicySaysNoAttemptWasSpent() {
+        let message = FidoPassErrorPresenter.message(for: libfido2(.pinPolicyViolation))
+        XCTAssertEqual(message.kind, .pinRejectedByKey)
+        XCTAssertTrue(message.isRetryable)
+        XCTAssertTrue(message.fullText().contains("No PIN attempt was used"),
+                      "otherwise the user assumes they burned one of the eight")
+    }
+
+    /// Protocol-level PIN failure costs an attempt exactly as a wrong PIN does, so it is
+    /// presented as one — every caller counting attempts would otherwise need to learn a
+    /// second spelling of the same event.
+    func testPinAuthInvalidCountsAsAWrongPin() {
+        let message = FidoPassErrorPresenter.message(for: libfido2(.pinAuthInvalid))
+        XCTAssertEqual(message.kind, .pinInvalid)
+        XCTAssertTrue(message.fullText(retriesRemaining: 2).contains("2 attempts left"))
+    }
+
+    /// A bare refusal means "not in this state", and which state depends on what was
+    /// attempted. The presenter must leave that to the caller instead of inventing it.
+    func testARefusalIsRecognisedSoTheCallerCanExplainIt() {
+        let message = FidoPassErrorPresenter.message(for: libfido2(.notAllowed))
+        XCTAssertEqual(message.kind, .notAllowed)
+        XCTAssertTrue(message.isRetryable)
+    }
+
     func testTouchTimeoutIsRetryable() {
         let message = FidoPassErrorPresenter.message(for: libfido2(.actionTimeout))
         XCTAssertEqual(message.kind, .touchTimeout)

@@ -28,6 +28,9 @@ struct OnboardingView: View {
                 point(icon: "arrow.triangle.2.circlepath",
                       title: "Portable accounts survive a lost key",
                       body: "Their backup key can be entered on a second authenticator. A local account cannot be recovered by any means.")
+                point(icon: "lock.shield",
+                      title: "The key needs its own PIN",
+                      body: "Not your Mac password. FidoPass sets one on a new key and can change it later — but eight wrong entries in a row lock the key for good.")
                 point(icon: "doc.text",
                       title: "Keep a recovery sheet",
                       body: "It lists the account, the labels and the policy — and no secrets. Right-click an account to save one.")
