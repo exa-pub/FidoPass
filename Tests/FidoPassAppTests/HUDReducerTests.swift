@@ -42,6 +42,30 @@ final class HUDReducerTests: XCTestCase {
         XCTAssertEqual(HUDReducer.primaryAction(snapshot), .unlock(devicePath: "/dev/one"))
     }
 
+    /// A key with no PIN cannot be unlocked at all — offering the PIN field is the dead end
+    /// this case exists to remove.
+    func testAKeyWithNoPinIsOfferedOne() {
+        let snapshot = HUDSnapshot(hasDevices: true,
+                                   selectedDevicePath: "/dev/one",
+                                   isUnlocked: false,
+                                   keyHasPIN: false,
+                                   accountRefs: [],
+                                   selection: nil)
+        XCTAssertEqual(HUDReducer.primaryAction(snapshot), .setPIN(devicePath: "/dev/one"))
+    }
+
+    /// "Not asked yet" is not "no PIN". Setting a first PIN on a key that has one is refused
+    /// by the key, so a guess here would produce an error instead of a screen.
+    func testAKeyThatHasNotBeenAskedIsNotAssumedToLackAPin() {
+        let snapshot = HUDSnapshot(hasDevices: true,
+                                   selectedDevicePath: "/dev/one",
+                                   isUnlocked: false,
+                                   keyHasPIN: nil,
+                                   accountRefs: [],
+                                   selection: nil)
+        XCTAssertEqual(HUDReducer.primaryAction(snapshot), .unlock(devicePath: "/dev/one"))
+    }
+
     func testNoKeyAsksForAKey() {
         let snapshot = HUDSnapshot(hasDevices: false,
                                    selectedDevicePath: nil,

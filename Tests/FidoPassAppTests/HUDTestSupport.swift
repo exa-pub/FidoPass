@@ -50,10 +50,19 @@ final class MockKeyBackend: KeyBackend, @unchecked Sendable {
     var listDevicesResults: [[FidoDevice]]?
 
     private(set) var enumerateCallCount = 0
+    /// Counted, not just answered: "did anything open the key" is the assertion, and an
+    /// opened key is one no other process can use.
+    private(set) var statusCallCount = 0
     private(set) var generateCalls: [(accountId: String, label: String)] = []
     private(set) var enrollCalls: [(accountId: String, kind: AccountKind, imported: String?)] = []
     private(set) var deleteCalls: [String] = []
     private(set) var exportCalls: [String] = []
+    private(set) var setInitialPINCalls: [(path: String, pin: String)] = []
+    private(set) var changePINCalls: [(path: String, old: String, new: String)] = []
+    private(set) var resetCalls: [String] = []
+    var setInitialPINError: Error?
+    var changePINError: Error?
+    var resetError: Error?
 
     static func device(path: String = "/dev/one",
                        product: String = "YubiKey 5",
@@ -78,10 +87,12 @@ final class MockKeyBackend: KeyBackend, @unchecked Sendable {
     }
 
     func status(devicePath: String) throws -> DeviceStatus {
-        statusByPath[devicePath] ?? DeviceStatus(pinRetriesRemaining: 5,
-                                                 hasPIN: true,
-                                                 supportsHmacSecret: true,
-                                                 remainingResidentKeys: 20)
+        statusCallCount += 1
+        return statusByPath[devicePath] ?? DeviceStatus(pinRetriesRemaining: 5,
+                                                        hasPIN: true,
+                                                        supportsHmacSecret: true,
+                                                        remainingResidentKeys: 20,
+                                                        aaguid: aaguid)
     }
 
     func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [Account] {
@@ -137,6 +148,41 @@ final class MockKeyBackend: KeyBackend, @unchecked Sendable {
     func deleteAccount(_ account: Account, pin: String) throws {
         deleteCalls.append(account.id)
         accountsByPath[account.devicePath ?? "", default: []].removeAll { $0.id == account.id }
+    }
+
+    func setInitialPIN(devicePath: String, newPIN: String) throws {
+        setInitialPINCalls.append((devicePath, newPIN))
+        if let setInitialPINError { throw setInitialPINError }
+        pins[devicePath] = newPIN
+        statusByPath[devicePath] = DeviceStatus(pinRetriesRemaining: 8,
+                                                hasPIN: true,
+                                                supportsHmacSecret: true,
+                                                remainingResidentKeys: 20)
+    }
+
+    func changePIN(devicePath: String, oldPIN: String, newPIN: String) throws {
+        changePINCalls.append((devicePath, oldPIN, newPIN))
+        if let changePINError { throw changePINError }
+        guard pins[devicePath] == oldPIN else { throw Self.wrongPin }
+        pins[devicePath] = newPIN
+    }
+
+    /// AAGUID the mock claims for every key, so a test can hand back a "different" one.
+    var aaguid: String? = "aa" + String(repeating: "00", count: 15)
+
+    func resetDevice(devicePath: String, expectedAAGUID: String?) throws {
+        resetCalls.append(devicePath)
+        if let resetError { throw resetError }
+        if let expectedAAGUID, let actual = aaguid, actual != expectedAAGUID {
+            throw FidoPassError.invalidState("This is a different security key from the one you started with. Nothing was erased.")
+        }
+        // A reset key is an empty key with no PIN — the state the bootstrap screen exists for.
+        pins[devicePath] = nil
+        accountsByPath[devicePath] = []
+        statusByPath[devicePath] = DeviceStatus(pinRetriesRemaining: nil,
+                                                hasPIN: false,
+                                                supportsHmacSecret: true,
+                                                remainingResidentKeys: 25)
     }
 }
 

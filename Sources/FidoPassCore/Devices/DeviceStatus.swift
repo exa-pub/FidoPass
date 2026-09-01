@@ -13,14 +13,36 @@ public struct DeviceStatus: Hashable, Sendable {
     public var supportsHmacSecret: Bool
     /// Free resident-credential slots, when the authenticator reports them.
     public var remainingResidentKeys: Int?
+    /// Shortest PIN this key will accept, when it says. CTAP2 floors it at 4, but a key may
+    /// raise it — and one that does will reject a PIN this app would otherwise have allowed.
+    public var minPINLength: Int?
+    /// The key insists the PIN be changed before it will do anything else.
+    public var forcePINChange: Bool
+    /// Identifies the authenticator's make and model — deliberately not the individual key.
+    ///
+    /// WebAuthn requires an AAGUID to be shared by at least 100 000 devices, precisely so it
+    /// cannot be used to recognise a person. Useful as a *negative* check — a different
+    /// AAGUID is certainly a different key — and never as a positive one.
+    public var aaguid: String?
 
     public init(pinRetriesRemaining: Int?,
                 hasPIN: Bool,
                 supportsHmacSecret: Bool,
-                remainingResidentKeys: Int?) {
+                remainingResidentKeys: Int?,
+                minPINLength: Int? = nil,
+                forcePINChange: Bool = false,
+                aaguid: String? = nil) {
         self.pinRetriesRemaining = pinRetriesRemaining
         self.hasPIN = hasPIN
         self.supportsHmacSecret = supportsHmacSecret
         self.remainingResidentKeys = remainingResidentKeys
+        self.minPINLength = minPINLength
+        self.forcePINChange = forcePINChange
+        self.aaguid = aaguid
+    }
+
+    /// The PIN rules to enforce in the UI for this key.
+    public var pinPolicy: PinPolicy {
+        PinPolicy(minLengthBytes: minPINLength ?? PinPolicy.ctapFloor)
     }
 }

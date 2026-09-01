@@ -9,6 +9,10 @@ struct UnlockView: View {
     @ObservedObject var store: HUDStore
     @ObservedObject var devices: DeviceStore
     @FocusState private var pinFocused: Bool
+    /// Reading the key's status opens it, and an opened key is seized from every other
+    /// process. One read per appearance of this screen, and only once the user has started
+    /// typing — see `askForStatus`.
+    @State private var statusRequested = false
 
     private var retries: Int? { devices.selectedState?.pinRetriesRemaining }
 
@@ -43,13 +47,30 @@ struct UnlockView: View {
         .onAppear {
             pinFocused = true
             KeyboardLayoutService.preferEnglishLayoutIfNeeded()
-            if let device = store.selectedDevice {
-                Task { await devices.refreshRetries(for: device) }
-            }
         }
         .onChange(of: pinFocused) { focused in
             if focused { KeyboardLayoutService.preferEnglishLayoutIfNeeded() }
         }
+        .onChange(of: store.pinDraft) { draft in
+            if !draft.isEmpty { askForStatus() }
+        }
+    }
+}
+
+extension UnlockView {
+    /// Asks the key how many attempts are left — on the first character typed, not when this
+    /// screen appears.
+    ///
+    /// The screen appears the moment a key is plugged in, and opening a key seizes it
+    /// (`libfido2/src/hid_osx.c`, `kIOHIDOptionsTypeSeizeDevice`). That is how a running
+    /// FidoPass used to break `ykman fido reset`: the key was taken over within a second of
+    /// being connected, before its owner had asked for anything. Typing a PIN is asking; the
+    /// key being present is not. By the time a PIN is finished the count is on screen, which
+    /// is where it matters — before the attempt is spent.
+    fileprivate func askForStatus() {
+        guard !statusRequested, let device = store.selectedDevice else { return }
+        statusRequested = true
+        Task { await devices.refreshStatus(for: device) }
     }
 }
 
@@ -247,11 +268,18 @@ struct KeyInfoView: View {
                     row("PIN configured", status.hasPIN ? "yes" : "no — enrolment needs one")
                     row("hmac-secret", status.supportsHmacSecret ? "supported" : "missing — passwords cannot be derived")
                     row("PIN attempts left", status.pinRetriesRemaining.map(String.init) ?? "not reported")
+                    row("Shortest PIN allowed", status.minPINLength.map(String.init) ?? "4 (the protocol minimum)")
+                    if status.forcePINChange {
+                        row("PIN change", "required before anything else")
+                    }
                     row("Free credential slots", status.remainingResidentKeys.map(String.init) ?? "not reported")
                 } else {
                     HStack { ProgressView().controlSize(.small); Text("Reading…").font(.caption).foregroundStyle(.secondary) }
                 }
-                Text("Device paths change on every reconnect, so they are never stored.")
+                if let aaguid = status?.aaguid {
+                    row("Model (AAGUID)", String(aaguid.prefix(8)))
+                }
+                Text("Device paths change on every reconnect, so they are never stored. The AAGUID names the model, not this key — it is shared by every key like it.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 2)

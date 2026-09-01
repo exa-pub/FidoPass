@@ -52,6 +52,9 @@ protocol KeyBackend: Sendable {
                              label: String,
                              pinProvider: @escaping () -> String?) throws -> EncryptionKey
     func deleteAccount(_ account: Account, pin: String) throws
+    func setInitialPIN(devicePath: String, newPIN: String) throws
+    func changePIN(devicePath: String, oldPIN: String, newPIN: String) throws
+    func resetDevice(devicePath: String, expectedAAGUID: String?) throws
 }
 
 /// The real thing. Every method here blocks on the authenticator, so nothing may call it
@@ -124,6 +127,23 @@ struct LiveKeyBackend: KeyBackend, @unchecked Sendable {
 
     func deleteAccount(_ account: Account, pin: String) throws {
         try core.deleteAccount(account, pin: pin)
+    }
+
+    func setInitialPIN(devicePath: String, newPIN: String) throws {
+        try core.setInitialPIN(devicePath: devicePath, newPIN: newPIN)
+    }
+
+    func changePIN(devicePath: String, oldPIN: String, newPIN: String) throws {
+        try core.changePIN(devicePath: devicePath, oldPIN: oldPIN, newPIN: newPIN)
+    }
+
+    func resetDevice(devicePath: String, expectedAAGUID: String?) throws {
+        // The deadline lives here rather than at the call site: a reset that nobody confirms
+        // blocks this worker thread until the process dies, and no screen should be able to
+        // opt out of that limit by forgetting an argument.
+        try core.resetDevice(devicePath: devicePath,
+                             expectedAAGUID: expectedAAGUID,
+                             timeout: .seconds(35))
     }
 }
 

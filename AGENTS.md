@@ -129,7 +129,7 @@ Sources/FidoPassCore/
   Public/       facade
   Models/       Account, PasswordPolicy, FidoDevice
   Protocols/    DI seams used by tests
-  Devices/      libfido2 device access, capability probing
+  Devices/      libfido2 device access, capability probing, PIN set/change and reset
   Enrollment/   credential creation, enumeration, deletion
   Secrets/      hmac-secret, HKDF, password mapping
   Support/      salts, crypto helpers, libfido2 context
@@ -163,10 +163,27 @@ second must not redraw the whole panel. Keep new state in the store that owns it
 
 - CI has no authenticator. Anything touching `fido_dev_*` must be behind a protocol so
   tests can run without a key.
+- **Opening a key seizes it.** libfido2 on macOS opens with `kIOHIDOptionsTypeSeizeDevice`
+  (`hid_osx.c`), so while FidoPass holds a key open no other process — `ykman`, a browser —
+  can use it. A key is therefore opened **only because the user asked**: opening the panel,
+  typing into the PIN field, pressing a button, running an operation. Never because a key
+  appeared. The app used to read a key's status from `UnlockView.onAppear`, which fires the
+  moment one is plugged in, and that made `ykman fido reset` impossible while FidoPass was
+  running. `listDevices()` is safe — `fido_dev_info_manifest` reads HID properties without
+  opening anything. `DeviceAccessTests` counts the opens.
 - **Device paths (`ioreg://…`) change on every reconnect.** Never persist one or use it as
   a stable identity — it is a session handle only. A vendor/product signature is no better:
-  two keys of a model share it, and changing enabled interfaces changes it.
+  two keys of a model share it, and changing enabled interfaces changes it. Neither is an
+  AAGUID: WebAuthn requires one to be shared by at least 100 000 devices so it cannot
+  identify a person. It is usable only as a negative check — a *different* AAGUID proves a
+  different key came back, which is what the reset flow uses it for — never as a positive one.
 - **A FIDO2 key locks permanently after 8 wrong PINs.** Never write a test, script, or
-  retry loop that guesses PINs against real hardware.
+  retry loop that guesses PINs against real hardware. `PinPolicy` rejects a malformed PIN
+  before it reaches the key precisely so a doomed attempt costs nothing; keep it that way.
+- **`fido_dev_reset` blocks forever by default** (`timeout_ms` is -1, `dev.c`), and the app
+  cannot cancel a pending operation — `fido_dev_cancel` is not surfaced. Always set a
+  deadline with `fido_dev_set_timeout` before a reset. Most keys also refuse a reset issued
+  more than a few seconds after power-up, which is why the flow makes the user reconnect and
+  fires from `DeviceStore.armedReset` rather than from the usual refresh.
 - Resident-key slots are finite (100 on a YubiKey 5). Clean up credentials created during
   manual testing.

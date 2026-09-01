@@ -14,6 +14,12 @@ enum FidoPassErrorPresenter {
         case pinBlocked
         case pinAuthBlocked
         case pinRequired
+        /// The key threw out the PIN itself rather than failing to verify it. Carries the one
+        /// fact the user needs: no attempt was spent.
+        case pinRejectedByKey
+        /// The key will not do this in its current state. What that means depends entirely on
+        /// what was being attempted, so the caller supplies the sentence that follows.
+        case notAllowed
         case noCredentials
         case touchTimeout
         case touchRequired
@@ -99,7 +105,10 @@ enum FidoPassErrorPresenter {
 
     private static func message(for status: FidoStatus, details: String?) -> Message {
         switch status {
-        case .pinInvalid:
+        // Same consequence as a plain wrong PIN — an attempt is gone — so it is presented as
+        // one. Keeping it a separate kind would only mean every caller counting attempts had
+        // to learn about a second spelling of "wrong PIN".
+        case .pinInvalid, .pinAuthInvalid:
             return Message(kind: .pinInvalid,
                            title: "Incorrect PIN",
                            recovery: nil,
@@ -126,6 +135,20 @@ enum FidoPassErrorPresenter {
                            recovery: "Set a PIN on the key before enrolling accounts.",
                            details: details,
                            isRetryable: false)
+
+        case .pinPolicyViolation:
+            return Message(kind: .pinRejectedByKey,
+                           title: "The key will not accept that PIN",
+                           recovery: "Choose a different one — longer, and not a run of repeated or consecutive digits. No PIN attempt was used.",
+                           details: details,
+                           isRetryable: true)
+
+        case .notAllowed:
+            return Message(kind: .notAllowed,
+                           title: "The key refused the request",
+                           recovery: "It allows this only in a particular state, and it is not in that state now.",
+                           details: details,
+                           isRetryable: true)
 
         case .noCredentials:
             return Message(kind: .noCredentials,
