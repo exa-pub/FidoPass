@@ -24,6 +24,7 @@ swift test --filter GoldenVectors     # password-derivation contract
 bash scripts/build_app.sh             # .app bundle — this is how you run it
 open .build/release/FidoPass.app      # run
 bash scripts/create_dmg.sh            # distributable DMG
+bash scripts/notarize.sh              # signed, notarised, stapled DMG — needs Developer ID
 ```
 
 `swift run FidoPassApp` does not work as a way to start the app: it is a menu-bar
@@ -44,6 +45,11 @@ FidoPassApp  (AppKit shell + SwiftUI)  ──depends on──▶  FidoPassCore  
 - `FidoPassCore` — domain logic. No AppKit, no SwiftUI, no UI state.
 - `FidoPassApp` — UI only. Talks to the core through `KeyBackend`, never directly.
 - `CLibfido2` — system-library shim.
+
+Release bundles are signed with a Developer ID and notarised. `build_app.sh` and
+`create_dmg.sh` sign whatever they produce when `FIDOPASS_SIGN_IDENTITY` names an identity,
+and fall back to an ad-hoc signature when it is unset — so a machine without a certificate
+still builds. Signing runs last: `install_name_tool` invalidates anything signed before it.
 
 The app is a menu-bar HUD, not a window:
 
@@ -75,7 +81,9 @@ kept open across a save panel or a key touch, and does not give the PIN field fo
    generator — if it fails you broke someone's logins, so never update the expectations to
    match new behaviour.
 4. **Never log, print, or write secrets** — PINs, hmac-secret output, derived passwords,
-   portable master keys. Not even in debug builds.
+   portable master keys. Not even in debug builds. The same applies to the build: signing
+   certificates, notarisation keys and keychain passwords never reach a log, so no `set -x`
+   in the scripts or CI steps that handle them.
 5. **Every `fido_*_new()` needs a paired free via `defer`.** Use
    `DeviceRepository.withOpenedDevice` rather than opening devices by hand.
 6. **Account-level password policy is not persisted.** `revision` and `policy` are rebuilt

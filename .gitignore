@@ -5,3 +5,9 @@
 *.log
 libfido2/
 *.tmp/
+# Signing material — never commit
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+FidoPass.zip

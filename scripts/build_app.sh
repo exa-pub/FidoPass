@@ -158,14 +158,35 @@ MANIFEST="${RES_DIR}/DEPENDENCIES.txt"
   done
 } > "$MANIFEST"
 
-# Re-sign the app bundle after mutating embedded dylibs (ad-hoc signature).
+# Re-sign the app bundle after mutating embedded dylibs.
+#
+# This has to be the last thing that touches these binaries: install_name_tool rewrites the
+# load commands above and invalidates any signature made before it. Signing also runs
+# inside-out — every embedded dylib first, the bundle last.
+#
+# Two modes. Without FIDOPASS_SIGN_IDENTITY the signature is ad-hoc, which is all a local
+# build needs and all a machine without a certificate can do. With it the bundle is signed
+# for distribution: Developer ID, the hardened runtime and a trusted timestamp — the three
+# things Apple requires before it will even accept a notarisation submission.
+SIGN_IDENTITY="${FIDOPASS_SIGN_IDENTITY:-}"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  CODESIGN_FLAGS=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
+  SIGNING_MODE="Developer ID — ${SIGN_IDENTITY}"
+else
+  CODESIGN_FLAGS=(--force --timestamp=none --sign -)
+  SIGNING_MODE="ad-hoc (set FIDOPASS_SIGN_IDENTITY for a distributable signature)"
+fi
+
 if command -v codesign >/dev/null 2>&1; then
+  echo "Signing: ${SIGNING_MODE}"
   if [[ -d "$FRAMEWORKS_DIR" ]]; then
     while IFS= read -r -d '' dylib; do
-      codesign --force --sign - --timestamp=none "$dylib"
+      codesign "${CODESIGN_FLAGS[@]}" "$dylib"
     done < <(find "$FRAMEWORKS_DIR" -type f -name '*.dylib' -print0)
   fi
-  codesign --force --sign - --timestamp=none "$APP_DIR"
+  # Deliberately no --deep: Apple does not recommend it for signing, and everything nested
+  # was just signed explicitly by the loop above.
+  codesign "${CODESIGN_FLAGS[@]}" "$APP_DIR"
 else
   echo "[warn] codesign tool not available; bundle will remain unsigned" >&2
 fi
@@ -177,6 +198,20 @@ echo "Verifying the signature…"
 if ! codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -3; then
   echo "[error] the signed bundle does not verify" >&2
   exit 1
+fi
+
+# Assert the hardened runtime here rather than discovering it is missing minutes later,
+# when Apple rejects the submission for it.
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  # Captured rather than piped into grep: under `set -o pipefail`, `grep -q` exits on the
+  # first match and hands codesign a SIGPIPE, so the pipeline fails precisely when the flag
+  # is present.
+  signature_info="$(codesign --display --verbose=2 "$APP_DIR" 2>&1)"
+  if [[ "$signature_info" != *"(runtime)"* ]]; then
+    echo "[error] signed with an identity but the hardened runtime is not enabled" >&2
+    exit 1
+  fi
+  echo "Hardened runtime: enabled"
 fi
 
 echo "Bundled libraries:"

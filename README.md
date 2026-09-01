@@ -32,12 +32,9 @@ leaves out characters that are easy to confuse: `i l o I L O 0 1`.
 Download the DMG from the [latest release](https://github.com/exa-pub/FidoPass/releases/latest)
 and drag FidoPass into Applications.
 
-Releases are signed ad-hoc rather than notarised, so macOS calls the app damaged on first
-launch. Right-click it and choose **Open**, or clear the quarantine flag:
-
-```bash
-xattr -d com.apple.quarantine /Applications/FidoPass.app
-```
+Releases are signed and notarised by Apple, so the DMG opens normally. The first launch
+asks for confirmation because the app was downloaded from the internet — that is the usual
+macOS prompt, not an error.
 
 ## First run
 
