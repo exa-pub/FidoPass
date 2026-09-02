@@ -87,6 +87,11 @@ jobs:
       - name: Run unit tests
         run: swift test --enable-code-coverage --parallel
 
+      - name: Build with warnings as errors
+        # Every target is in the Swift 6 language mode; a concurrency warning must not
+        # accumulate unnoticed. Incremental after the test build, so this is cheap.
+        run: swift build -Xswiftc -warnings-as-errors
+
       - name: Archive code coverage
         if: always()
         run: |
