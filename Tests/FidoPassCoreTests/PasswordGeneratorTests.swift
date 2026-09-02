@@ -7,19 +7,17 @@ final class PasswordGeneratorTests: XCTestCase {
     func testGeneratePasswordUsesDerivedSecretForResidentAccount() throws {
         let secretService = MockSecretDerivationService()
         let secret = Data(repeating: 0xAA, count: 32)
-        secretService.deriveSecretClosure = { account, label, requireUV, _ in
-            XCTAssertEqual(account.id, "resident")
+        secretService.deriveSecretClosure = { handle, label, revision, _ in
+            XCTAssertEqual(handle.id, "resident")
             XCTAssertEqual(label, "label")
-            XCTAssertTrue(requireUV)
+            XCTAssertEqual(revision, 1)
             return secret
         }
         let generator = PasswordGenerator(secretDerivationService: secretService)
-        var account = Account.fixture(id: "resident")
-        account.policy = PasswordPolicy(length: 16, useLower: true, useUpper: false, useDigits: false, useSymbols: false)
-        let password = try generator.generatePassword(account: account,
+        let account = AccountHandle.fixture(id: "resident")
+        let password = try generator.generatePassword(account,
                                                        label: "label",
-                                                       policy: PasswordPolicy(length: 8, useLower: true, useUpper: true, useDigits: true, useSymbols: false),
-                                                       requireUV: true,
+                                                       parameters: DerivationParameters(revision: 1, policy: PasswordPolicy(length: 8, useLower: true, useUpper: true, useDigits: true, useSymbols: false)),
                                                        pinProvider: nil)
         XCTAssertEqual(password.count, 8)
         XCTAssertEqual(secretService.deriveSecretCalls.count, 1)
@@ -29,19 +27,18 @@ final class PasswordGeneratorTests: XCTestCase {
     func testGeneratePasswordPortableFlowUsesImportedKey() throws {
         let secretService = MockSecretDerivationService()
         let fixed = Data(repeating: 0x0F, count: 32)
-        secretService.deriveFixedClosure = { _, _, _ in fixed }
+        secretService.deriveFixedClosure = { _, _ in fixed }
         let generator = PasswordGenerator(secretDerivationService: secretService)
 
         let imported = Data(repeating: 0xF0, count: 32)
         let external = Data(zip(imported, fixed).map { $0 ^ $1 })
-        let account = Account.fixture(id: "portable",
+        let account = AccountHandle.fixture(id: "portable",
                                       kind: .portable,
                                       portable: PortablePayload(external: external))
 
-        let password = try generator.generatePassword(account: account,
+        let password = try generator.generatePassword(account,
                                                        label: "example",
-                                                       policy: nil,
-                                                       requireUV: true,
+                                                       parameters: .v1,
                                                        pinProvider: nil)
 
         let salt = SaltFactory.portableLabelSalt("example")
@@ -49,14 +46,14 @@ final class PasswordGeneratorTests: XCTestCase {
         let mac = HMAC<SHA256>.authenticationCode(for: salt, using: importedKey)
         let secret = Data(mac)
         let hkdfKey = SymmetricKey(data: secret)
-        let info = Data("fidopass|pw|v\(account.policy.version)".utf8)
+        let info = Data("fidopass|pw|v\(DerivationParameters.v1.policy.version)".utf8)
         let saltData = Data("pw-map".utf8)
         let derived = HKDF<SHA256>.deriveKey(inputKeyMaterial: hkdfKey,
                                              salt: saltData,
                                              info: info,
-                                             outputByteCount: max(64, account.policy.length * 3))
+                                             outputByteCount: max(64, DerivationParameters.v1.policy.length * 3))
         let material = Data(derived.withUnsafeBytes { Data($0) })
-        let expected = PasswordEngine.mapToPassword(material, policy: account.policy)
+        let expected = PasswordEngine.mapToPassword(material, policy: DerivationParameters.v1.policy)
 
         XCTAssertEqual(password, expected)
         XCTAssertEqual(secretService.deriveSecretCalls.count, 0)
@@ -69,11 +66,10 @@ final class PasswordGeneratorTests: XCTestCase {
             throw TestError.generic("failed")
         }
         let generator = PasswordGenerator(secretDerivationService: secretService)
-        let account = Account.fixture()
-        XCTAssertThrowsError(try generator.generatePassword(account: account,
+        let account = AccountHandle.fixture()
+        XCTAssertThrowsError(try generator.generatePassword(account,
                                                              label: "label",
-                                                             policy: nil,
-                                                             requireUV: true,
+                                                             parameters: .v1,
                                                              pinProvider: nil)) { error in
             XCTAssertEqual(error as? TestError, .generic("failed"))
         }
@@ -81,14 +77,13 @@ final class PasswordGeneratorTests: XCTestCase {
 
     func testGeneratePasswordFailsForInvalidPortablePayload() {
         let secretService = MockSecretDerivationService()
-        secretService.deriveFixedClosure = { _, _, _ in Data(repeating: 0x00, count: 32) }
+        secretService.deriveFixedClosure = { _, _ in Data(repeating: 0x00, count: 32) }
         let generator = PasswordGenerator(secretDerivationService: secretService)
         // A portable account whose payload never made it back from the authenticator.
-        let account = Account.fixture(kind: .portable, portable: nil)
-        XCTAssertThrowsError(try generator.generatePassword(account: account,
+        let account = AccountHandle.fixture(kind: .portable, portable: nil)
+        XCTAssertThrowsError(try generator.generatePassword(account,
                                                              label: "label",
-                                                             policy: nil,
-                                                             requireUV: true,
+                                                             parameters: .v1,
                                                              pinProvider: nil))
     }
 }

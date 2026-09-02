@@ -9,19 +9,16 @@ final class DerivationContractTests: XCTestCase {
 
     func testSameInputAlwaysProducesSamePassword() throws {
         let generator = PasswordGenerator(secretDerivationService: Self.secretService())
-        var account = Account.fixture(id: "acct")
-        account.policy = PasswordPolicy()
+        let account = AccountHandle.fixture(id: "acct")
 
-        let first = try generator.generatePassword(account: account,
+        let first = try generator.generatePassword(account,
                                                    label: "vault",
-                                                   policy: nil,
-                                                   requireUV: true,
+                                                   parameters: .v1,
                                                    pinProvider: nil)
         for _ in 0..<200 {
-            let next = try generator.generatePassword(account: account,
+            let next = try generator.generatePassword(account,
                                                       label: "vault",
-                                                      policy: nil,
-                                                      requireUV: true,
+                                                      parameters: .v1,
                                                       pinProvider: nil)
             XCTAssertEqual(next, first)
         }
@@ -52,23 +49,19 @@ final class DerivationContractTests: XCTestCase {
 
     func testPolicyChangesProduceDifferentPasswords() throws {
         let generator = PasswordGenerator(secretDerivationService: Self.secretService())
-        var account = Account.fixture(id: "acct")
-        account.policy = PasswordPolicy()
+        let account = AccountHandle.fixture(id: "acct")
 
-        let standard = try generator.generatePassword(account: account,
+        let standard = try generator.generatePassword(account,
                                                       label: "vault",
-                                                      policy: nil,
-                                                      requireUV: true,
+                                                      parameters: .v1,
                                                       pinProvider: nil)
-        let noSymbols = try generator.generatePassword(account: account,
+        let noSymbols = try generator.generatePassword(account,
                                                        label: "vault",
-                                                       policy: PasswordPolicy(length: 20, useSymbols: false),
-                                                       requireUV: true,
+                                                       parameters: DerivationParameters(revision: 1, policy: PasswordPolicy(length: 20, useSymbols: false)),
                                                        pinProvider: nil)
-        let otherVersion = try generator.generatePassword(account: account,
+        let otherVersion = try generator.generatePassword(account,
                                                           label: "vault",
-                                                          policy: PasswordPolicy(length: 20, version: 2),
-                                                          requireUV: true,
+                                                          parameters: DerivationParameters(revision: 1, policy: PasswordPolicy(length: 20, version: 2)),
                                                           pinProvider: nil)
         XCTAssertNotEqual(standard, noSymbols)
         XCTAssertNotEqual(standard, otherVersion, "policy.version feeds HKDF info and must change the output")
@@ -85,7 +78,7 @@ final class DerivationContractTests: XCTestCase {
     private static func secretService() -> MockSecretDerivationService {
         let service = MockSecretDerivationService()
         service.deriveSecretClosure = { _, _, _, _ in Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 11 &+ 5) }) }
-        service.deriveFixedClosure = { _, _, _ in Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 1) }) }
+        service.deriveFixedClosure = { _, _ in Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 1) }) }
         return service
     }
 }

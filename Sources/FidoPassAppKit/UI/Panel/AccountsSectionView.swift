@@ -18,17 +18,16 @@ struct AccountsSectionView: View {
         } else {
             VStack(spacing: 4) {
                 ForEach(Array(visible.enumerated()), id: \.element) { index, account in
-                    if let ref = AccountRef(account) {
-                        AccountRowView(store: store,
-                                       generation: generation,
-                                       labels: labels,
-                                       editor: store.labelEditor,
-                                       account: account,
-                                       ref: ref,
-                                       index: index,
-                                       isSelected: store.selection == ref,
-                                       isOnlyAccount: visible.count == 1)
-                    }
+                    let ref = AccountRef(account)
+                    AccountRowView(store: store,
+                                   generation: generation,
+                                   labels: labels,
+                                   editor: store.labelEditor,
+                                   account: account,
+                                   ref: ref,
+                                   index: index,
+                                   isSelected: store.selection == ref,
+                                   isOnlyAccount: visible.count == 1)
                 }
             }
             .padding(.horizontal, 8)
@@ -67,7 +66,7 @@ struct AccountRowView: View {
     @ObservedObject var generation: GenerationStore
     @ObservedObject var labels: LabelStore
     @ObservedObject var editor: LabelEditor
-    let account: Account
+    let account: AccountHandle
     let ref: AccountRef
     let index: Int
     let isSelected: Bool
@@ -321,7 +320,7 @@ struct ResultView: View {
 /// One menu, reachable two ways: right-click on the row, or the hover `···`.
 struct AccountActionsMenu: View {
     @ObservedObject var store: PanelStore
-    let account: Account
+    let account: AccountHandle
     let ref: AccountRef
 
     var body: some View {

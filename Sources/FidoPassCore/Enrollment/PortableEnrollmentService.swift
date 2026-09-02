@@ -17,23 +17,18 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
     /// assertion that derives this device's fixed component. Callers must say so, or the
     /// second prompt looks like the app hanging.
     func enrollPortable(accountId: String,
-                        requireUV: Bool,
                         devicePath: String,
                         askPIN: (@Sendable () -> String?)?,
                         importedKeyB64: String?,
-                        onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
+                        onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (AccountHandle, String?) {
         onStep?(.creatingCredential)
-        var account = try enrollmentService.enroll(accountId: accountId,
-                                                   kind: .portable,
-                                                   displayName: "",
-                                                   requireUV: requireUV,
-                                                   devicePath: devicePath,
-                                                   askPIN: askPIN)
+        var handle = try enrollmentService.enroll(accountId: accountId,
+                                                  kind: .portable,
+                                                  devicePath: devicePath,
+                                                  askPIN: askPIN)
 
         onStep?(.derivingBackupKey)
-        let fixed = try secretDerivationService.deriveFixedComponent(account: account,
-                                                                     requireUV: requireUV,
-                                                                     pinProvider: askPIN)
+        let fixed = try secretDerivationService.deriveFixedComponent(handle, pinProvider: askPIN)
         guard fixed.count == PortablePayload.externalByteCount else {
             throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
         }
@@ -52,28 +47,23 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
         guard let payload = PortablePayload(external: Data(zip(importedKey, fixed).map { $0 ^ $1 })) else {
             throw FidoPassError.invalidState("Failed to build portable payload")
         }
-        account.portable = payload
+        handle.account.portable = payload
 
         onStep?(.savingPayload)
-        try enrollmentService.updateCredentialUserInfo(account: account,
-                                                       requireUV: requireUV,
-                                                       pinProvider: askPIN)
+        try enrollmentService.updateCredentialUserInfo(handle, pinProvider: askPIN)
 
-        return (account, importedKeyB64 == nil ? importedKey.base64EncodedString() : nil)
+        return (handle, importedKeyB64 == nil ? importedKey.base64EncodedString() : nil)
     }
 
-    func exportImportedKey(_ account: Account,
-                           requireUV: Bool,
+    func exportImportedKey(_ handle: AccountHandle,
                            pinProvider: (@Sendable () -> String?)?) throws -> String {
-        guard account.kind == .portable else {
+        guard handle.account.kind == .portable else {
             throw FidoPassError.invalidState("Account is not portable")
         }
-        guard let payload = account.portable else {
+        guard let payload = handle.account.portable else {
             throw FidoPassError.invalidState("Portable account is missing its key material")
         }
-        let fixed = try secretDerivationService.deriveFixedComponent(account: account,
-                                                                     requireUV: requireUV,
-                                                                     pinProvider: pinProvider)
+        let fixed = try secretDerivationService.deriveFixedComponent(handle, pinProvider: pinProvider)
         guard fixed.count == PortablePayload.externalByteCount else {
             throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
         }

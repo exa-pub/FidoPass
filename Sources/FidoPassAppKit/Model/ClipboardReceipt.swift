@@ -25,7 +25,7 @@ struct ClipboardReceipt: Equatable {
     /// Nil once the clipboard no longer holds the value.
     var clearsAt: Date?
 
-    func belongs(to account: Account) -> Bool { ref.matches(account) }
+    func belongs(to handle: AccountHandle) -> Bool { ref.matches(handle) }
 
     /// Whole seconds left before the clipboard is wiped, or nil once it is gone.
     func secondsUntilClear(at now: Date) -> Int? {

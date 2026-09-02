@@ -22,25 +22,25 @@ protocol KeyDeviceBackend: Sendable {
 
 /// FidoPass accounts on a key: enumerating, creating, deriving from, deleting.
 protocol KeyAccountBackend: Sendable {
-    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [Account]
+    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [AccountHandle]
     func enroll(accountId: String,
                 kind: AccountKind,
                 devicePath: String,
-                askPIN: @escaping @Sendable () -> String?) throws -> Account
+                askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle
     func enrollPortable(accountId: String,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
                         importedKeyB64: String?,
-                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (Account, String?)
-    func generatePassword(account: Account,
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, String?)
+    func generatePassword(_ handle: AccountHandle,
                           label: String,
                           pinProvider: @escaping @Sendable () -> String?) throws -> String
-    func exportImportedKey(_ account: Account,
+    func exportImportedKey(_ handle: AccountHandle,
                            pinProvider: @escaping @Sendable () -> String?) throws -> String
-    func deriveEncryptionKey(account: Account,
+    func deriveEncryptionKey(_ handle: AccountHandle,
                              label: String,
                              pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey
-    func deleteAccount(_ account: Account, pin: String) throws
+    func deleteAccount(_ handle: AccountHandle, pin: String) throws
     /// Seals and opens text under a derived key. Pure computation — no device — which is why
     /// the editor gets this rather than the whole backend.
     var cipher: SecretCipher { get }

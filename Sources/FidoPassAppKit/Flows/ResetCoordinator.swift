@@ -71,9 +71,7 @@ final class ResetCoordinator: ObservableObject {
         error = nil
         flow = ResetFlow(deviceName: device.displayName,
                          expectedAAGUID: state?.aaguid,
-                         doomed: onKey.compactMap { account in
-                             AccountRef(account).map { ResetFlow.Doomed(ref: $0, kind: account.kind) }
-                         },
+                         doomed: onKey.map { ResetFlow.Doomed(ref: AccountRef($0), kind: $0.kind) },
                          accountsReadable: readable,
                          scopes: onKey.map { LabelScope(credentialId: $0.credentialIdB64) })
     }

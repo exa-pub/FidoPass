@@ -7,27 +7,19 @@ final class SecretDerivationService: SecretDeriving, Sendable {
         self.hmacSecretService = hmacSecretService
     }
 
-    func deriveSecret(account: Account,
+    func deriveSecret(_ handle: AccountHandle,
                       label: String,
-                      requireUV: Bool,
+                      revision: Int,
                       pinProvider: (@Sendable () -> String?)?) throws -> Data {
         let salt = SaltFactory.residentSalt(label: label,
-                                            rpId: account.rpId,
-                                            accountId: account.id,
-                                            revision: account.revision)
-        return try hmacSecretService.perform(account: account,
-                                             salt: salt,
-                                             requireUV: requireUV,
-                                             pinProvider: pinProvider)
+                                            rpId: handle.account.rpId,
+                                            accountId: handle.account.id,
+                                            revision: revision)
+        return try hmacSecretService.perform(handle, salt: salt, pinProvider: pinProvider)
     }
 
-    func deriveFixedComponent(account: Account,
-                              requireUV: Bool,
+    func deriveFixedComponent(_ handle: AccountHandle,
                               pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        let salt = SaltFactory.fixedComponentSalt()
-        return try hmacSecretService.perform(account: account,
-                                             salt: salt,
-                                             requireUV: requireUV,
-                                             pinProvider: pinProvider)
+        try hmacSecretService.perform(handle, salt: SaltFactory.fixedComponentSalt(), pinProvider: pinProvider)
     }
 }

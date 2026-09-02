@@ -64,51 +64,37 @@ public final class MockEnrollmentService: Enrolling, @unchecked Sendable {
     public struct EnrollCall: Equatable {
         public let accountId: String
         public let kind: AccountKind
-        public let displayName: String
-        public let requireUV: Bool
         public let devicePath: String
     }
 
     public init() {}
 
-    public var enrollClosure: ((String, AccountKind, String, Bool, String, (@Sendable () -> String?)?) throws -> Account)?
+    public var enrollClosure: ((String, AccountKind, String, (@Sendable () -> String?)?) throws -> AccountHandle)?
     public private(set) var enrollCalls: [EnrollCall] = []
 
-    public var enumerateClosure: ((String, String, String?) throws -> [Account])?
+    public var enumerateClosure: ((String, String, String?) throws -> [AccountHandle])?
     public private(set) var enumerateCalls: [(String, String, String?)] = []
 
-    public var deleteClosure: ((Account, String?) throws -> Void)?
-    public private(set) var deleteCalls: [(Account, String?)] = []
+    public var deleteClosure: ((AccountHandle, String?) throws -> Void)?
+    public private(set) var deleteCalls: [(AccountHandle, String?)] = []
 
-    public var updateClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> Void)?
-    public private(set) var updateCalls: [(Account, Bool)] = []
+    public var updateClosure: ((AccountHandle, (@Sendable () -> String?)?) throws -> Void)?
+    public private(set) var updateCalls: [AccountHandle] = []
 
     public func enroll(accountId: String,
                        kind: AccountKind,
-                       displayName: String,
-                       requireUV: Bool,
                        devicePath: String,
-                       askPIN: (@Sendable () -> String?)?) throws -> Account {
-        enrollCalls.append(EnrollCall(accountId: accountId,
-                                      kind: kind,
-                                      displayName: displayName,
-                                      requireUV: requireUV,
-                                      devicePath: devicePath))
+                       askPIN: (@Sendable () -> String?)?) throws -> AccountHandle {
+        enrollCalls.append(EnrollCall(accountId: accountId, kind: kind, devicePath: devicePath))
         if let closure = enrollClosure {
-            return try closure(accountId, kind, displayName, requireUV, devicePath, askPIN)
+            return try closure(accountId, kind, devicePath, askPIN)
         }
-        return Account(id: accountId,
-                       kind: kind,
-                       displayName: displayName,
-                       credentialIdB64: Data(accountId.utf8).base64EncodedString(),
-                       revision: 1,
-                       policy: PasswordPolicy(),
-                       devicePath: devicePath)
+        return AccountHandle.fixture(id: accountId, kind: kind, devicePath: devicePath)
     }
 
     public func enumerateAccounts(rpId: String,
                                   devicePath: String,
-                                  pin: String?) throws -> [Account] {
+                                  pin: String?) throws -> [AccountHandle] {
         enumerateCalls.append((rpId, devicePath, pin))
         if let closure = enumerateClosure {
             return try closure(rpId, devicePath, pin)
@@ -116,55 +102,46 @@ public final class MockEnrollmentService: Enrolling, @unchecked Sendable {
         return []
     }
 
-    public func deleteAccount(_ account: Account, pin: String?) throws {
-        deleteCalls.append((account, pin))
-        try deleteClosure?(account, pin)
+    public func deleteAccount(_ handle: AccountHandle, pin: String?) throws {
+        deleteCalls.append((handle, pin))
+        try deleteClosure?(handle, pin)
     }
 
-    public func updateCredentialUserInfo(account: Account,
-                                         requireUV: Bool,
+    public func updateCredentialUserInfo(_ handle: AccountHandle,
                                          pinProvider: (@Sendable () -> String?)?) throws {
-        updateCalls.append((account, requireUV))
-        try updateClosure?(account, requireUV, pinProvider)
+        updateCalls.append(handle)
+        try updateClosure?(handle, pinProvider)
     }
 }
 
 public final class MockPortableEnrollmentService: PortableEnrolling, @unchecked Sendable {
     public init() {}
 
-    public var enrollPortableClosure: ((String, Bool, String, (@Sendable () -> String?)?, String?) throws -> (Account, String?))?
+    public var enrollPortableClosure: ((String, String, (@Sendable () -> String?)?, String?) throws -> (AccountHandle, String?))?
     public private(set) var reportedSteps: [PortableEnrollmentStep] = []
-    public private(set) var enrollPortableCalls: [(String, Bool, String)] = []
+    public private(set) var enrollPortableCalls: [(String, String)] = []
 
-    public var exportClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> String)?
-    public private(set) var exportCalls: [(Account, Bool)] = []
+    public var exportClosure: ((AccountHandle, (@Sendable () -> String?)?) throws -> String)?
+    public private(set) var exportCalls: [AccountHandle] = []
 
     public func enrollPortable(accountId: String,
-                               requireUV: Bool,
                                devicePath: String,
                                askPIN: (@Sendable () -> String?)?,
                                importedKeyB64: String?,
-                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
-        enrollPortableCalls.append((accountId, requireUV, devicePath))
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (AccountHandle, String?) {
+        enrollPortableCalls.append((accountId, devicePath))
         onStep.map { report in [PortableEnrollmentStep.creatingCredential].forEach(report) }
         if let closure = enrollPortableClosure {
-            return try closure(accountId, requireUV, devicePath, askPIN, importedKeyB64)
+            return try closure(accountId, devicePath, askPIN, importedKeyB64)
         }
-        return (Account(id: accountId,
-                        kind: .portable,
-                        credentialIdB64: Data(accountId.utf8).base64EncodedString(),
-                        revision: 1,
-                        policy: PasswordPolicy(),
-                        devicePath: devicePath),
-                nil)
+        return (AccountHandle.fixture(id: accountId, kind: .portable, devicePath: devicePath), nil)
     }
 
-    public func exportImportedKey(_ account: Account,
-                                  requireUV: Bool,
+    public func exportImportedKey(_ handle: AccountHandle,
                                   pinProvider: (@Sendable () -> String?)?) throws -> String {
-        exportCalls.append((account, requireUV))
+        exportCalls.append(handle)
         if let closure = exportClosure {
-            return try closure(account, requireUV, pinProvider)
+            return try closure(handle, pinProvider)
         }
         return ""
     }
@@ -173,29 +150,28 @@ public final class MockPortableEnrollmentService: PortableEnrolling, @unchecked 
 public final class MockSecretDerivationService: SecretDeriving, @unchecked Sendable {
     public init() {}
 
-    public var deriveSecretClosure: ((Account, String, Bool, (@Sendable () -> String?)?) throws -> Data)?
-    public private(set) var deriveSecretCalls: [(Account, String, Bool)] = []
+    public var deriveSecretClosure: ((AccountHandle, String, Int, (@Sendable () -> String?)?) throws -> Data)?
+    public private(set) var deriveSecretCalls: [(AccountHandle, String, Int)] = []
 
-    public var deriveFixedClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> Data)?
-    public private(set) var deriveFixedCalls: [(Account, Bool)] = []
+    public var deriveFixedClosure: ((AccountHandle, (@Sendable () -> String?)?) throws -> Data)?
+    public private(set) var deriveFixedCalls: [AccountHandle] = []
 
-    public func deriveSecret(account: Account,
+    public func deriveSecret(_ handle: AccountHandle,
                              label: String,
-                             requireUV: Bool,
+                             revision: Int,
                              pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        deriveSecretCalls.append((account, label, requireUV))
+        deriveSecretCalls.append((handle, label, revision))
         if let closure = deriveSecretClosure {
-            return try closure(account, label, requireUV, pinProvider)
+            return try closure(handle, label, revision, pinProvider)
         }
         return Data()
     }
 
-    public func deriveFixedComponent(account: Account,
-                                     requireUV: Bool,
+    public func deriveFixedComponent(_ handle: AccountHandle,
                                      pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        deriveFixedCalls.append((account, requireUV))
+        deriveFixedCalls.append(handle)
         if let closure = deriveFixedClosure {
-            return try closure(account, requireUV, pinProvider)
+            return try closure(handle, pinProvider)
         }
         return Data()
     }
@@ -204,17 +180,16 @@ public final class MockSecretDerivationService: SecretDeriving, @unchecked Senda
 public final class MockPasswordGenerator: PasswordGenerating, @unchecked Sendable {
     public init() {}
 
-    public var generateClosure: ((Account, String, PasswordPolicy?, Bool, (@Sendable () -> String?)?) throws -> String)?
-    public private(set) var generateCalls: [(Account, String, PasswordPolicy?, Bool)] = []
+    public var generateClosure: ((AccountHandle, String, DerivationParameters, (@Sendable () -> String?)?) throws -> String)?
+    public private(set) var generateCalls: [(AccountHandle, String, DerivationParameters)] = []
 
-    public func generatePassword(account: Account,
+    public func generatePassword(_ handle: AccountHandle,
                                  label: String,
-                                 policy override: PasswordPolicy?,
-                                 requireUV: Bool,
+                                 parameters: DerivationParameters,
                                  pinProvider: (@Sendable () -> String?)?) throws -> String {
-        generateCalls.append((account, label, override, requireUV))
+        generateCalls.append((handle, label, parameters))
         if let closure = generateClosure {
-            return try closure(account, label, override, requireUV, pinProvider)
+            return try closure(handle, label, parameters, pinProvider)
         }
         return "password"
     }
@@ -223,20 +198,22 @@ public final class MockPasswordGenerator: PasswordGenerating, @unchecked Sendabl
 public extension Account {
     static func fixture(id: String = "account",
                         kind: AccountKind = .local,
-                        displayName: String = "user",
                         credentialId: Data? = nil,
-                        revision: Int = 1,
-                        policy: PasswordPolicy = PasswordPolicy(),
-                        devicePath: String? = "/dev/mock",
                         portable: PortablePayload? = nil) -> Account {
-        let credential = credentialId ?? Data(id.utf8)
-        return Account(id: id,
-                       kind: kind,
-                       displayName: displayName,
-                       credentialIdB64: credential.base64EncodedString(),
-                       revision: revision,
-                       policy: policy,
-                       devicePath: devicePath,
-                       portable: portable)
+        Account(id: id,
+                kind: kind,
+                credentialIdB64: (credentialId ?? Data(id.utf8)).base64EncodedString(),
+                portable: portable)
+    }
+}
+
+public extension AccountHandle {
+    static func fixture(id: String = "account",
+                        kind: AccountKind = .local,
+                        credentialId: Data? = nil,
+                        devicePath: String = "/dev/mock",
+                        portable: PortablePayload? = nil) -> AccountHandle {
+        AccountHandle(account: .fixture(id: id, kind: kind, credentialId: credentialId, portable: portable),
+                      devicePath: devicePath)
     }
 }

@@ -8,39 +8,31 @@ final class PasswordGenerator: PasswordGenerating, Sendable {
         self.secretDerivationService = secretDerivationService
     }
 
-    func generatePassword(account: Account,
+    func generatePassword(_ handle: AccountHandle,
                           label: String,
-                          policy override: PasswordPolicy?,
-                          requireUV: Bool,
+                          parameters: DerivationParameters,
                           pinProvider: (@Sendable () -> String?)?) throws -> String {
-        let policy = override ?? account.policy
         let secret: Data
-        if account.kind == .portable {
-            secret = try portableSecret(account: account,
-                                        label: label,
-                                        requireUV: requireUV,
-                                        pinProvider: pinProvider)
+        if handle.account.kind == .portable {
+            secret = try portableSecret(handle, label: label, pinProvider: pinProvider)
         } else {
-            secret = try secretDerivationService.deriveSecret(account: account,
+            secret = try secretDerivationService.deriveSecret(handle,
                                                               label: label,
-                                                              requireUV: requireUV,
+                                                              revision: parameters.revision,
                                                               pinProvider: pinProvider)
         }
 
-        let material = deriveMaterial(from: secret, policy: policy)
-        return PasswordEngine.mapToPassword(material, policy: policy)
+        let material = deriveMaterial(from: secret, policy: parameters.policy)
+        return PasswordEngine.mapToPassword(material, policy: parameters.policy)
     }
 
-    private func portableSecret(account: Account,
-                                 label: String,
-                                 requireUV: Bool,
-                                 pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        guard let payload = account.portable else {
+    private func portableSecret(_ handle: AccountHandle,
+                                label: String,
+                                pinProvider: (@Sendable () -> String?)?) throws -> Data {
+        guard let payload = handle.account.portable else {
             throw FidoPassError.invalidState("Portable account is missing its key material")
         }
-        let fixed = try secretDerivationService.deriveFixedComponent(account: account,
-                                                                     requireUV: requireUV,
-                                                                     pinProvider: pinProvider)
+        let fixed = try secretDerivationService.deriveFixedComponent(handle, pinProvider: pinProvider)
         guard fixed.count == PortablePayload.externalByteCount else {
             throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
         }

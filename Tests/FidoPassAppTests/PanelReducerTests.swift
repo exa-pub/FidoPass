@@ -113,9 +113,9 @@ final class PanelReducerTests: XCTestCase {
 final class PanelSelectionResolutionTests: XCTestCase {
 
     private let device = MockKeyBackend.device(path: "/dev/one")
-    private var accounts: [Account] {
-        [Account.fixture(id: "disk", kind: .local, devicePath: "/dev/one"),
-         Account.fixture(id: "vault", kind: .portable, devicePath: "/dev/one")]
+    private var accounts: [AccountHandle] {
+        [AccountHandle.fixture(id: "disk", kind: .local, devicePath: "/dev/one"),
+         AccountHandle.fixture(id: "vault", kind: .portable, devicePath: "/dev/one")]
     }
 
     func testRemembersTheAccountUsedLast() {

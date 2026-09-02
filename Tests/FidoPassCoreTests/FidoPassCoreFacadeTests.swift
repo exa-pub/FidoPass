@@ -13,22 +13,22 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         deviceLister.devices = [expectedDevice]
 
         let enrollment = MockEnrollmentService()
-        enrollment.enrollClosure = { accountId, kind, _, _, _, _ in
-            Account.fixture(id: accountId, kind: kind, displayName: "user")
+        enrollment.enrollClosure = { accountId, kind, devicePath, _ in
+            AccountHandle.fixture(id: accountId, kind: kind, devicePath: devicePath)
         }
-        enrollment.enumerateClosure = { _, _, _ in
-            [Account.fixture(id: "acct", kind: .local, displayName: "user")]
+        enrollment.enumerateClosure = { _, devicePath, _ in
+            [AccountHandle.fixture(id: "acct", kind: .local, devicePath: devicePath)]
         }
 
         let portable = MockPortableEnrollmentService()
-        portable.enrollPortableClosure = { accountId, _, _, _, _ in
-            (Account.fixture(id: accountId, kind: .portable, displayName: ""), "generated")
+        portable.enrollPortableClosure = { accountId, devicePath, _, _ in
+            (AccountHandle.fixture(id: accountId, kind: .portable, devicePath: devicePath), "generated")
         }
-        portable.exportClosure = { _, _, _ in "exported" }
+        portable.exportClosure = { _, _ in "exported" }
 
         let secret = MockSecretDerivationService()
         let passwordGenerator = MockPasswordGenerator()
-        passwordGenerator.generateClosure = { _, _, _, _, _ in "secret-password" }
+        passwordGenerator.generateClosure = { _, _, _, _ in "secret-password" }
 
         let core = FidoPassCore(deviceLister: deviceLister,
                                 enrollmentService: enrollment,
@@ -42,15 +42,13 @@ final class FidoPassCoreFacadeTests: XCTestCase {
 
         let enrolled = try core.enroll(accountId: "acct",
                                        kind: .local,
-                                       displayName: "",
-                                       requireUV: true,
                                        devicePath: "/dev/mock",
                                        askPIN: nil)
         XCTAssertEqual(enrolled.id, "acct")
+        XCTAssertEqual(enrolled.devicePath, "/dev/mock")
         XCTAssertEqual(enrollment.enrollCalls.count, 1)
 
         let (portableAccount, portableKey) = try core.enrollPortable(accountId: "pacct",
-                                                                     requireUV: true,
                                                                      devicePath: "/dev/mock",
                                                                      askPIN: nil,
                                                                      importedKeyB64: nil)
@@ -58,21 +56,17 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         XCTAssertEqual(portableKey, "generated")
         XCTAssertEqual(portable.enrollPortableCalls.count, 1)
 
-        let password = try core.generatePassword(account: enrolled,
-                                                 label: "label",
-                                                 policy: nil,
-                                                 requireUV: true,
-                                                 pinProvider: nil)
+        let password = try core.generatePassword(enrolled, label: "label", pinProvider: nil)
         XCTAssertEqual(password, "secret-password")
         XCTAssertEqual(passwordGenerator.generateCalls.count, 1)
+        XCTAssertEqual(passwordGenerator.generateCalls.first?.2, .v1,
+                       "every account derives with the v1 parameters until the key can store them")
 
         let enumerated = try core.enumerateAccounts(devicePath: "/dev/mock", pin: "1234")
         XCTAssertEqual(enumerated.count, 1)
         XCTAssertEqual(enrollment.enumerateCalls.count, 1)
 
-        let exported = try core.exportImportedKey(portableAccount,
-                                                  requireUV: true,
-                                                  pinProvider: nil)
+        let exported = try core.exportImportedKey(portableAccount, pinProvider: nil)
         XCTAssertEqual(exported, "exported")
         XCTAssertEqual(portable.exportCalls.count, 1)
 

@@ -21,13 +21,14 @@ struct RecoverySheet {
     let generatedAt: Date
 
     init(account: Account,
+         parameters: DerivationParameters,
          labels: [String],
          deviceDescription: String?,
          generatedAt: Date = Date()) {
         self.accountId = account.id
         self.kind = account.kind
-        self.revision = account.revision
-        self.policy = account.policy
+        self.revision = parameters.revision
+        self.policy = parameters.policy
         self.labels = labels
         self.deviceDescription = deviceDescription
         self.generatedAt = generatedAt

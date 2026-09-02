@@ -8,13 +8,13 @@ final class SecretEncryptionService: SecretEncrypting, Sendable {
         self.secretDerivationService = secretDerivationService
     }
 
-    func deriveEncryptionKey(account: Account,
+    func deriveEncryptionKey(_ handle: AccountHandle,
                              label: String,
-                             requireUV: Bool,
+                             parameters: DerivationParameters,
                              pinProvider: (@Sendable () -> String?)?) throws -> EncryptionKey {
-        let secret = try secretDerivationService.deriveSecret(account: account,
+        let secret = try secretDerivationService.deriveSecret(handle,
                                                               label: label,
-                                                              requireUV: requireUV,
+                                                              revision: parameters.revision,
                                                               pinProvider: pinProvider)
         return EncryptionKey(material: Self.deriveKeyMaterial(from: secret))
     }

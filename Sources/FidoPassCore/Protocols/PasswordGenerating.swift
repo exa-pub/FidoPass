@@ -1,9 +1,8 @@
 import Foundation
 
 public protocol PasswordGenerating: Sendable {
-    func generatePassword(account: Account,
+    func generatePassword(_ handle: AccountHandle,
                           label: String,
-                          policy override: PasswordPolicy?,
-                          requireUV: Bool,
+                          parameters: DerivationParameters,
                           pinProvider: (@Sendable () -> String?)?) throws -> String
 }

@@ -21,14 +21,14 @@ final class ClipboardReceiptTests: XCTestCase {
 
     func testReceiptBelongsOnlyToItsOwnAccount() {
         let subject = receipt()
-        XCTAssertTrue(subject.belongs(to: Account.fixture(id: "vault", devicePath: "/dev/one")))
-        XCTAssertFalse(subject.belongs(to: Account.fixture(id: "other", devicePath: "/dev/one")))
+        XCTAssertTrue(subject.belongs(to: AccountHandle.fixture(id: "vault", devicePath: "/dev/one")))
+        XCTAssertFalse(subject.belongs(to: AccountHandle.fixture(id: "other", devicePath: "/dev/one")))
     }
 
     /// The same account id on a second key is a backup, not the same account — a copy made
     /// on one key must not be reported on the other.
     func testReceiptIsScopedToTheDeviceToo() {
-        XCTAssertFalse(receipt().belongs(to: Account.fixture(id: "vault", devicePath: "/dev/two")))
+        XCTAssertFalse(receipt().belongs(to: AccountHandle.fixture(id: "vault", devicePath: "/dev/two")))
     }
 
     func testCountdownCountsDown() {

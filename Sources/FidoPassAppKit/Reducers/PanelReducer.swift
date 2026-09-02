@@ -23,19 +23,18 @@ enum PanelReducer {
     /// Order matters: what the user used last, then the only account there is, then the
     /// first one. Choosing between one option is not a choice, so a single account is never
     /// presented as a list.
-    static func resolveSelection(accounts: [Account],
+    static func resolveSelection(accounts: [AccountHandle],
                                  devices: [FidoDevice],
                                  memory: Preferences.LastUsed?) -> AccountRef? {
         if let memory {
-            let matching = accounts.first { account in
-                guard account.id == memory.accountId,
-                      let path = account.devicePath,
-                      let device = devices.first(where: { $0.path == path }) else { return false }
+            let matching = accounts.first { handle in
+                guard handle.id == memory.accountId,
+                      let device = devices.first(where: { $0.path == handle.devicePath }) else { return false }
                 return device.modelSignature == memory.deviceSignature
             }
-            if let matching, let ref = AccountRef(matching) { return ref }
+            if let matching { return AccountRef(matching) }
         }
-        return accounts.compactMap(AccountRef.init).first
+        return accounts.first.map(AccountRef.init)
     }
 
     /// The label to start from: the last one used with this very account, and otherwise the

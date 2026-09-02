@@ -1,8 +1,8 @@
 import XCTest
 @testable import FidoPassCore
 
-/// CTAP offers a credential only two free-form strings, so portable accounts have to pack
-/// three things — account id, display name and exported key material — into them.
+/// CTAP offers a credential only two free-form strings, so a portable account has to pack
+/// its account id and its exported key material into them.
 ///
 /// The layout changed: the payload moved out of `name` and into a prefixed `displayName`,
 /// leaving `name` as the machine identifier for every kind. Credentials written by the
@@ -16,7 +16,7 @@ final class CredentialUserFieldsTests: XCTestCase {
         let decoded = EnrollmentService.decodeUserFields(kind: .portable,
                                                          name: "acct",
                                                          displayName: "fp-ext:v1:" + payload.base64EncodedString())
-        XCTAssertEqual(decoded.portable?.external, payload)
+        XCTAssertEqual(decoded?.external, payload)
     }
 
     /// Previous layout: raw base64 payload in `name`, account id in `displayName`.
@@ -24,7 +24,7 @@ final class CredentialUserFieldsTests: XCTestCase {
         let decoded = EnrollmentService.decodeUserFields(kind: .portable,
                                                          name: payload.base64EncodedString(),
                                                          displayName: "acct")
-        XCTAssertEqual(decoded.portable?.external, payload,
+        XCTAssertEqual(decoded?.external, payload,
                        "portable accounts enrolled by the previous layout must keep working")
     }
 
@@ -32,8 +32,7 @@ final class CredentialUserFieldsTests: XCTestCase {
         let decoded = EnrollmentService.decodeUserFields(kind: .local,
                                                          name: "acct",
                                                          displayName: "Work vault")
-        XCTAssertNil(decoded.portable)
-        XCTAssertEqual(decoded.displayName, "Work vault")
+        XCTAssertNil(decoded)
     }
 
     /// A display name that merely looks like base64 must not be mistaken for key material.
@@ -41,14 +40,14 @@ final class CredentialUserFieldsTests: XCTestCase {
         let decoded = EnrollmentService.decodeUserFields(kind: .local,
                                                          name: payload.base64EncodedString(),
                                                          displayName: payload.base64EncodedString())
-        XCTAssertNil(decoded.portable)
+        XCTAssertNil(decoded)
     }
 
     func testPortableWithUnreadablePayloadDoesNotCrash() {
         let decoded = EnrollmentService.decodeUserFields(kind: .portable,
                                                          name: "not-base64!",
                                                          displayName: "not-base64!")
-        XCTAssertNil(decoded.portable)
+        XCTAssertNil(decoded)
     }
 
     /// Wrong-sized material is rejected rather than silently truncated or padded.
@@ -67,13 +66,14 @@ final class CredentialUserFieldsTests: XCTestCase {
     }
 
     /// The same account id on two authenticators is a backup, not a duplicate: the two
-    /// entries must stay distinguishable to list selection.
+    /// handles must stay distinguishable, while the record on the key is the same value.
     func testAccountIdentityIncludesDevice() {
-        let first = Account.fixture(id: "vault", devicePath: "/dev/one")
-        let second = Account.fixture(id: "vault", devicePath: "/dev/two")
+        let first = AccountHandle.fixture(id: "vault", devicePath: "/dev/one")
+        let second = AccountHandle.fixture(id: "vault", devicePath: "/dev/two")
         XCTAssertNotEqual(first, second)
         XCTAssertNotEqual(first.hashValue, second.hashValue)
-        XCTAssertEqual(first, Account.fixture(id: "vault", devicePath: "/dev/one"))
+        XCTAssertEqual(first, AccountHandle.fixture(id: "vault", devicePath: "/dev/one"))
+        XCTAssertEqual(first.account, second.account, "the record on the key does not know which key")
     }
 }
 
@@ -98,10 +98,7 @@ extension CredentialUserFieldsTests {
         XCTAssertEqual(Data(base64Encoded: name)?.count, 32,
                        "older versions require exactly 32 base64-decoded bytes here")
 
-        let display = EnrollmentService.credentialDisplayName(kind: .portable,
-                                                                        accountId: "vault",
-                                                                        displayName: "",
-                                                                        portable: payload)
+        let display = EnrollmentService.credentialDisplayName(accountId: "vault")
         XCTAssertEqual(display, "vault", "the account id goes in displayName for portable accounts")
     }
 
@@ -125,32 +122,16 @@ extension CredentialUserFieldsTests {
     func testWrittenLayoutReadsBack() {
         let payload = PortablePayload(external: Data(repeating: 0x37, count: 32))!
         let name = EnrollmentService.credentialName(kind: .portable, accountId: "vault", portable: payload)
-        let display = EnrollmentService.credentialDisplayName(kind: .portable,
-                                                                        accountId: "vault",
-                                                                        displayName: "",
-                                                                        portable: payload)
-        XCTAssertEqual(EnrollmentService.decodeUserFields(kind: .portable, name: name, displayName: display).portable,
+        let display = EnrollmentService.credentialDisplayName(accountId: "vault")
+        XCTAssertEqual(EnrollmentService.decodeUserFields(kind: .portable, name: name, displayName: display),
                        payload)
     }
 
     func testDisplayNameIsNeverEmpty() {
         for kind in AccountKind.allCases {
-            for payload in [nil, PortablePayload(external: Data(repeating: 0x11, count: 32))] {
-                let value = EnrollmentService.credentialDisplayName(kind: kind,
-                                                                              accountId: "vault",
-                                                                              displayName: "",
-                                                                              portable: payload)
-                XCTAssertFalse(value.isEmpty, "\(kind) enrolment would fail with FIDO_ERR_INVALID_LENGTH")
-            }
+            let value = EnrollmentService.credentialDisplayName(accountId: "vault")
+            XCTAssertFalse(value.isEmpty, "\(kind) enrolment would fail with FIDO_ERR_INVALID_LENGTH")
         }
-    }
-
-    func testExplicitDisplayNameWins() {
-        let value = EnrollmentService.credentialDisplayName(kind: .local,
-                                                                      accountId: "vault",
-                                                                      displayName: "Work vault",
-                                                                      portable: nil)
-        XCTAssertEqual(value, "Work vault")
     }
 
     /// Builds between the refactor and this fix put a prefixed payload in `displayName`.
@@ -160,6 +141,6 @@ extension CredentialUserFieldsTests {
         let decoded = EnrollmentService.decodeUserFields(kind: .portable,
                                                          name: "vault",
                                                          displayName: "fp-ext:v1:" + payload.base64)
-        XCTAssertEqual(decoded.portable, payload)
+        XCTAssertEqual(decoded, payload)
     }
 }

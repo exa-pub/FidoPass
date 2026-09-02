@@ -17,9 +17,9 @@ final class CryptoEditorSessionTests: XCTestCase {
                                 enrollmentService: MockEnrollmentService(),
                                 portableEnrollmentService: MockPortableEnrollmentService(),
                                 secretDerivationService: derivation)
-        let account = Account.fixture(id: "vault", kind: kind)
-        let key = try core.deriveEncryptionKey(account: account, label: label, requireUV: true, pinProvider: nil)
-        return CryptoEditorSession(account: account, label: label, key: key, cipher: core.cipher)
+        let handle = AccountHandle.fixture(id: "vault", kind: kind)
+        let key = try core.deriveEncryptionKey(handle, label: label, parameters: .v1, pinProvider: nil)
+        return CryptoEditorSession(account: handle.account, label: label, key: key, cipher: core.cipher)
     }
 
     /// Waits past the debounce so the session has recomputed.

@@ -112,7 +112,7 @@ final class PanelStore: ObservableObject {
     var busyTitle: String? { touchGate.panelBusyTitle }
     var isSelectedKeyUnlocked: Bool { devices.selectedState?.unlocked == true }
 
-    var visibleAccounts: [Account] {
+    var visibleAccounts: [AccountHandle] {
         guard let path = devices.selectedPath else { return [] }
         return accounts.accounts(onDevice: path)
     }
@@ -139,7 +139,7 @@ final class PanelStore: ObservableObject {
                     selectedDevicePath: devices.selectedPath,
                     isUnlocked: isSelectedKeyUnlocked,
                     keyHasPIN: devices.selectedState?.hasPIN,
-                    accountRefs: visibleAccounts.compactMap(AccountRef.init),
+                    accountRefs: visibleAccounts.map(AccountRef.init),
                     selection: selection)
     }
 
@@ -322,7 +322,7 @@ final class PanelStore: ObservableObject {
     /// accounts, silently jumping from the last to the first is a way to derive the wrong
     /// password without noticing.
     func moveSelection(by offset: Int) {
-        let refs = visibleAccounts.compactMap(AccountRef.init)
+        let refs = visibleAccounts.map(AccountRef.init)
         guard !refs.isEmpty else { return }
         let current = selection.flatMap { refs.firstIndex(of: $0) } ?? 0
         let next = min(max(current + offset, 0), refs.count - 1)
@@ -331,7 +331,7 @@ final class PanelStore: ObservableObject {
     }
 
     func selectAccount(at index: Int) {
-        let refs = visibleAccounts.compactMap(AccountRef.init)
+        let refs = visibleAccounts.map(AccountRef.init)
         guard refs.indices.contains(index) else { return }
         select(refs[index])
     }
@@ -535,7 +535,7 @@ final class PanelStore: ObservableObject {
             let password = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
                                                                  message: "Keep it in contact until the password appears.",
                                                                  deviceName: selectedDevice?.displayName ?? "Security key")) {
-                try await self.generation.generate(account: account, label: usedLabel)
+                try await self.generation.generate(account, label: usedLabel)
             }
             if let target = labelTarget(for: ref) { labels.use(usedLabel, in: target) }
             labelEditor.adopt(usedLabel)
@@ -590,7 +590,7 @@ final class PanelStore: ObservableObject {
             }
             enrollStep = nil
             enrollDraft = EnrollDraft()
-            if let ref = AccountRef(created.0) { select(ref) }
+            select(AccountRef(created.0))
 
             if let backup = created.1 {
                 // Shown on its own screen, never in a field that reads like a password:
@@ -664,7 +664,8 @@ final class PanelStore: ObservableObject {
         guard let account = accounts.account(ref) else { return }
         let description = devices.state(for: ref.devicePath).map { "\($0.device.displayName) — \($0.device.identityLabel)" }
         let known = labelTarget(for: ref).map { labels.labels(for: $0.scope) } ?? []
-        let sheet = RecoverySheet(account: account,
+        let sheet = RecoverySheet(account: account.account,
+                                  parameters: .v1,
                                   labels: known,
                                   deviceDescription: description)
         isShowingSystemPanel = true
@@ -697,7 +698,7 @@ final class PanelStore: ObservableObject {
                 try await self.accounts.deriveEncryptionKey(for: account, label: label)
             }
             if let target = labelTarget(for: ref) { labels.use(label, in: target) }
-            let session = CryptoEditorSession(account: account, label: label, key: key, cipher: accounts.cipher)
+            let session = CryptoEditorSession(account: account.account, label: label, key: key, cipher: accounts.cipher)
             editor.open(session, boundTo: ref.devicePath)
             router.closePanel()
         } catch {

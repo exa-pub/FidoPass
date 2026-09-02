@@ -17,7 +17,7 @@ final class PanelStoreTests: XCTestCase {
         let device = MockKeyBackend.device()
         backend.devices = [device]
         backend.pins[device.path] = "1234"
-        backend.accountsByPath[device.path] = [Account.fixture(id: "vault", kind: .portable, devicePath: device.path)]
+        backend.accountsByPath[device.path] = [Account.fixture(id: "vault", kind: .portable)]
 
         let store = AppTestFactory.makeStore(backend: backend)
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
@@ -415,7 +415,7 @@ final class PanelStoreTests: XCTestCase {
     /// One account, one label: no arrows are advertised, because there is nowhere to go.
     func testHintsOmitArrowsWhenThereIsNothingToMoveBetween() async {
         let device = MockKeyBackend.device()
-        let single = [Account.fixture(id: "vault", kind: .portable, devicePath: device.path)]
+        let single = [Account.fixture(id: "vault", kind: .portable)]
         let (store, _, _) = await AppTestFactory.unlockedStore(accounts: single)
 
         XCTAssertFalse(store.keyboardHints.contains("↑↓ account"))

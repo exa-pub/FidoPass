@@ -39,17 +39,15 @@ final class GenerationStore: ObservableObject {
 
     // MARK: - Generation
 
-    func generate(account: Account, label: String) async throws -> String {
-        guard let path = account.devicePath, let provider = pinProviderFor(path) else {
-            throw KeyLockedError()
-        }
-        guard let ref = AccountRef(account) else { throw KeyLockedError() }
+    func generate(_ handle: AccountHandle, label: String) async throws -> String {
+        guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
+        let ref = AccountRef(handle)
 
         busyRef = ref
         defer { busyRef = nil }
 
         let password = try await worker.accounts {
-            try $0.generatePassword(account: account, label: label, pinProvider: provider)
+            try $0.generatePassword(handle, label: label, pinProvider: provider)
         }
         result = Result(ref: ref, label: label, password: password, revealed: false)
         return password

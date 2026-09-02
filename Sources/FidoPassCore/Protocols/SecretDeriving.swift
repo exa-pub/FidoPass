@@ -1,12 +1,13 @@
 import Foundation
 
 public protocol SecretDeriving: Sendable {
-    func deriveSecret(account: Account,
+    /// The account's secret for `label`: one `hmac-secret` assertion, which needs a touch.
+    func deriveSecret(_ handle: AccountHandle,
                       label: String,
-                      requireUV: Bool,
+                      revision: Int,
                       pinProvider: (@Sendable () -> String?)?) throws -> Data
 
-    func deriveFixedComponent(account: Account,
-                              requireUV: Bool,
+    /// The component a portable account's key material is XOR-ed with. One touch.
+    func deriveFixedComponent(_ handle: AccountHandle,
                               pinProvider: (@Sendable () -> String?)?) throws -> Data
 }

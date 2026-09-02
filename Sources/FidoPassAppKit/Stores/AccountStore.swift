@@ -8,7 +8,7 @@ import Foundation
 @MainActor
 final class AccountStore: ObservableObject {
 
-    @Published private(set) var accounts: [Account] = []
+    @Published private(set) var accounts: [AccountHandle] = []
     @Published private(set) var isLoading = false
 
     /// Read failures, per device path. Kept separate from a global error so one unreadable
@@ -30,11 +30,11 @@ final class AccountStore: ObservableObject {
     /// Seals and opens text under a derived key — what the editor needs, and nothing else.
     var cipher: SecretCipher { worker.backend.cipher }
 
-    func accounts(onDevice path: String) -> [Account] {
+    func accounts(onDevice path: String) -> [AccountHandle] {
         accounts.filter { $0.devicePath == path }
     }
 
-    func account(_ ref: AccountRef) -> Account? {
+    func account(_ ref: AccountRef) -> AccountHandle? {
         accounts.first { ref.matches($0) }
     }
 
@@ -49,7 +49,7 @@ final class AccountStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        var collected: [Account] = []
+        var collected: [AccountHandle] = []
         var errors: [String: PresentedError] = [:]
 
         for path in unlockedPaths {
@@ -92,10 +92,10 @@ final class AccountStore: ObservableObject {
                 kind: AccountKind,
                 devicePath: String,
                 importedKeyB64: String?,
-                onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) async throws -> (Account, String?) {
+                onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) async throws -> (AccountHandle, String?) {
         guard let provider = pinProviderFor(devicePath) else { throw KeyLockedError() }
 
-        let result: (Account, String?)
+        let result: (AccountHandle, String?)
         switch kind {
         case .portable:
             result = try await worker.accounts {
@@ -117,26 +117,21 @@ final class AccountStore: ObservableObject {
         return result
     }
 
-    func delete(_ account: Account) async throws {
-        guard let path = account.devicePath else { throw KeyLockedError() }
-        guard let pin = pinFor(path) else { throw KeyLockedError() }
-        try await worker.accounts { try $0.deleteAccount(account, pin: pin) }
-        accounts.removeAll { $0.id == account.id && $0.devicePath == path }
+    func delete(_ handle: AccountHandle) async throws {
+        guard let pin = pinFor(handle.devicePath) else { throw KeyLockedError() }
+        try await worker.accounts { try $0.deleteAccount(handle, pin: pin) }
+        accounts.removeAll { $0 == handle }
     }
 
     // MARK: - Key material
 
-    func exportBackupKey(for account: Account) async throws -> String {
-        guard let path = account.devicePath, let provider = pinProviderFor(path) else {
-            throw KeyLockedError()
-        }
-        return try await worker.accounts { try $0.exportImportedKey(account, pinProvider: provider) }
+    func exportBackupKey(for handle: AccountHandle) async throws -> String {
+        guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
+        return try await worker.accounts { try $0.exportImportedKey(handle, pinProvider: provider) }
     }
 
-    func deriveEncryptionKey(for account: Account, label: String) async throws -> EncryptionKey {
-        guard let path = account.devicePath, let provider = pinProviderFor(path) else {
-            throw KeyLockedError()
-        }
-        return try await worker.accounts { try $0.deriveEncryptionKey(account: account, label: label, pinProvider: provider) }
+    func deriveEncryptionKey(for handle: AccountHandle, label: String) async throws -> EncryptionKey {
+        guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
+        return try await worker.accounts { try $0.deriveEncryptionKey(handle, label: label, pinProvider: provider) }
     }
 }

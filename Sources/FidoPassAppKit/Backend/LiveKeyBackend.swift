@@ -28,59 +28,49 @@ struct LiveKeyBackend: KeyBackend {
         try core.inventory(devicePath: devicePath, pin: pin)
     }
 
-    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [Account] {
+    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [AccountHandle] {
         try core.enumerateAccounts(kind: kind, devicePath: devicePath, pin: pin)
     }
 
     func enroll(accountId: String,
                 kind: AccountKind,
                 devicePath: String,
-                askPIN: @escaping @Sendable () -> String?) throws -> Account {
-        try core.enroll(accountId: accountId,
-                        kind: kind,
-                        requireUV: true,
-                        devicePath: devicePath,
-                        askPIN: askPIN)
+                askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle {
+        try core.enroll(accountId: accountId, kind: kind, devicePath: devicePath, askPIN: askPIN)
     }
 
     func enrollPortable(accountId: String,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
                         importedKeyB64: String?,
-                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (Account, String?) {
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, String?) {
         try core.enrollPortable(accountId: accountId,
-                                requireUV: true,
                                 devicePath: devicePath,
                                 askPIN: askPIN,
                                 importedKeyB64: importedKeyB64,
                                 onStep: onStep)
     }
 
-    func generatePassword(account: Account,
+    // Every account derives with `.v1` until the key can store parameters per account.
+    func generatePassword(_ handle: AccountHandle,
                           label: String,
                           pinProvider: @escaping @Sendable () -> String?) throws -> String {
-        try core.generatePassword(account: account,
-                                  label: label,
-                                  requireUV: true,
-                                  pinProvider: pinProvider)
+        try core.generatePassword(handle, label: label, parameters: .v1, pinProvider: pinProvider)
     }
 
-    func exportImportedKey(_ account: Account,
+    func exportImportedKey(_ handle: AccountHandle,
                            pinProvider: @escaping @Sendable () -> String?) throws -> String {
-        try core.exportImportedKey(account, requireUV: true, pinProvider: pinProvider)
+        try core.exportImportedKey(handle, pinProvider: pinProvider)
     }
 
-    func deriveEncryptionKey(account: Account,
+    func deriveEncryptionKey(_ handle: AccountHandle,
                              label: String,
                              pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
-        try core.deriveEncryptionKey(account: account,
-                                     label: label,
-                                     requireUV: true,
-                                     pinProvider: pinProvider)
+        try core.deriveEncryptionKey(handle, label: label, parameters: .v1, pinProvider: pinProvider)
     }
 
-    func deleteAccount(_ account: Account, pin: String) throws {
-        try core.deleteAccount(account, pin: pin)
+    func deleteAccount(_ handle: AccountHandle, pin: String) throws {
+        try core.deleteAccount(handle, pin: pin)
     }
 
     func setInitialPIN(devicePath: String, newPIN: String) throws {

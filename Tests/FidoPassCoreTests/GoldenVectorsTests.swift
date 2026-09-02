@@ -85,12 +85,10 @@ final class GoldenVectorsTests: XCTestCase {
             let policy = Self.generatorPolicies[expectation.policy]!
             // Label and revision are mocked out here on purpose: their contribution is
             // pinned by testSaltVectors. This vector pins material -> password only.
-            var account = Account.fixture(id: "acct")
-            account.policy = policy
-            let password = try generator.generatePassword(account: account,
+            let account = AccountHandle.fixture(id: "acct")
+            let password = try generator.generatePassword(account,
                                                           label: "vault",
-                                                          policy: nil,
-                                                          requireUV: true,
+                                                          parameters: DerivationParameters(revision: 1, policy: policy),
                                                           pinProvider: nil)
             XCTAssertEqual(password, expectation.expected, "local \(expectation.policy)")
         }
@@ -111,14 +109,13 @@ final class GoldenVectorsTests: XCTestCase {
             ("alnum16", "github.com", "Dm6NPT9ZygHGKDCT")
         ]
         for expectation in expectations {
-            var account = Account.fixture(id: "pacct",
-                                          kind: .portable,
-                                          portable: PortablePayload(external: external))
-            account.policy = Self.generatorPolicies[expectation.policy]!
-            let password = try generator.generatePassword(account: account,
+            let account = AccountHandle.fixture(id: "pacct",
+                                                kind: .portable,
+                                                portable: PortablePayload(external: external))
+            let policy = Self.generatorPolicies[expectation.policy]!
+            let password = try generator.generatePassword(account,
                                                           label: expectation.label,
-                                                          policy: nil,
-                                                          requireUV: true,
+                                                          parameters: DerivationParameters(revision: 1, policy: policy),
                                                           pinProvider: nil)
             XCTAssertEqual(password, expectation.expected,
                            "portable \(expectation.policy)|\(expectation.label)")
@@ -138,7 +135,7 @@ final class GoldenVectorsTests: XCTestCase {
     private static func makeSecretService() -> MockSecretDerivationService {
         let service = MockSecretDerivationService()
         service.deriveSecretClosure = { _, _, _, _ in secret }
-        service.deriveFixedClosure = { _, _, _ in fixedComponent }
+        service.deriveFixedClosure = { _, _ in fixedComponent }
         return service
     }
 

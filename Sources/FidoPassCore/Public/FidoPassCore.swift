@@ -118,70 +118,65 @@ public final class FidoPassCore: Sendable {
         try configuration.enableEnterpriseAttestation(devicePath: devicePath, pin: pin)
     }
 
+    /// Creates a local account: one resident credential, one touch.
     public func enroll(accountId: String,
                        kind: AccountKind = .local,
-                       displayName: String = "",
-                       requireUV: Bool = true,
                        devicePath: String,
-                       askPIN: (@Sendable () -> String?)? = nil) throws -> Account {
+                       askPIN: (@Sendable () -> String?)? = nil) throws -> AccountHandle {
         try enrollmentService.enroll(accountId: accountId,
                                      kind: kind,
-                                     displayName: displayName,
-                                     requireUV: requireUV,
                                      devicePath: devicePath,
                                      askPIN: askPIN)
     }
 
+    /// Creates a portable account: two touches, and a backup key to show the user once.
     public func enrollPortable(accountId: String,
-                               requireUV: Bool = true,
                                devicePath: String,
                                askPIN: (@Sendable () -> String?)? = nil,
                                importedKeyB64: String?,
-                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (Account, String?) {
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (AccountHandle, String?) {
         try portableEnrollmentService.enrollPortable(accountId: accountId,
-                                                     requireUV: requireUV,
                                                      devicePath: devicePath,
                                                      askPIN: askPIN,
                                                      importedKeyB64: importedKeyB64,
                                                      onStep: onStep)
     }
 
-    public func generatePassword(account: Account,
+    /// Derives the password for `label`. One touch.
+    ///
+    /// `parameters` is `.v1` for every account until the key can store them per account;
+    /// passing anything else derives a different password, which is the point of the type.
+    public func generatePassword(_ handle: AccountHandle,
                                  label: String,
-                                 policy override: PasswordPolicy? = nil,
-                                 requireUV: Bool = true,
+                                 parameters: DerivationParameters = .v1,
                                  pinProvider: (@Sendable () -> String?)? = nil) throws -> String {
-        try passwordGenerator.generatePassword(account: account,
+        try passwordGenerator.generatePassword(handle,
                                                label: label,
-                                               policy: override,
-                                               requireUV: requireUV,
+                                               parameters: parameters,
                                                pinProvider: pinProvider)
     }
 
     public func enumerateAccounts(kind: AccountKind = .local,
                                   devicePath: String,
-                                  pin: String?) throws -> [Account] {
+                                  pin: String?) throws -> [AccountHandle] {
         try enrollmentService.enumerateAccounts(rpId: kind.rpId,
                                                 devicePath: devicePath,
                                                 pin: pin)
     }
 
-    public func exportImportedKey(_ account: Account,
-                                  requireUV: Bool = true,
+    public func exportImportedKey(_ handle: AccountHandle,
                                   pinProvider: (@Sendable () -> String?)? = nil) throws -> String {
-        try portableEnrollmentService.exportImportedKey(account,
-                                                        requireUV: requireUV,
-                                                        pinProvider: pinProvider)
+        try portableEnrollmentService.exportImportedKey(handle, pinProvider: pinProvider)
     }
 
     /// Derives the key used by the text editor. Costs one touch of the authenticator.
-    public func deriveEncryptionKey(account: Account,
+    public func deriveEncryptionKey(_ handle: AccountHandle,
                                     label: String,
-                                    requireUV: Bool = true,
+                                    parameters: DerivationParameters = .v1,
                                     pinProvider: (@Sendable () -> String?)? = nil) throws -> EncryptionKey {
-        try secretEncryption.deriveEncryptionKey(account: account,
+        try secretEncryption.deriveEncryptionKey(handle,
                                                  label: label,
-                                                 requireUV: requireUV,
+                                                 parameters: parameters,
                                                  pinProvider: pinProvider)
     }
 
@@ -196,8 +191,8 @@ public final class FidoPassCore: Sendable {
         try secretEncryption.open(envelopeB64, with: key)
     }
 
-    public func deleteAccount(_ account: Account, pin: String?) throws {
-        try enrollmentService.deleteAccount(account, pin: pin)
+    public func deleteAccount(_ handle: AccountHandle, pin: String?) throws {
+        try enrollmentService.deleteAccount(handle, pin: pin)
     }
 
     // MARK: - Key management

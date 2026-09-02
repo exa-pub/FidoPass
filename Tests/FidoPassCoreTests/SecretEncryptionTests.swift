@@ -210,16 +210,16 @@ final class SecretEncryptionTests: XCTestCase {
 
     func testDerivationGoesThroughTheAuthenticator() throws {
         let derivation = MockSecretDerivationService()
-        derivation.deriveSecretClosure = { account, label, requireUV, _ in
-            XCTAssertEqual(account.id, "vault")
+        derivation.deriveSecretClosure = { handle, label, revision, _ in
+            XCTAssertEqual(handle.id, "vault")
             XCTAssertEqual(label, "notes")
-            XCTAssertTrue(requireUV)
+            XCTAssertEqual(revision, 1)
             return self.secret
         }
         let service = SecretEncryptionService(secretDerivationService: derivation)
-        _ = try service.deriveEncryptionKey(account: Account.fixture(id: "vault"),
+        _ = try service.deriveEncryptionKey(AccountHandle.fixture(id: "vault"),
                                             label: "notes",
-                                            requireUV: true,
+                                            parameters: .v1,
                                             pinProvider: nil)
         XCTAssertEqual(derivation.deriveSecretCalls.count, 1, "one touch per editing session, not per keystroke")
     }
@@ -230,10 +230,10 @@ final class SecretEncryptionTests: XCTestCase {
         let derivation = MockSecretDerivationService()
         derivation.deriveSecretClosure = { _, label, _, _ in Data(SHA256.hash(data: Data(label.utf8))) }
         let service = SecretEncryptionService(secretDerivationService: derivation)
-        let account = Account.fixture(id: "vault")
+        let account = AccountHandle.fixture(id: "vault")
 
-        let notesKey = try service.deriveEncryptionKey(account: account, label: "notes", requireUV: true, pinProvider: nil)
-        let seedKey = try service.deriveEncryptionKey(account: account, label: "seed", requireUV: true, pinProvider: nil)
+        let notesKey = try service.deriveEncryptionKey(account, label: "notes", parameters: .v1, pinProvider: nil)
+        let seedKey = try service.deriveEncryptionKey(account, label: "seed", parameters: .v1, pinProvider: nil)
 
         let sealed = try service.seal("under notes", with: notesKey)
         XCTAssertEqual(try service.open(sealed, with: notesKey), "under notes")

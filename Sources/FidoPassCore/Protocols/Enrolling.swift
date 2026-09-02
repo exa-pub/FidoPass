@@ -3,18 +3,15 @@ import Foundation
 public protocol Enrolling: Sendable {
     func enroll(accountId: String,
                 kind: AccountKind,
-                displayName: String,
-                requireUV: Bool,
                 devicePath: String,
-                askPIN: (@Sendable () -> String?)?) throws -> Account
+                askPIN: (@Sendable () -> String?)?) throws -> AccountHandle
 
     func enumerateAccounts(rpId: String,
                            devicePath: String,
-                           pin: String?) throws -> [Account]
+                           pin: String?) throws -> [AccountHandle]
 
-    func deleteAccount(_ account: Account, pin: String?) throws
+    func deleteAccount(_ handle: AccountHandle, pin: String?) throws
 
-    func updateCredentialUserInfo(account: Account,
-                                  requireUV: Bool,
+    func updateCredentialUserInfo(_ handle: AccountHandle,
                                   pinProvider: (@Sendable () -> String?)?) throws
 }

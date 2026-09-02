@@ -7,9 +7,9 @@ final class RecoverySheetTests: XCTestCase {
 
     private func sheet(kind: AccountKind = .local,
                        labels: [String] = ["vault", "disk"]) -> String {
-        var account = Account.fixture(id: "personal-vault", kind: kind, revision: 3)
-        account.policy = PasswordPolicy(length: 24, useSymbols: false)
-        return RecoverySheet(account: account,
+        return RecoverySheet(account: Account.fixture(id: "personal-vault", kind: kind),
+                             parameters: DerivationParameters(revision: 3,
+                                                              policy: PasswordPolicy(length: 24, useSymbols: false)),
                              labels: labels,
                              deviceDescription: "Yubico YubiKey Bio — VID 1050 PID 0402")
             .render()
@@ -53,9 +53,8 @@ final class RecoverySheetTests: XCTestCase {
     }
 
     func testFileNameIsSafeForTheFilesystem() {
-        var account = Account.fixture(id: "work/vault")
-        account.policy = PasswordPolicy()
-        let name = RecoverySheet(account: account, labels: [], deviceDescription: nil).suggestedFileName
+        let account = Account.fixture(id: "work/vault")
+        let name = RecoverySheet(account: account, parameters: .v1, labels: [], deviceDescription: nil).suggestedFileName
         XCTAssertFalse(name.contains("/"))
         XCTAssertTrue(name.hasSuffix(".txt"))
     }

@@ -211,41 +211,43 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
                                                         aaguid: aaguid)
     }
 
-    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [Account] {
+    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [AccountHandle] {
         enumerateGate?.wait()
         enumerateCallCount += 1
         if let enumerateError { throw enumerateError }
         guard pins[devicePath] == pin else { throw Self.wrongPin }
-        return (accountsByPath[devicePath] ?? []).filter { $0.kind == kind }
+        return (accountsByPath[devicePath] ?? [])
+            .filter { $0.kind == kind }
+            .map { AccountHandle(account: $0, devicePath: devicePath) }
     }
 
-    func enroll(accountId: String, kind: AccountKind, devicePath: String, askPIN: @escaping @Sendable () -> String?) throws -> Account {
+    func enroll(accountId: String, kind: AccountKind, devicePath: String, askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle {
         enrollCalls.append((accountId, kind, nil))
-        let account = Account.fixture(id: accountId, kind: kind, devicePath: devicePath)
+        let account = Account.fixture(id: accountId, kind: kind)
         accountsByPath[devicePath, default: []].append(account)
-        return account
+        return AccountHandle(account: account, devicePath: devicePath)
     }
 
     func enrollPortable(accountId: String,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
                         importedKeyB64: String?,
-                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (Account, String?) {
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, String?) {
         enrollCalls.append((accountId, .portable, importedKeyB64))
         onStep(.creatingCredential)
         onStep(.derivingBackupKey)
-        let account = Account.fixture(id: accountId, kind: .portable, devicePath: devicePath)
+        let account = Account.fixture(id: accountId, kind: .portable)
         accountsByPath[devicePath, default: []].append(account)
-        return (account, importedKeyB64 == nil ? backupKeyValue : nil)
+        return (AccountHandle(account: account, devicePath: devicePath), importedKeyB64 == nil ? backupKeyValue : nil)
     }
 
-    func generatePassword(account: Account, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
-        generateCalls.append((account.id, label))
+    func generatePassword(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
+        generateCalls.append((handle.id, label))
         return generatedPassword
     }
 
-    func exportImportedKey(_ account: Account, pinProvider: @escaping @Sendable () -> String?) throws -> String {
-        exportCalls.append(account.id)
+    func exportImportedKey(_ handle: AccountHandle, pinProvider: @escaping @Sendable () -> String?) throws -> String {
+        exportCalls.append(handle.id)
         return backupKeyValue
     }
 
@@ -263,13 +265,13 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
 
     var cipher: SecretCipher { Self.cryptoCore.cipher }
 
-    func deriveEncryptionKey(account: Account, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
-        try Self.cryptoCore.deriveEncryptionKey(account: account, label: label, requireUV: true, pinProvider: nil)
+    func deriveEncryptionKey(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
+        try Self.cryptoCore.deriveEncryptionKey(handle, label: label, parameters: .v1, pinProvider: nil)
     }
 
-    func deleteAccount(_ account: Account, pin: String) throws {
-        deleteCalls.append(account.id)
-        accountsByPath[account.devicePath ?? "", default: []].removeAll { $0.id == account.id }
+    func deleteAccount(_ handle: AccountHandle, pin: String) throws {
+        deleteCalls.append(handle.id)
+        accountsByPath[handle.devicePath, default: []].removeAll { $0.id == handle.id }
     }
 
     func setInitialPIN(devicePath: String, newPIN: String) throws {
@@ -392,8 +394,8 @@ enum AppTestFactory {
         backend.devices = [device]
         backend.pins[device.path] = "1234"
         backend.accountsByPath[device.path] = accounts ?? [
-            Account.fixture(id: "vault", kind: .portable, devicePath: device.path),
-            Account.fixture(id: "disk", kind: .local, devicePath: device.path)
+            Account.fixture(id: "vault", kind: .portable),
+            Account.fixture(id: "disk", kind: .local)
         ]
         let store = makeStore(backend: backend)
         await store.prepareForDisplay()
