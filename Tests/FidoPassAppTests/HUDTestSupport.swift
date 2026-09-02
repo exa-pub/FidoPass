@@ -302,24 +302,65 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     }
 }
 
+/// A window router that only remembers what it was asked.
+@MainActor
+final class RecordingWindowRouter: WindowRouter {
+    private(set) var panelOpened = 0
+    private(set) var panelClosed = 0
+    private(set) var managerOpened = 0
+    private(set) var preferencesOpened = 0
+    private(set) var editorClosed = 0
+    private(set) var quitRequested = 0
+    private(set) var openedEditors: [CryptoEditorSession] = []
+    private(set) var savedSheets: [RecoverySheet] = []
+
+    func openPanel() { panelOpened += 1 }
+    func closePanel() { panelClosed += 1 }
+    func openManager() { managerOpened += 1 }
+    func openPreferences() { preferencesOpened += 1 }
+    func openEditor(_ session: CryptoEditorSession) { openedEditors.append(session) }
+    func closeEditor() { editorClosed += 1 }
+    func saveRecoverySheet(_ sheet: RecoverySheet) { savedSheets.append(sheet) }
+    func quit() { quitRequested += 1 }
+}
+
 enum HUDTestFactory {
 
-    /// A store wired to a mock key, with its own preferences domain so tests never touch the
-    /// developer's real settings.
+    /// Containers built for tests, kept alive for the process.
+    ///
+    /// The container owns the cross-store reactions (a key going away closes the editor and
+    /// drops the inventory) through closures that hold it weakly. A test that keeps only the
+    /// panel store would otherwise lose those reactions the moment the container was
+    /// collected — which in the app never happens, because `AppDelegate` holds it.
     @MainActor
-    static func makeStore(backend: MockKeyBackend,
-                          suite: String = "HUDTests-\(UUID().uuidString)") -> HUDStore {
+    private static var retained: [AppContainer] = []
+
+    /// The whole object graph on a mock key, with its own preferences domain so tests never
+    /// touch the developer's real settings.
+    @MainActor
+    static func makeContainer(backend: MockKeyBackend,
+                              suite: String = "HUDTests-\(UUID().uuidString)") -> AppContainer {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         let preferences = Preferences(defaults: defaults)
         let labels = LabelStore(userDefaults: defaults,
                                 ubiStore: InMemoryUbiquitousStore(),
                                 notificationCenter: NotificationCenter())
-        return HUDStore(backend: backend,
-                        preferences: preferences,
-                        labels: labels,
-                        emptyConfirmationDelay: .milliseconds(1),
-                        enableMonitors: false)
+        let container = AppContainer(backend: backend,
+                                     router: RecordingWindowRouter(),
+                                     preferences: preferences,
+                                     labels: labels,
+                                     emptyConfirmationDelay: .milliseconds(1),
+                                     enableMonitors: false)
+        retained.append(container)
+        return container
+    }
+
+    /// The panel's store on a mock key.
+    @MainActor
+    static func makeStore(backend: MockKeyBackend,
+                          suite: String = "HUDTests-\(UUID().uuidString)") -> HUDStore {
+        makeContainer(backend: backend, suite: suite).panel
     }
 
     /// The usual starting point: one key, unlocked, with two accounts on it.

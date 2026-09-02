@@ -4,9 +4,10 @@ import SwiftUI
 /// three ideas behind FidoPass are not guessable from its interface.
 struct OnboardingView: View {
     @ObservedObject var preferences: Preferences
+    let launchAtLogin: LaunchAtLoginService
     let onFinish: () -> Void
 
-    @State private var launchAtLogin = false
+    @State private var startsAtLogin = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -36,10 +37,10 @@ struct OnboardingView: View {
                       body: "It lists the account, the labels and the policy — and no secrets. Right-click an account to save one.")
             }
 
-            Toggle("Start FidoPass at login", isOn: Binding(get: { launchAtLogin },
+            Toggle("Start FidoPass at login", isOn: Binding(get: { startsAtLogin },
                                                             set: { newValue in
-                                                                launchAtLogin = newValue
-                                                                preferences.launchAtLogin = newValue
+                                                                startsAtLogin = newValue
+                                                                launchAtLogin.setEnabled(newValue)
                                                             }))
             .help("Without this, the global shortcut only works after you start the app by hand.")
 
@@ -55,7 +56,7 @@ struct OnboardingView: View {
         }
         .padding(22)
         .frame(width: 460)
-        .onAppear { launchAtLogin = preferences.launchAtLogin }
+        .onAppear { startsAtLogin = launchAtLogin.isEnabled }
     }
 
     private func point(icon: String, title: String, body: String) -> some View {

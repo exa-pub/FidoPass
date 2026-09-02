@@ -34,8 +34,8 @@ final class InventoryStore: ObservableObject {
     private let worker: KeyWorker
     private let pinFor: (String) -> String?
 
-    init(backend: KeyBackend, pin: @escaping (String) -> String?) {
-        self.worker = KeyWorker(backend: backend)
+    init(worker: KeyWorker, pin: @escaping (String) -> String?) {
+        self.worker = worker
         self.pinFor = pin
     }
 

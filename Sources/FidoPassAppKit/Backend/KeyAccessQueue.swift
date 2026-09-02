@@ -13,8 +13,6 @@ import Foundation
 /// awaited it would suspend and let the next caller straight in, which is precisely what
 /// must not happen.
 final class KeyAccessQueue: @unchecked Sendable {
-    static let shared = KeyAccessQueue()
-
     private let queue = DispatchQueue(label: "com.fidopass.keyAccess", qos: .userInitiated)
 
     func run<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {

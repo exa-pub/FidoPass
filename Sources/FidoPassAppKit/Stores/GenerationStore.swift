@@ -22,15 +22,14 @@ final class GenerationStore: ObservableObject {
     /// The account currently waiting for a touch, if any.
     @Published private(set) var busyRef: AccountRef?
 
-    /// Fired whenever the clipboard starts or stops holding one of our secrets.
-    var onClipboardChanged: (() -> Void)?
-
     private let worker: KeyWorker
+    private let clipboard: ClipboardService
     private let pinProviderFor: (String) -> (() -> String?)?
     private var countdown: Task<Void, Never>?
 
-    init(backend: KeyBackend, pinProvider: @escaping (String) -> (() -> String?)?) {
-        self.worker = KeyWorker(backend: backend)
+    init(worker: KeyWorker, clipboard: ClipboardService, pinProvider: @escaping (String) -> (() -> String?)?) {
+        self.worker = worker
+        self.clipboard = clipboard
         self.pinProviderFor = pinProvider
     }
 
@@ -91,24 +90,22 @@ final class GenerationStore: ObservableObject {
     // MARK: - Clipboard
 
     func copy(_ secret: String, as item: ClipboardReceipt.Item, for ref: AccountRef) {
-        let deadline = ClipboardService.copySecret(secret) { [weak self] in
+        let deadline = clipboard.copySecret(secret) { [weak self] in
             Task { @MainActor in self?.markClipboardCleared() }
         }
         receipt = ClipboardReceipt(ref: ref, item: item, copiedAt: Date(), clearsAt: deadline)
         startCountdown()
-        onClipboardChanged?()
     }
 
     /// Wipes our own secret from the clipboard right now, if it is still ours.
     func clearClipboard() {
-        ClipboardService.clearIfOwned()
+        clipboard.clearIfOwned()
         markClipboardCleared()
     }
 
     private func markClipboardCleared() {
         receipt?.clearsAt = nil
         stopCountdown()
-        onClipboardChanged?()
     }
 
     private func startCountdown() {
@@ -122,10 +119,7 @@ final class GenerationStore: ObservableObject {
                 guard let self else { return }
                 let remaining = self.receipt?.secondsUntilClear(at: Date())
                 self.secondsUntilClear = remaining
-                if remaining == nil {
-                    self.onClipboardChanged?()
-                    return
-                }
+                if remaining == nil { return }
             }
         }
     }

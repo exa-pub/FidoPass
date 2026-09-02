@@ -19,10 +19,10 @@ final class AccountStore: ObservableObject {
     private let pinFor: (String) -> String?
     private let pinProviderFor: (String) -> (() -> String?)?
 
-    init(backend: KeyBackend,
+    init(worker: KeyWorker,
          pin: @escaping (String) -> String?,
          pinProvider: @escaping (String) -> (() -> String?)?) {
-        self.worker = KeyWorker(backend: backend)
+        self.worker = worker
         self.pinFor = pin
         self.pinProviderFor = pinProvider
     }

@@ -8,18 +8,20 @@ import AppKit
 struct PreferencesView: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var labels: LabelStore
-    @State private var launchAtLogin = false
+    @ObservedObject var hotkey: HotkeyRegistration
+    let launchAtLogin: LaunchAtLoginService
+    @State private var startsAtLogin = false
 
     var body: some View {
         Form {
             Section {
                 Toggle("Open with a global shortcut", isOn: $preferences.hotkeyEnabled)
                 LabeledContent("Shortcut") {
-                    HotkeyRecorderView(preferences: preferences)
+                    HotkeyRecorderView(preferences: preferences, hotkey: hotkey)
                 }
                 .disabled(!preferences.hotkeyEnabled)
 
-                if preferences.hotkeyRegistrationFailed, preferences.hotkeyEnabled {
+                if hotkey.registrationFailed, preferences.hotkeyEnabled {
                     Label("\(preferences.hotkey.display) is already taken by another application. Pick a different one.",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
@@ -116,10 +118,10 @@ struct PreferencesView: View {
             }
 
             Section {
-                Toggle("Launch at login", isOn: Binding(get: { launchAtLogin },
+                Toggle("Launch at login", isOn: Binding(get: { startsAtLogin },
                                                         set: { newValue in
-                                                            launchAtLogin = newValue
-                                                            preferences.launchAtLogin = newValue
+                                                            startsAtLogin = newValue
+                                                            launchAtLogin.setEnabled(newValue)
                                                         }))
                 Toggle("Show in Dock", isOn: $preferences.showInDock)
             } header: {
@@ -134,7 +136,7 @@ struct PreferencesView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460)
-        .onAppear { launchAtLogin = preferences.launchAtLogin }
+        .onAppear { startsAtLogin = launchAtLogin.isEnabled }
     }
 
     /// One key's histories, under the name that key gave when they were recorded — which is

@@ -41,8 +41,8 @@ struct HUDHeaderView: View {
                 Button("Lock now") { store.lockSelectedKey() }
                     .disabled(!store.isSelectedKeyUnlocked)
                 Divider()
-                Button("Preferences…") { AuxiliaryWindows.shared.showPreferences(store: store) }
-                Button("Quit FidoPass") { NSApplication.shared.terminate(nil) }
+                Button("Preferences…") { store.openPreferences() }
+                Button("Quit FidoPass") { store.quit() }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

@@ -1,24 +1,33 @@
 import Carbon.HIToolbox
 import Foundation
 
+/// What registers a system-wide shortcut. `GlobalHotkeyService` is the real one; a test
+/// substitutes a recorder.
+protocol HotkeyRegistrar: AnyObject {
+    /// - Returns: false when the combination is already taken by something else, so the UI
+    ///   can say so instead of silently doing nothing.
+    func register(_ combo: HotkeyCombo, onPress: @escaping () -> Void) -> Bool
+    func unregister()
+}
+
 /// System-wide shortcut that opens the HUD.
 ///
 /// Carbon's `RegisterEventHotKey` is used rather than an `NSEvent` global monitor because
 /// the monitor needs Accessibility permission. Asking for that would be a poor trade for an
 /// app whose pitch is that it holds nothing and watches nothing.
-final class GlobalHotkeyService {
-
-    static let shared = GlobalHotkeyService()
+final class GlobalHotkeyService: HotkeyRegistrar {
 
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var onPress: (() -> Void)?
     private let signature: OSType = 0x46_44_50_53 // 'FDPS'
 
-    private init() {}
+    init() {}
 
-    /// - Returns: false when the combination is already taken by something else, so the UI
-    ///   can say so instead of silently doing nothing.
+    deinit {
+        unregister()
+    }
+
     @discardableResult
     func register(_ combo: HotkeyCombo, onPress: @escaping () -> Void) -> Bool {
         unregister()
@@ -26,11 +35,15 @@ final class GlobalHotkeyService {
 
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
-        let callback: EventHandlerUPP = { _, _, _ in
-            GlobalHotkeyService.shared.fire()
+        // A C function pointer cannot capture, so the instance travels as the handler's
+        // user data — the same device `DeviceMonitorService` uses for its IOKit callbacks.
+        let callback: EventHandlerUPP = { _, _, userData in
+            guard let userData else { return noErr }
+            Unmanaged<GlobalHotkeyService>.fromOpaque(userData).takeUnretainedValue().fire()
             return noErr
         }
-        InstallEventHandler(GetApplicationEventTarget(), callback, 1, &eventType, nil, &handlerRef)
+        let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        InstallEventHandler(GetApplicationEventTarget(), callback, 1, &eventType, context, &handlerRef)
 
         let id = EventHotKeyID(signature: signature, id: 1)
         let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
@@ -45,7 +58,7 @@ final class GlobalHotkeyService {
         onPress = nil
     }
 
-    fileprivate func fire() {
+    private func fire() {
         onPress?()
     }
 }

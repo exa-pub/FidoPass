@@ -8,9 +8,10 @@ import Carbon.HIToolbox
 /// sits in the value column, where a shortcut field belongs.
 struct HotkeyRecorderView: View {
     @ObservedObject var preferences: Preferences
+    @ObservedObject var hotkey: HotkeyRegistration
     @State private var monitor: Any?
 
-    private var isRecording: Bool { preferences.isRecordingHotkey }
+    private var isRecording: Bool { hotkey.isRecording }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -34,7 +35,7 @@ struct HotkeyRecorderView: View {
     private func start() {
         // Releases the global shortcut, so pressing the current combination records it
         // instead of firing it.
-        preferences.isRecordingHotkey = true
+        hotkey.isRecording = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             // Escape leaves the old combination alone rather than recording an unusable one.
             if event.keyCode == 53 {
@@ -53,7 +54,7 @@ struct HotkeyRecorderView: View {
         monitor = nil
         // Re-registers whatever the combination now is — the new one, or the old one when
         // the recording was cancelled.
-        preferences.isRecordingHotkey = false
+        hotkey.isRecording = false
     }
 
     static func combo(from event: NSEvent) -> HotkeyCombo? {

@@ -50,7 +50,6 @@ final class DeviceStore: ObservableObject {
     var onKeyClosed: ((String) -> Void)?
     /// Fired when the machine's session locks; everything derived must go with it.
     var onSessionLocked: (() -> Void)?
-    var onDeviceListChanged: (() -> Void)?
 
     private var pendingRefresh = false
     private let worker: KeyWorker
@@ -63,12 +62,12 @@ final class DeviceStore: ObservableObject {
     private var deviceMonitor: DeviceMonitorService?
     private var sessionMonitor: SessionLockMonitor?
 
-    init(backend: KeyBackend,
+    init(worker: KeyWorker,
          pinVault: SecurePinVault = SecurePinVault(defaultTTL: 300),
          pinTTL: TimeInterval = 300,
          emptyConfirmationDelay: Duration = .milliseconds(700),
          enableMonitors: Bool = true) {
-        self.worker = KeyWorker(backend: backend)
+        self.worker = worker
         self.pinVault = pinVault
         self.pinTTL = pinTTL
         self.emptyConfirmationDelay = emptyConfirmationDelay
@@ -197,7 +196,6 @@ final class DeviceStore: ObservableObject {
 
         if let current = selectedPath, updated[current] == nil { selectedPath = nil }
         if selectedPath == nil { selectedPath = sorted.first?.path }
-        if !vanished.isEmpty || previous.keys.count != updated.keys.count { onDeviceListChanged?() }
 
         // A key reappearing while a reset is armed is handled before anything else gets a
         // chance to open it. The reset window is seconds wide, and the identity of what came

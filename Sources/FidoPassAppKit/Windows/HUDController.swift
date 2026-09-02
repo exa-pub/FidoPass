@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -7,29 +8,28 @@ import UniformTypeIdentifiers
 final class HUDController: NSObject, NSWindowDelegate {
 
     private let store: HUDStore
+    private let devices: DeviceStore
+    private let generation: GenerationStore
     private var statusItem: NSStatusItem?
     private var panel: HUDPanel?
     private var hosting: NSHostingController<HUDRootView>?
     private var resignObserver: NSObjectProtocol?
+    private var iconSubscription: AnyCancellable?
 
-    init(store: HUDStore) {
-        self.store = store
+    init(container: AppContainer) {
+        self.store = container.panel
+        self.devices = container.devices
+        self.generation = container.generation
         super.init()
 
-        store.onRequestClose = { [weak self] in self?.hide() }
-        store.onStateChanged = { [weak self] in self?.updateIcon() }
-        store.onRequestOpenEditor = { [weak store] session in
-            AuxiliaryWindows.shared.showEditor(session: session) {
-                Task { @MainActor in store?.editorWindowClosed() }
-            }
-        }
-        store.onRequestCloseEditor = { AuxiliaryWindows.shared.closeEditor() }
-        store.onRequestSaveRecoverySheet = { [weak self] sheet in self?.presentSavePanel(for: sheet) }
-        store.onRequestOpenPanel = { [weak self] in self?.show() }
-        store.onRequestOpenManager = { [weak store] in
-            guard let store else { return }
-            AuxiliaryWindows.shared.showAuthenticatorManager(store: store)
-        }
+        // The icon is a function of store state, so it follows the stores instead of being
+        // told. `objectWillChange` fires before the change lands, hence the hop to the next
+        // run-loop turn before the state is read.
+        iconSubscription = Publishers.Merge3(store.objectWillChange,
+                                             devices.objectWillChange,
+                                             generation.objectWillChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateIcon() }
     }
 
     // MARK: - Status item
@@ -89,9 +89,9 @@ final class HUDController: NSObject, NSWindowDelegate {
 
     @objc private func menuOpen() { show() }
     @objc private func menuNewAccount() { show(intent: .enroll) }
-    @objc private func menuLock() { store.lockSelectedKey(); updateIcon() }
-    @objc private func menuPreferences() { AuxiliaryWindows.shared.showPreferences(store: store) }
-    @objc private func menuQuit() { NSApplication.shared.terminate(nil) }
+    @objc private func menuLock() { store.lockSelectedKey() }
+    @objc private func menuPreferences() { store.openPreferences() }
+    @objc private func menuQuit() { store.quit() }
 
     @objc private func menuCopyPassword() {
         guard let ref = store.selection else { show(); return }
@@ -151,7 +151,6 @@ final class HUDController: NSObject, NSWindowDelegate {
         guard let panel, panel.isVisible else { return }
         panel.orderOut(nil)
         store.panelDidClose()
-        updateIcon()
     }
 
     private func ensurePanel() -> HUDPanel {
@@ -225,7 +224,7 @@ final class HUDController: NSObject, NSWindowDelegate {
     ///
     /// A modal save panel from an accessory app would drop the HUD behind it and, because
     /// the panel loses key, close it outright — losing the screen the user started from.
-    private func presentSavePanel(for sheet: RecoverySheet) {
+    func presentSavePanel(for sheet: RecoverySheet) {
         guard let panel else { return }
         let savePanel = NSSavePanel()
         savePanel.nameFieldStringValue = sheet.suggestedFileName
@@ -242,8 +241,7 @@ final class HUDController: NSObject, NSWindowDelegate {
                     try sheet.render().write(to: url, atomically: true, encoding: .utf8)
                     self.store.recoverySheetFinished(saved: true)
                 } catch {
-                    self.store.errorText = "Could not save the recovery sheet: \(error.localizedDescription)"
-                    self.store.recoverySheetFinished(saved: false)
+                    self.store.recoverySheetFinished(saved: false, failure: error.localizedDescription)
                 }
             }
         }

@@ -7,7 +7,11 @@ import AppKit
 /// indefinitely, clipboard managers archive it into their searchable history, and
 /// Universal Clipboard forwards it to every other Apple device on the account. All three
 /// are addressed here.
-enum ClipboardService {
+///
+/// One instance per application: the pending wipe is state, and two of them would race to
+/// clear a pasteboard only one of them wrote.
+@MainActor
+final class ClipboardService {
 
     /// Convention honoured by clipboard managers (Maccy, Alfred, Raycast and others) to
     /// mean "do not record this in history". Not an Apple API — just a widely respected
@@ -15,9 +19,11 @@ enum ClipboardService {
     private static let concealedType = "org.nspasteboard.ConcealedType"
 
     /// How long a secret is allowed to stay on the pasteboard.
-    static let defaultClearInterval: TimeInterval = 45
+    nonisolated static let defaultClearInterval: TimeInterval = 45
 
-    private static var clearWorkItem: DispatchWorkItem?
+    private var clearWorkItem: DispatchWorkItem?
+
+    init() {}
 
     /// Copies `secret`, then clears the pasteboard after `clearAfter` seconds.
     ///
@@ -27,17 +33,17 @@ enum ClipboardService {
     ///   clear — either because the timeout elapsed or because something else took over the
     ///   pasteboard. Lets the UI stop advertising a countdown that no longer applies.
     @discardableResult
-    static func copySecret(_ secret: String,
-                           clearAfter: TimeInterval = defaultClearInterval,
-                           syncAcrossDevices: Bool = false,
-                           onCleared: (() -> Void)? = nil) -> Date? {
+    func copySecret(_ secret: String,
+                    clearAfter: TimeInterval = defaultClearInterval,
+                    syncAcrossDevices: Bool = false,
+                    onCleared: (() -> Void)? = nil) -> Date? {
         let pasteboard = NSPasteboard.general
         clearWorkItem?.cancel()
 
         pasteboard.clearContents()
         pasteboard.setString(secret, forType: .string)
         // Marking it concealed keeps it out of clipboard-manager history.
-        pasteboard.setString("", forType: NSPasteboard.PasteboardType(concealedType))
+        pasteboard.setString("", forType: NSPasteboard.PasteboardType(Self.concealedType))
         if !syncAcrossDevices {
             // Opting out of Universal Clipboard keeps the secret on this machine.
             pasteboard.setData(Data([1]), forType: NSPasteboard.PasteboardType("com.apple.is-sensitive"))
@@ -61,7 +67,7 @@ enum ClipboardService {
     }
 
     /// Clears the pasteboard immediately, but only if it still holds what we put there.
-    static func clearIfOwned() {
+    func clearIfOwned() {
         clearWorkItem?.perform()
         clearWorkItem = nil
     }

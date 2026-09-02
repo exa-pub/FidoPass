@@ -140,65 +140,32 @@ final class HUDStore: ObservableObject {
     let inventory: InventoryStore
     let labels: LabelStore
     let preferences: Preferences
-
-    /// Asks the presenter to close the panel — after a copy, or when there is nothing left
-    /// to do.
-    var onRequestClose: (() -> Void)?
-    var onRequestOpenEditor: ((CryptoEditorSession) -> Void)?
-    /// Closes the text editor window. Its session holds a live key for one account, so every
-    /// path that revokes access to that account has to take the window with it.
-    var onRequestCloseEditor: (() -> Void)?
-    var onRequestSaveRecoverySheet: ((RecoverySheet) -> Void)?
-    /// Opens the FIDO manager window. A window, not a route: the panel is the wrong shape
-    /// for it, and the manager has to survive the panel closing behind it.
-    var onRequestOpenManager: (() -> Void)?
-    /// Brings the panel up. Used by the manager window, which has no PIN field of its own —
-    /// a second place to type a PIN is a second place to spend one of the eight attempts.
-    var onRequestOpenPanel: (() -> Void)?
-    /// Raised when the key state changes in a way the menu-bar icon must reflect.
-    var onStateChanged: (() -> Void)?
+    let editor: EditorCoordinator
+    /// The windows. A window, not a route, for anything that has to survive the panel closing
+    /// behind it — the manager, the editor — and for the panel itself.
+    let router: WindowRouter
 
     private var pendingIntent: HUDIntent?
-    /// Device whose key the open editor session belongs to, or nil when no editor is open.
-    private(set) var editorDevicePath: String?
     private var statusTask: Task<Void, Never>?
     /// The reset triggered by the key reappearing, while it runs.
     private(set) var resetTask: Task<Void, Never>?
 
-    /// The stores are built here rather than injected as defaults: a default argument is
-    /// evaluated outside the main actor, and every one of these is main-actor bound.
-    init(backend: KeyBackend = LiveKeyBackend(),
-         preferences: Preferences? = nil,
-         labels: LabelStore? = nil,
-         emptyConfirmationDelay: Duration = .milliseconds(700),
-         enableMonitors: Bool = true) {
-        let settings = preferences ?? Preferences()
-        let deviceStore = DeviceStore(backend: backend,
-                                      pinTTL: settings.lockTimeout,
-                                      emptyConfirmationDelay: emptyConfirmationDelay,
-                                      enableMonitors: enableMonitors)
-        self.devices = deviceStore
-        self.accounts = AccountStore(backend: backend,
-                                     pin: { [weak deviceStore] path in deviceStore?.pin(for: path) },
-                                     pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })
-        self.generation = GenerationStore(backend: backend,
-                                          pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })
-        self.inventory = InventoryStore(backend: backend,
-                                        pin: { [weak deviceStore] path in deviceStore?.pin(for: path) })
-        self.labels = labels ?? LabelStore()
-        self.preferences = settings
-
-        settings.onLockTimeoutChanged = { [weak deviceStore] ttl in deviceStore?.setPinTTL(ttl) }
-        generation.onClipboardChanged = { [weak self] in self?.onStateChanged?() }
-        devices.onKeyClosed = { [weak self] path in self?.handleKeyClosed(path) }
-        devices.onSessionLocked = { [weak self] in self?.handleSessionLocked() }
-        devices.onDeviceListChanged = { [weak self] in self?.onStateChanged?() }
-        devices.onArmedKeyAppeared = { [weak self] device in
-            // Held so the work is reachable: the reset starts from a hot-plug callback, and
-            // without a handle nothing — a test, or a later step of the wizard — can tell
-            // whether it has finished.
-            self?.resetTask = Task { @MainActor [weak self] in await self?.performArmedReset(on: device) }
-        }
+    init(devices: DeviceStore,
+         accounts: AccountStore,
+         generation: GenerationStore,
+         inventory: InventoryStore,
+         labels: LabelStore,
+         preferences: Preferences,
+         editor: EditorCoordinator,
+         router: WindowRouter) {
+        self.devices = devices
+        self.accounts = accounts
+        self.generation = generation
+        self.inventory = inventory
+        self.labels = labels
+        self.preferences = preferences
+        self.editor = editor
+        self.router = router
     }
 
     // MARK: - Derived state
@@ -295,7 +262,6 @@ final class HUDStore: ObservableObject {
         }
         route = isSelectedKeyUnlocked ? .accounts : (devices.devices.isEmpty ? .accounts : .unlock)
         if isSelectedKeyUnlocked { await runPendingIntentIfPossible() }
-        onStateChanged?()
     }
 
     func panelDidClose() {
@@ -553,7 +519,6 @@ final class HUDStore: ObservableObject {
             // Released before the queued action runs: that action is an operation in its own
             // right, and it has to pass the same guard as if the user had asked for it now.
             isWorking = false
-            onStateChanged?()
             await runPendingIntentIfPossible()
         } catch {
             isWorking = false
@@ -609,7 +574,6 @@ final class HUDStore: ObservableObject {
             route = .accounts
             isWorking = false
             setStatus("PIN set — this key is ready to use")
-            onStateChanged?()
             await runPendingIntentIfPossible()
         } catch {
             isWorking = false
@@ -639,7 +603,6 @@ final class HUDStore: ObservableObject {
             route = .accounts
             isWorking = false
             setStatus("PIN changed — your passwords are unaffected")
-            onStateChanged?()
             await runPendingIntentIfPossible()
         } catch {
             isWorking = false
@@ -654,7 +617,6 @@ final class HUDStore: ObservableObject {
     func lockSelectedKey() {
         guard let path = devices.selectedPath else { return }
         devices.lock(path: path)
-        onStateChanged?()
     }
 
     private func runPendingIntentIfPossible() async {
@@ -731,7 +693,6 @@ final class HUDStore: ObservableObject {
                 generation.copy(password, as: .password, for: ref)
                 setStatus("Password copied — the clipboard clears itself")
             }
-            onStateChanged?()
         } catch {
             present(error)
         }
@@ -746,7 +707,6 @@ final class HUDStore: ObservableObject {
         guard let result = generation.result else { return }
         generation.copy(result.password, as: .password, for: result.ref)
         setStatus("Password copied — the clipboard clears itself")
-        onStateChanged?()
     }
 
     // MARK: - Enrolment
@@ -785,7 +745,6 @@ final class HUDStore: ObservableObject {
                 show(.accounts)
                 setStatus("Account added")
             }
-            onStateChanged?()
         } catch {
             enrollStep = nil
             present(error)
@@ -817,7 +776,6 @@ final class HUDStore: ObservableObject {
             restoreSelectionIfNeeded()
             show(.accounts)
             setStatus("Account deleted")
-            onStateChanged?()
         } catch {
             present(error)
         }
@@ -892,7 +850,6 @@ final class HUDStore: ObservableObject {
             // whole plan exists to remove.
             route = .accounts
             setStatus("Key erased — set a new PIN to use it")
-            onStateChanged?()
         } catch {
             resetFlow?.stage = .replug
             present(error, whenRefused: "The key had already been awake too long — most keys only accept a reset in the first seconds after being plugged in. Unplug it and plug it back in to try again.")
@@ -931,12 +888,16 @@ final class HUDStore: ObservableObject {
                                   labels: known,
                                   deviceDescription: description)
         isShowingSystemPanel = true
-        onRequestSaveRecoverySheet?(sheet)
+        router.saveRecoverySheet(sheet)
     }
 
-    func recoverySheetFinished(saved: Bool) {
+    func recoverySheetFinished(saved: Bool, failure: String? = nil) {
         isShowingSystemPanel = false
-        if saved { setStatus("Recovery sheet saved — it contains no secrets") }
+        if let failure {
+            errorText = "Could not save the recovery sheet: \(failure)"
+        } else if saved {
+            setStatus("Recovery sheet saved — it contains no secrets")
+        }
     }
 
     // MARK: - Text encryption
@@ -957,9 +918,8 @@ final class HUDStore: ObservableObject {
             }
             if let target = labelTarget(for: ref) { labels.use(label, in: target) }
             let session = CryptoEditorSession(account: account, label: label, key: key, core: .shared)
-            editorDevicePath = ref.devicePath
-            onRequestOpenEditor?(session)
-            onRequestClose?()
+            editor.open(session, boundTo: ref.devicePath)
+            router.closePanel()
         } catch {
             present(error)
         }
@@ -974,11 +934,9 @@ final class HUDStore: ObservableObject {
     func withTouchPrompt<T>(_ prompt: TouchPrompt, _ body: @escaping () async throws -> T) async rethrows -> T {
         touch = prompt
         isWorking = true
-        onStateChanged?()
         defer {
             touch = nil
             isWorking = false
-            onStateChanged?()
         }
         return try await body()
     }
@@ -991,7 +949,6 @@ final class HUDStore: ObservableObject {
     func abandonTouch() {
         touch = nil
         isWorking = false
-        onStateChanged?()
     }
 
     // MARK: - Housekeeping
@@ -1000,35 +957,30 @@ final class HUDStore: ObservableObject {
     func requestUnlock(devicePath: String) {
         devices.selectedPath = devicePath
         route = .accounts
-        onRequestOpenPanel?()
+        router.openPanel()
     }
 
     /// Opens the manager window. Reads nothing by itself — the window asks first.
     func openManager() {
-        onRequestOpenManager?()
-        onRequestClose?()
+        router.openManager()
+        router.closePanel()
     }
 
-    private func handleKeyClosed(_ path: String) {
+    func openPreferences() {
+        router.openPreferences()
+    }
+
+    func quit() {
+        router.quit()
+    }
+
+    /// A key stopped being usable. The container has already dropped what the other stores
+    /// held for it; this is only what the panel itself was showing.
+    func keyDidClose(_ path: String) {
         // The wizard is waiting for exactly this: the key has gone, so the next thing to
         // happen is it coming back.
         if resetFlow?.stage == .unplug, devices.armedReset != nil {
             resetFlow?.stage = .replug
-        }
-        // An open editor holds a derived key for one of this key's accounts. Locking has to
-        // take that with it, or "locked" would describe the account list while the secrets
-        // stayed reachable in another window.
-        closeEditor(ifBoundTo: path)
-        accounts.drop(devicePath: path)
-        generation.dropEverything(forDevicePath: path)
-        // A key that merely locked keeps what it said about *itself* — that is public
-        // information about the model — but loses its credential list, which names other
-        // services' accounts. A key that was unplugged loses both: `DeviceStore` has already
-        // removed its state by the time this runs, so its absence is the test.
-        if devices.state(for: path) == nil {
-            inventory.drop(devicePath: path)
-        } else {
-            inventory.dropInventory(devicePath: path)
         }
         if selection?.devicePath == path {
             selection = nil
@@ -1040,36 +992,25 @@ final class HUDStore: ObservableObject {
             backupKey = nil
             route = .accounts
         }
-        onStateChanged?()
     }
 
-    private func handleSessionLocked() {
-        closeEditor(ifBoundTo: nil)
+    /// The machine locked. Every key is locked by now and every store emptied; the panel
+    /// goes back to the PIN field and out of sight.
+    func sessionDidLock() {
         backupKey = nil
-        // The user walked away: an editing session left open would keep both the key and the
-        // plaintext on screen behind the lock screen, and a copied password would still be
-        // on the clipboard.
-        generation.clearClipboard()
-        generation.dropEverything()
-        accounts.dropAll()
-        inventory.dropAll()
         selection = nil
         focusLabels(on: nil)
         route = .unlock
-        onRequestClose?()
-        onStateChanged?()
+        router.closePanel()
     }
 
-    /// Closes the editor when it belongs to `path` — or unconditionally when `path` is nil.
-    func closeEditor(ifBoundTo path: String?) {
-        guard editorDevicePath != nil else { return }
-        if let path, editorDevicePath != path { return }
-        editorDevicePath = nil
-        onRequestCloseEditor?()
-    }
-
-    func editorWindowClosed() {
-        editorDevicePath = nil
+    /// The key came back while a reset was armed.
+    ///
+    /// Held so the work is reachable: the reset starts from a hot-plug callback, and without
+    /// a handle nothing — a test, or a later step of the wizard — can tell whether it has
+    /// finished.
+    func armedKeyAppeared(_ device: FidoDevice) {
+        resetTask = Task { @MainActor [weak self] in await self?.performArmedReset(on: device) }
     }
 
     func refresh() async {
@@ -1077,7 +1018,6 @@ final class HUDStore: ObservableObject {
         if let failure = devices.refreshError { errorText = failure }
         await reloadAccountsIfNeeded()
         restoreSelectionIfNeeded()
-        onStateChanged?()
     }
 
     private func present(_ error: Error) {

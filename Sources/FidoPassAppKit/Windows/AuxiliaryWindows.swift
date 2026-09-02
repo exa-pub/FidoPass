@@ -9,7 +9,9 @@ import SwiftUI
 @MainActor
 final class AuxiliaryWindows {
 
-    static let shared = AuxiliaryWindows()
+    private unowned let container: AppContainer
+    private let hotkey: HotkeyRegistration
+    private let launchAtLogin: LaunchAtLoginService
 
     private var editorWindow: NSWindow?
     private var editorSession: CryptoEditorSession?
@@ -18,7 +20,11 @@ final class AuxiliaryWindows {
     private var onboardingWindow: NSWindow?
     private var delegates: [ObjectIdentifier: WindowCloseDelegate] = [:]
 
-    private init() {}
+    init(container: AppContainer, hotkey: HotkeyRegistration, launchAtLogin: LaunchAtLoginService) {
+        self.container = container
+        self.hotkey = hotkey
+        self.launchAtLogin = launchAtLogin
+    }
 
     // MARK: - Text editor
 
@@ -26,14 +32,15 @@ final class AuxiliaryWindows {
         closeEditor()
         editorSession = session
 
+        let clipboard = container.clipboard
         let view = CryptoEditorView(session: session,
                                     onCopyPlaintext: { text in
-                                        ClipboardService.copySecret(text)
+                                        clipboard.copySecret(text)
                                     },
                                     onCopyCiphertext: { text in
                                         // Not a secret, and it exists to be pasted elsewhere:
                                         // wiping it mid-paste would be a defect, not protection.
-                                        ClipboardService.copySecret(text, clearAfter: 0)
+                                        clipboard.copySecret(text, clearAfter: 0)
                                     })
         let window = makeWindow(title: "Encrypt text — \(session.accountId) · “\(session.label)”",
                                 content: AnyView(view),
@@ -58,13 +65,17 @@ final class AuxiliaryWindows {
 
     // MARK: - Preferences
 
-    func showPreferences(store: HUDStore) {
+    func showPreferences() {
         if let preferencesWindow {
             present(preferencesWindow)
             return
         }
+        let view = PreferencesView(preferences: container.preferences,
+                                   labels: container.labels,
+                                   hotkey: hotkey,
+                                   launchAtLogin: launchAtLogin)
         let window = makeWindow(title: "FidoPass Settings",
-                                content: AnyView(PreferencesView(preferences: store.preferences, labels: store.labels)),
+                                content: AnyView(view),
                                 size: nil,
                                 resizable: false)
         onClose(of: window) { [weak self] in self?.preferencesWindow = nil }
@@ -77,13 +88,15 @@ final class AuxiliaryWindows {
     /// The manager is a window rather than a HUD screen: the panel is 340pt wide and
     /// optimised for the shortest path to a password, and a table of every credential on a
     /// key is neither of those things.
-    func showAuthenticatorManager(store: HUDStore) {
+    func showAuthenticatorManager() {
         if let managerWindow {
             present(managerWindow)
             return
         }
+        let view = AuthenticatorManagerView(store: container.panel)
+            .environment(\.clipboard, container.clipboard)
         let window = makeWindow(title: "FIDO Manager",
-                                content: AnyView(AuthenticatorManagerView(store: store)),
+                                content: AnyView(view),
                                 size: NSSize(width: 960, height: 620),
                                 resizable: true)
         onClose(of: window) { [weak self] in self?.managerWindow = nil }
@@ -93,16 +106,19 @@ final class AuxiliaryWindows {
 
     // MARK: - Onboarding
 
-    func showOnboarding(store: HUDStore, onFinish: @escaping () -> Void) {
+    func showOnboarding(onFinish: @escaping () -> Void) {
         if let onboardingWindow {
             present(onboardingWindow)
             return
         }
+        let view = OnboardingView(preferences: container.preferences,
+                                  launchAtLogin: launchAtLogin,
+                                  onFinish: { [weak self] in
+                                      onFinish()
+                                      self?.closeOnboarding()
+                                  })
         let window = makeWindow(title: "Welcome to FidoPass",
-                                content: AnyView(OnboardingView(preferences: store.preferences, onFinish: { [weak self] in
-                                    onFinish()
-                                    self?.closeOnboarding()
-                                })),
+                                content: AnyView(view),
                                 size: nil,
                                 resizable: false)
         onClose(of: window) { [weak self] in self?.onboardingWindow = nil }

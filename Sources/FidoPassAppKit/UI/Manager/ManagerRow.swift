@@ -10,6 +10,7 @@ struct ManagerRow: View {
     var copyable = false
 
     @State private var copied = false
+    @Environment(\.clipboard) private var clipboard
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -27,7 +28,11 @@ struct ManagerRow: View {
                     // Not a secret, but it identifies its owner at some relying party — so it
                     // goes through the concealed path like everything else, and is not synced
                     // to other devices. No timeout: it exists to be pasted.
-                    _ = ClipboardService.copySecret(value, clearAfter: 0)
+                    guard let clipboard else {
+                        assertionFailure("the manager window must inject the clipboard service")
+                        return
+                    }
+                    clipboard.copySecret(value, clearAfter: 0)
                     copied = true
                 }
                 .buttonStyle(.link)

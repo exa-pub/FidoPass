@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 import FidoPassCore
 import TestSupport
@@ -139,8 +140,9 @@ final class HUDStoreTests: XCTestCase {
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
 
         var sawPrompt = false
-        store.onStateChanged = { if store.touch != nil { sawPrompt = true } }
+        let watching = store.$touch.sink { if $0 != nil { sawPrompt = true } }
         await store.copyPassword(for: ref, label: "work")
+        watching.cancel()
 
         XCTAssertTrue(sawPrompt, "an operation that makes the key wait for a finger must say so")
         XCTAssertNil(store.touch, "and the prompt must come down afterwards")
@@ -320,11 +322,10 @@ final class HUDStoreTests: XCTestCase {
         await store.copyPassword(for: vault, label: "vault-label")
         await store.copyPassword(for: AccountRef(accountId: "disk", devicePath: device.path), label: "disk-label")
 
-        var saved: RecoverySheet?
-        store.onRequestSaveRecoverySheet = { saved = $0 }
         store.saveRecoverySheet(for: vault)
 
-        XCTAssertEqual(saved?.labels, ["vault-label"])
+        let router = store.router as? RecordingWindowRouter
+        XCTAssertEqual(router?.savedSheets.last?.labels, ["vault-label"])
     }
 
     // MARK: - Keyboard navigation
@@ -531,28 +532,25 @@ final class HUDEditorLifetimeTests: XCTestCase {
 
     func testLockingTheKeyClosesTheEditor() async {
         let (store, _, device) = await HUDTestFactory.unlockedStore()
-        var closed = false
-        store.onRequestOpenEditor = { _ in }
-        store.onRequestCloseEditor = { closed = true }
+        let router = store.router as! RecordingWindowRouter
 
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
-        XCTAssertEqual(store.editorDevicePath, device.path)
+        XCTAssertEqual(store.editor.boundDevicePath, device.path)
+        XCTAssertEqual(router.openedEditors.count, 1)
 
         store.lockSelectedKey()
-        XCTAssertTrue(closed, "locking must not leave a live key in an open window")
-        XCTAssertNil(store.editorDevicePath)
+        XCTAssertEqual(router.editorClosed, 1, "locking must not leave a live key in an open window")
+        XCTAssertNil(store.editor.boundDevicePath)
     }
 
     func testUnpluggingTheKeyClosesTheEditor() async {
         let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        var closed = false
-        store.onRequestOpenEditor = { _ in }
-        store.onRequestCloseEditor = { closed = true }
+        let router = store.router as! RecordingWindowRouter
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
 
         backend.devices = []
         await store.refresh()
-        XCTAssertTrue(closed)
+        XCTAssertEqual(router.editorClosed, 1)
     }
 
     func testAnEmptyLabelIsRefusedBeforeTheKeyIsTouched() async {
@@ -561,7 +559,7 @@ final class HUDEditorLifetimeTests: XCTestCase {
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
 
         XCTAssertNotNil(store.errorText)
-        XCTAssertNil(store.editorDevicePath)
+        XCTAssertNil(store.editor.boundDevicePath)
         XCTAssertTrue(backend.generateCalls.isEmpty)
     }
 }

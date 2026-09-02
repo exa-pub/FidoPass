@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// The application, assembled.
 ///
@@ -9,31 +10,45 @@ import AppKit
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    private let store = HUDStore()
-    private lazy var hud = HUDController(store: store)
+    private let windows = AppWindows()
+    private lazy var container = AppContainer(router: windows)
+    private lazy var hud = HUDController(container: container)
+    private lazy var hotkey = HotkeyRegistration(preferences: container.preferences,
+                                                 registrar: GlobalHotkeyService()) { [weak self] in
+        Task { @MainActor in self?.hud.toggle() }
+    }
+    private lazy var auxiliary = AuxiliaryWindows(container: container,
+                                                  hotkey: hotkey,
+                                                  launchAtLogin: SMAppLaunchAtLogin())
+    private var subscriptions: Set<AnyCancellable> = []
 
     public override init() {
         super.init()
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(store.preferences.showInDock ? .regular : .accessory)
+        windows.panel = hud
+        windows.auxiliary = auxiliary
+        windows.container = container
+
+        let preferences = container.preferences
+        NSApp.setActivationPolicy(preferences.showInDock ? .regular : .accessory)
+        preferences.$showInDock
+            .dropFirst()
+            .sink { NSApp.setActivationPolicy($0 ? .regular : .accessory) }
+            .store(in: &subscriptions)
         installMainMenu()
         hud.installStatusItem()
-
-        store.preferences.onHotkeyChanged = { [weak self] in self?.applyHotkey() }
-        store.preferences.onShowInDockChanged = { showInDock in
-            NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
-        }
-        applyHotkey()
+        // Registers the shortcut, and keeps it registered as Preferences change.
+        _ = hotkey
 
         Task {
-            await store.refresh()
+            await container.panel.refresh()
             // Starting is not an event: the app appears in the menu bar and waits. Only the
             // very first run explains itself, and only because a menu-bar app with no Dock
             // icon is otherwise impossible to find.
-            if !store.preferences.hasOnboarded {
-                AuxiliaryWindows.shared.showOnboarding(store: store) { [weak self] in
+            if !preferences.hasOnboarded {
+                auxiliary.showOnboarding { [weak self] in
                     // Finishing onboarding is a deliberate click, so the panel opens once —
                     // anchored under its icon, which is the thing being taught.
                     self?.hud.show()
@@ -44,25 +59,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         // Quitting is not a reason to leave a derived password behind on the clipboard.
-        store.generation.clearClipboard()
-        GlobalHotkeyService.shared.unregister()
-    }
-
-    private func applyHotkey() {
-        GlobalHotkeyService.shared.unregister()
-        // Nothing is registered while the user is typing a replacement.
-        guard !store.preferences.isRecordingHotkey else { return }
-        guard store.preferences.hotkeyEnabled else {
-            store.preferences.hotkeyRegistrationFailed = false
-            return
-        }
-        let registered = GlobalHotkeyService.shared.register(store.preferences.hotkey) { [weak self] in
-            Task { @MainActor in self?.hud.toggle() }
-        }
-        store.preferences.hotkeyRegistrationFailed = !registered
-        if !registered {
-            store.errorText = "The shortcut \(store.preferences.hotkey.display) is already taken by another application."
-        }
+        container.generation.clearClipboard()
     }
 
     /// A minimal main menu.
@@ -105,10 +102,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showManager() {
-        AuxiliaryWindows.shared.showAuthenticatorManager(store: store)
+        auxiliary.showAuthenticatorManager()
     }
 
     @objc private func showPreferences() {
-        AuxiliaryWindows.shared.showPreferences(store: store)
+        auxiliary.showPreferences()
     }
 }
