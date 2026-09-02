@@ -53,7 +53,8 @@ final class LabelStore: ObservableObject {
     private let userDefaults: UserDefaults
     private let ubiStore: NSUbiquitousKeyValueStore
     private let notificationCenter: NotificationCenter
-    private var observer: NSObjectProtocol?
+    // Removed in `deinit`, which is not isolated; never touched anywhere else.
+    nonisolated(unsafe) private var observer: NSObjectProtocol?
 
     init(userDefaults: UserDefaults = .standard,
          ubiStore: NSUbiquitousKeyValueStore = .default,

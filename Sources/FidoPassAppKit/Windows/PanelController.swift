@@ -14,7 +14,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var panel: PanelWindow?
     private var hosting: NSHostingController<PanelRootView>?
-    private var resignObserver: NSObjectProtocol?
+    // Removed in `deinit`, which is not isolated; never touched anywhere else.
+    nonisolated(unsafe) private var resignObserver: NSObjectProtocol?
     private var iconSubscription: AnyCancellable?
 
     init(container: AppContainer) {

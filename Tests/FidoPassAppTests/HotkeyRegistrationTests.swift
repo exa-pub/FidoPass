@@ -6,12 +6,13 @@ import TestSupport
 @MainActor
 final class HotkeyRegistrationTests: XCTestCase {
 
+    @MainActor
     private final class FakeRegistrar: HotkeyRegistrar {
         var registered: [HotkeyCombo] = []
         var unregisterCount = 0
         var accepts = true
 
-        func register(_ combo: HotkeyCombo, onPress: @escaping () -> Void) -> Bool {
+        func register(_ combo: HotkeyCombo, onPress: @escaping @MainActor () -> Void) -> Bool {
             registered.append(combo)
             return accepts
         }

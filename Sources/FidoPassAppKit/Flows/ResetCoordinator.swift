@@ -11,7 +11,7 @@ import Foundation
 @MainActor
 final class ResetCoordinator: ObservableObject {
 
-    enum Refusal: LocalizedError {
+    enum Refusal: LocalizedError, Sendable {
         /// After the reconnect the path is different and a vendor signature only names a
         /// model — there is no way left to prove which key came back, and an operation that
         /// erases everything may not proceed on a guess.

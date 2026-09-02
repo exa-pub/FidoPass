@@ -1,17 +1,22 @@
 import Foundation
 
 /// Stores PIN codes in memory with automatic expiration and zeroisation on removal.
-final class SecurePinVault {
+///
+/// `@unchecked Sendable`: every access to `entries` goes through `queue` with a barrier, and
+/// the vault is read synchronously from the key worker's thread — inside a libfido2 callback —
+/// which is why it is a class with a queue rather than an actor.
+final class SecurePinVault: @unchecked Sendable {
     typealias TimerFactory = (_ queue: DispatchQueue) -> DispatchSourceTimer
     struct Token: Hashable {
         fileprivate let rawValue = UUID()
     }
 
-    private struct Entry {
+    /// Guarded by `queue`, hence unchecked.
+    private struct Entry: @unchecked Sendable {
         var pinData: Data
         var expiration: Date
         var timer: DispatchSourceTimer?
-        var onExpire: (() -> Void)?
+        var onExpire: (@Sendable () -> Void)?
 
         mutating func invalidate() {
             timer?.cancel()
@@ -36,7 +41,7 @@ final class SecurePinVault {
     @discardableResult
     func store(pin: String,
                ttl: TimeInterval? = nil,
-               onExpire: (() -> Void)? = nil) -> Token {
+               onExpire: (@Sendable () -> Void)? = nil) -> Token {
         let token = Token()
         let interval = ttl ?? defaultTTL
         let entry = Entry(pinData: Data(pin.utf8),

@@ -1,7 +1,7 @@
 import Foundation
 import FidoPassCore
 
-public enum TestError: Error, Equatable {
+public enum TestError: Error, Equatable, Sendable {
     case generic(String)
 }
 

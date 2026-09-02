@@ -7,7 +7,7 @@ import CLibfido2
 /// `PinScope` so it is wiped, and a key that does not support the subcommand says so in
 /// words rather than as a raw status code. A key answers `FIDO_ERR_INVALID_COMMAND` or
 /// `UNSUPPORTED_OPTION` for a subcommand it does not have, and "0x01" tells a user nothing.
-final class DeviceConfigurationService: DeviceConfiguring, @unchecked Sendable {
+final class DeviceConfigurationService: DeviceConfiguring, Sendable {
 
     private let deviceRepository: DeviceAccessing
 

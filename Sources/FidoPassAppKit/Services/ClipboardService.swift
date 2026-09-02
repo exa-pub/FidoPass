@@ -36,7 +36,7 @@ final class ClipboardService {
     func copySecret(_ secret: String,
                     clearAfter: TimeInterval = defaultClearInterval,
                     syncAcrossDevices: Bool = false,
-                    onCleared: (() -> Void)? = nil) -> Date? {
+                    onCleared: (@Sendable () -> Void)? = nil) -> Date? {
         let pasteboard = NSPasteboard.general
         clearWorkItem?.cancel()
 

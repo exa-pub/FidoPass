@@ -175,6 +175,7 @@ final class AuxiliaryWindows {
     }
 }
 
+@MainActor
 private final class WindowCloseDelegate: NSObject, NSWindowDelegate {
     private let action: () -> Void
 

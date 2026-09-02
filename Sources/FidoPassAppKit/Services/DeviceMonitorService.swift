@@ -2,14 +2,18 @@ import Foundation
 import IOKit.hid
 
 /// Observes HID-level plug/unplug events for FIDO usage page devices.
-final class DeviceMonitorService {
-    private let notify: () -> Void
+///
+/// `@unchecked Sendable`: the IOKit callbacks arrive on the main run loop and the debounce
+/// runs on `callbackQueue`; `pendingWorkItem` is touched only on that queue, and `manager`
+/// only in `init` and `deinit`.
+final class DeviceMonitorService: @unchecked Sendable {
+    private let notify: @Sendable () -> Void
     private var manager: IOHIDManager?
     private let debounceInterval: TimeInterval
     private let callbackQueue = DispatchQueue(label: "com.fidopass.deviceMonitor", qos: .userInitiated)
     private var pendingWorkItem: DispatchWorkItem?
 
-    init(debounceInterval: TimeInterval = 0.35, notify: @escaping () -> Void) {
+    init(debounceInterval: TimeInterval = 0.35, notify: @escaping @Sendable () -> Void) {
         self.debounceInterval = debounceInterval
         self.notify = notify
         setUp()
@@ -59,13 +63,12 @@ final class DeviceMonitorService {
         callbackQueue.async { [weak self] in
             guard let self else { return }
             self.pendingWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                DispatchQueue.main.async { self.notify() }
+            let notify = self.notify
+            let workItem = DispatchWorkItem {
+                DispatchQueue.main.async { notify() }
             }
             self.pendingWorkItem = workItem
-            let delay = self.debounceInterval
-            self.callbackQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+            self.callbackQueue.asyncAfter(deadline: .now() + self.debounceInterval, execute: workItem)
         }
     }
 }

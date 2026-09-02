@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 import PackageDescription
 
 let package = Package(
@@ -21,6 +21,7 @@ let package = Package(
         .target(
             name: "FidoPassCore",
             dependencies: ["CLibfido2"],
+            swiftSettings: [.swiftLanguageMode(.v6)],
             linkerSettings: [
                 .linkedFramework("IOKit"),
                 .linkedFramework("CoreFoundation")
@@ -30,7 +31,8 @@ let package = Package(
         // imported by tests as one module and assembled from one entry point.
         .target(
             name: "FidoPassAppKit",
-            dependencies: ["FidoPassCore"]
+            dependencies: ["FidoPassCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The entry point and nothing else. The app icon lives here for `build_app.sh`,
         // which copies it into the bundle itself; SwiftPM must not turn it into a resource
@@ -38,20 +40,24 @@ let package = Package(
         .executableTarget(
             name: "FidoPassApp",
             dependencies: ["FidoPassAppKit"],
-            exclude: ["Resources"]
+            exclude: ["Resources"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "TestSupport",
             dependencies: ["FidoPassCore"],
-            path: "Tests/TestSupport"
+            path: "Tests/TestSupport",
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FidoPassCoreTests",
-            dependencies: ["FidoPassCore", "TestSupport"]
+            dependencies: ["FidoPassCore", "TestSupport"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FidoPassAppTests",
-            dependencies: ["FidoPassAppKit", "FidoPassCore", "TestSupport"]
+            dependencies: ["FidoPassAppKit", "FidoPassCore", "TestSupport"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
 )

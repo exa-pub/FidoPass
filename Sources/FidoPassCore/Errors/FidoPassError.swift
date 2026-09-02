@@ -1,6 +1,6 @@
 import Foundation
 
-public enum FidoPassError: Error, LocalizedError {
+public enum FidoPassError: Error, LocalizedError, Sendable {
     /// A libfido2 call failed. The translated status travels with the message so the UI can
     /// react to specific conditions — running out of PIN attempts above all — instead of
     /// pattern-matching English text.

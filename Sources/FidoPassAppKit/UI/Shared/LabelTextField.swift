@@ -52,6 +52,7 @@ struct LabelTextField: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: LabelTextField
         private var isChangingResponder = false
@@ -71,13 +72,15 @@ struct LabelTextField: NSViewRepresentable {
             isChangingResponder = true
             // Deferred: a responder change inside a SwiftUI update re-enters layout.
             DispatchQueue.main.async { [weak self, weak field] in
-                guard let self else { return }
-                guard let field, let window = field.window else {
-                    self.isChangingResponder = false
-                    return
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    guard let field, let window = field.window else {
+                        self.isChangingResponder = false
+                        return
+                    }
+                    window.makeFirstResponder(field)
+                    self.placeCaret(in: field, atEnd: caretAtEnd, attempt: 0)
                 }
-                window.makeFirstResponder(field)
-                self.placeCaret(in: field, atEnd: caretAtEnd, attempt: 0)
             }
         }
 
@@ -85,10 +88,12 @@ struct LabelTextField: NSViewRepresentable {
             guard !isChangingResponder else { return }
             isChangingResponder = true
             DispatchQueue.main.async { [weak self, weak field] in
-                if let field, field.currentEditor() != nil {
-                    field.window?.makeFirstResponder(nil)
+                MainActor.assumeIsolated {
+                    if let field, field.currentEditor() != nil {
+                        field.window?.makeFirstResponder(nil)
+                    }
+                    self?.isChangingResponder = false
                 }
-                self?.isChangingResponder = false
             }
         }
 
@@ -99,8 +104,10 @@ struct LabelTextField: NSViewRepresentable {
                     return
                 }
                 DispatchQueue.main.async { [weak self, weak field] in
-                    guard let self, let field else { return }
-                    self.placeCaret(in: field, atEnd: atEnd, attempt: attempt + 1)
+                    MainActor.assumeIsolated {
+                        guard let self, let field else { return }
+                        self.placeCaret(in: field, atEnd: atEnd, attempt: attempt + 1)
+                    }
                 }
                 return
             }

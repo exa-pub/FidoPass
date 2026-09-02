@@ -25,10 +25,10 @@ final class HotkeyRegistration: ObservableObject {
 
     private let preferences: Preferences
     private let registrar: HotkeyRegistrar
-    private let onPress: () -> Void
+    private let onPress: @MainActor () -> Void
     private var subscriptions: Set<AnyCancellable> = []
 
-    init(preferences: Preferences, registrar: HotkeyRegistrar, onPress: @escaping () -> Void) {
+    init(preferences: Preferences, registrar: HotkeyRegistrar, onPress: @escaping @MainActor () -> Void) {
         self.preferences = preferences
         self.registrar = registrar
         self.onPress = onPress

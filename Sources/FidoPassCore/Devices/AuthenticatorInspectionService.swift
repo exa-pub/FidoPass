@@ -7,7 +7,7 @@ import CLibfido2
 /// Lives beside `DeviceManagementService` rather than inside `DeviceRepository` for the same
 /// reason that one does: the repository is device access, this is an operation performed
 /// because a person asked. Nothing here writes to the key.
-final class AuthenticatorInspectionService: AuthenticatorInspecting, @unchecked Sendable {
+final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
 
     private let deviceRepository: DeviceAccessing
 

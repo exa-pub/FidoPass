@@ -65,6 +65,7 @@ struct PlainTextEditor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         private let text: Binding<String>
 

@@ -5,7 +5,7 @@ import Foundation
 /// The cases exist to be told apart in the UI. While someone is typing or pasting into the
 /// ciphertext field, most intermediate states are simply incomplete — presenting those as
 /// failures would make normal editing look broken.
-public enum SecretCryptoError: Error, Equatable, LocalizedError {
+public enum SecretCryptoError: Error, Equatable, LocalizedError, Sendable {
     /// Not valid base64 yet. The ordinary state of a field being typed into.
     case notBase64
     /// Decodes as base64, but is not a FidoPass value.

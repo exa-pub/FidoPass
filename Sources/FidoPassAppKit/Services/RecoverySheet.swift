@@ -89,10 +89,12 @@ struct RecoverySheet {
         return "FidoPass-recovery-\(safe).txt"
     }
 
-    private static let dateFormatter: DateFormatter = {
+    /// Built per render: a sheet is saved a few times a year, and a shared formatter is
+    /// not concurrency-safe.
+    private static var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter
-    }()
+    }
 }

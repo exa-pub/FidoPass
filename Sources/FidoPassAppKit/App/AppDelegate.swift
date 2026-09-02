@@ -15,7 +15,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var hud = PanelController(container: container)
     private lazy var hotkey = HotkeyRegistration(preferences: container.preferences,
                                                  registrar: GlobalHotkeyService()) { [weak self] in
-        Task { @MainActor in self?.hud.toggle() }
+        self?.hud.toggle()
     }
     private lazy var auxiliary = AuxiliaryWindows(container: container,
                                                   hotkey: hotkey,

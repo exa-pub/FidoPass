@@ -1,54 +1,55 @@
 import AppKit
 
 /// Observes macOS session lock/unlock and notifies listeners.
+///
+/// Both notification centres deliver on the main queue, which is why the callbacks may
+/// assume main-actor isolation rather than hop.
+@MainActor
 final class SessionLockMonitor {
     private let onLock: () -> Void
     private let onUnlock: (() -> Void)?
-    private var observers: [NSObjectProtocol] = []
-    private var distributedObservers: [NSObjectProtocol] = []
+    private let center = NSWorkspace.shared.notificationCenter
+    private let distributed = DistributedNotificationCenter.default()
+    // Observer tokens are removed in `deinit`, which is not isolated; the tokens themselves
+    // are never touched from anywhere else.
+    nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
+    nonisolated(unsafe) private var distributedObservers: [NSObjectProtocol] = []
 
     init(onLock: @escaping () -> Void, onUnlock: (() -> Void)? = nil) {
         self.onLock = onLock
         self.onUnlock = onUnlock
 
-        let center = NSWorkspace.shared.notificationCenter
         observers.append(center.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification,
                                             object: nil,
                                             queue: .main) { [weak self] _ in
-            self?.onLock()
+            MainActor.assumeIsolated { self?.onLock() }
         })
 
-        if let onUnlock {
+        if onUnlock != nil {
             observers.append(center.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification,
                                                 object: nil,
-                                                queue: .main) { _ in
-                onUnlock()
+                                                queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onUnlock?() }
             })
         }
 
-        let distributed = DistributedNotificationCenter.default()
         distributedObservers.append(distributed.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"),
                                                             object: nil,
                                                             queue: .main) { [weak self] _ in
-            self?.onLock()
+            MainActor.assumeIsolated { self?.onLock() }
         })
 
-        if let onUnlock {
+        if onUnlock != nil {
             distributedObservers.append(distributed.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"),
                                                                 object: nil,
-                                                                queue: .main) { _ in
-                onUnlock()
+                                                                queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onUnlock?() }
             })
         }
     }
 
     deinit {
-        let center = NSWorkspace.shared.notificationCenter
         observers.forEach { center.removeObserver($0) }
-        observers.removeAll()
-
-        let distributed = DistributedNotificationCenter.default()
         distributedObservers.forEach { distributed.removeObserver($0) }
-        distributedObservers.removeAll()
     }
 }
