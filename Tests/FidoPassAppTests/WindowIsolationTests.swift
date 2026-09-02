@@ -10,25 +10,31 @@ import TestSupport
 @MainActor
 final class WindowIsolationTests: XCTestCase {
 
-    /// The manager's change-PIN sheet and the panel's bootstrap screen edit the same fields
-    /// today. Closing the panel — which happens the moment any other window takes focus —
-    /// wipes a PIN the user is halfway through typing in the manager.
-    ///
-    /// Pinned as an expected failure: the fix is structural (one form per window) and lands
-    /// with the store split. Until then this test documents the defect rather than hiding it.
+    /// The manager's change-PIN sheet and the panel's bootstrap screen used to edit the same
+    /// fields. Closing the panel — which happens the moment any other window takes focus —
+    /// wiped a PIN the user was halfway through typing in the manager.
     func testClosingThePanelLeavesTheManagerPinFormAlone() async {
         let (store, _, _) = await HUDTestFactory.unlockedStore()
-        store.pinForm.current = "1234"
-        store.pinForm.new = "246813"
-        store.pinForm.confirm = "246813"
+        let manager = HUDTestFactory.manager(for: store)
+        manager.pinForm.current = "1234"
+        manager.pinForm.new = "246813"
+        manager.pinForm.confirm = "246813"
 
         store.panelDidClose()
 
-        XCTExpectFailure("the change-PIN form is shared with the panel until the store split") {
-            XCTAssertEqual(store.pinForm.current, "1234",
-                           "closing the panel must not touch a form that belongs to another window")
-            XCTAssertEqual(store.pinForm.new, "246813")
-        }
+        XCTAssertEqual(manager.pinForm.current, "1234",
+                       "closing the panel must not touch a form that belongs to another window")
+        XCTAssertEqual(manager.pinForm.new, "246813")
+    }
+
+    /// And the other way round: the panel's own bootstrap form is the one `panelDidClose` wipes.
+    func testClosingThePanelClearsItsOwnForm() async {
+        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        store.pinForm.new = "246813"
+
+        store.panelDidClose()
+
+        XCTAssertTrue(store.pinForm.isEmpty)
     }
 
     // MARK: - Menu-bar icon

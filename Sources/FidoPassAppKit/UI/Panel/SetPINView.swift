@@ -8,6 +8,12 @@ import FidoPassCore
 /// resulting message advised setting a PIN with no way to do so.
 struct SetPINView: View {
     @ObservedObject var store: HUDStore
+    @ObservedObject private var form: PinFormModel
+
+    init(store: HUDStore) {
+        self.store = store
+        self.form = store.pinForm
+    }
 
     private enum Field: Hashable { case new, confirm }
     @FocusState private var focus: Field?
@@ -22,25 +28,25 @@ struct SetPINView: View {
                 HUDWarningBox(title: "This PIN belongs to the key, not to FidoPass",
                               message: "It is not your Mac password and it cannot be reset. Eight wrong entries in a row lock the key permanently, and every account on it goes with it. Choose something you will not have to guess at.")
 
-                SecureField("New PIN", text: $store.pinForm.new)
+                SecureField("New PIN", text: $form.new)
                     .textFieldStyle(.roundedBorder)
                     .focused($focus, equals: .new)
 
                 // A typo in a single field would produce a key whose PIN its owner does not
                 // know — which is a dead key. That is what the second field is for.
-                SecureField("Repeat PIN", text: $store.pinForm.confirm)
+                SecureField("Repeat PIN", text: $form.confirm)
                     .textFieldStyle(.roundedBorder)
                     .focused($focus, equals: .confirm)
                     .onSubmit { Task { await store.setInitialPIN() } }
 
-                PinRuleFooter(store: store, forChange: false)
+                PinRuleFooter(form: form)
 
                 HStack {
                     Spacer()
                     Button("Set PIN") { Task { await store.setInitialPIN() } }
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
-                        .disabled(!store.canSubmitPinForm(forChange: false))
+                        .disabled(!form.canSubmit)
                 }
             }
             .padding(.horizontal, HUDMetrics.padding)

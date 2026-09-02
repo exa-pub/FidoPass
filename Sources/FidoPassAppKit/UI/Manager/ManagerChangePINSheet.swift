@@ -8,14 +8,20 @@ import FidoPassCore
 /// the old PIN is the same proof unlocking asks for — and on a key that is demanding a change,
 /// which is the one case where the user has no choice but to be here.
 struct ManagerChangePINSheet: View {
-    @ObservedObject var store: HUDStore
-    @ObservedObject var devices: DeviceStore
-    let onClose: () -> Void
+    @ObservedObject var store: ManagerStore
+    @ObservedObject private var form: PinFormModel
+    @ObservedObject private var touchGate: TouchGate
 
     @FocusState private var currentFocused: Bool
 
-    private var forced: Bool { devices.selectedState?.forcePINChange == true }
-    private var retries: Int? { devices.selectedState?.pinRetriesRemaining }
+    init(store: ManagerStore, touchGate: TouchGate) {
+        self.store = store
+        self.form = store.pinForm
+        self.touchGate = touchGate
+    }
+
+    private var forced: Bool { store.keyState?.forcePINChange == true }
+    private var retries: Int? { store.keyState?.pinRetriesRemaining }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -37,18 +43,18 @@ struct ManagerChangePINSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            SecureField("Current PIN", text: $store.pinForm.current)
+            SecureField("Current PIN", text: $form.current)
                 .textFieldStyle(.roundedBorder)
                 .focused($currentFocused)
-            SecureField("New PIN", text: $store.pinForm.new)
+            SecureField("New PIN", text: $form.new)
                 .textFieldStyle(.roundedBorder)
-            SecureField("Repeat new PIN", text: $store.pinForm.confirm)
+            SecureField("Repeat new PIN", text: $form.confirm)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(submit)
 
-            PinRuleFooter(store: store, forChange: true)
+            PinRuleFooter(form: form)
             if let retries { PinAttemptsLabel(remaining: retries) }
-            if let error = store.errorText {
+            if let error = store.pinError {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -57,15 +63,12 @@ struct ManagerChangePINSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") {
-                    store.pinForm.clear()
-                    onClose()
-                }
-                .keyboardShortcut(.cancelAction)
+                Button("Cancel") { store.cancelChangePIN() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Change PIN", action: submit)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!store.canSubmitPinForm(forChange: true) || store.isWorking)
+                    .disabled(!form.canSubmit || touchGate.isWorking)
             }
         }
         .padding(20)
@@ -76,12 +79,10 @@ struct ManagerChangePINSheet: View {
         }
     }
 
+    /// The store closes the sheet itself once the key has accepted the PIN, and leaves it up
+    /// otherwise: a wrong old PIN costs one of the eight attempts, and closing would hide the
+    /// count that says so.
     private func submit() {
-        Task {
-            await store.changePIN()
-            // Only leave once the key has accepted it: a wrong old PIN costs one of the eight
-            // attempts, and closing the sheet would hide the count that says so.
-            if store.errorText == nil, store.pinForm.isEmpty { onClose() }
-        }
+        Task { await store.changePIN() }
     }
 }

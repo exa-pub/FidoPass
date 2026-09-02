@@ -22,8 +22,11 @@ final class AppContainer {
     let touchGate: TouchGate
     let editor: EditorCoordinator
     let router: WindowRouter
+    let reset: ResetCoordinator
     /// The menu-bar panel's store.
     let panel: HUDStore
+    /// The manager window's store. Reads nothing until that window opens.
+    let manager: ManagerStore
 
     private var subscriptions: Set<AnyCancellable> = []
 
@@ -55,6 +58,11 @@ final class AppContainer {
         let labelStore = labels ?? LabelStore()
         let touchGate = TouchGate()
         let editor = EditorCoordinator(router: router)
+        let reset = ResetCoordinator(devices: deviceStore,
+                                     accounts: accountStore,
+                                     labels: labelStore,
+                                     preferences: settings,
+                                     touchGate: touchGate)
 
         self.preferences = settings
         self.devices = deviceStore
@@ -66,6 +74,12 @@ final class AppContainer {
         self.touchGate = touchGate
         self.editor = editor
         self.router = router
+        self.reset = reset
+        self.manager = ManagerStore(devices: deviceStore,
+                                    inventory: inventoryStore,
+                                    touchGate: touchGate,
+                                    reset: reset,
+                                    router: router)
         self.panel = HUDStore(devices: deviceStore,
                               accounts: accountStore,
                               generation: generationStore,
@@ -82,7 +96,8 @@ final class AppContainer {
             .store(in: &subscriptions)
         deviceStore.onKeyClosed = { [weak self] path in self?.keyDidClose(path) }
         deviceStore.onSessionLocked = { [weak self] in self?.sessionDidLock() }
-        deviceStore.onArmedKeyAppeared = { [weak self] device in self?.panel.armedKeyAppeared(device) }
+        deviceStore.onArmedKeyAppeared = { [weak reset] device in reset?.armedKeyAppeared(device) }
+        reset.onCompleted = { [weak self] in self?.panel.resetDidComplete() }
     }
 
     // MARK: - Reactions that cross store boundaries
@@ -92,6 +107,8 @@ final class AppContainer {
     /// Order matters: the panel is told last, once every store it reads from has already
     /// dropped what it held for this key.
     private func keyDidClose(_ path: String) {
+        // The wizard first: it is waiting for exactly this.
+        reset.keyDidClose(path)
         // An open editor holds a derived key for one of this key's accounts. Locking has to
         // take that with it, or "locked" would describe the account list while the secrets
         // stayed reachable in another window.

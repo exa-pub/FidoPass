@@ -1,6 +1,5 @@
 import SwiftUI
 import FidoPassCore
-import AppKit
 
 /// The FIDO manager window: what is on the key, as the key describes it.
 ///
@@ -9,49 +8,19 @@ import AppKit
 /// the authenticator, not the app's view of it. The one exception is FidoPass portable key
 /// material, which is withheld in the core; see `CredentialUserName`.
 ///
-/// **Opening this window is the request to read.** Opening a key on macOS seizes it away
-/// from every other process, so the app must never do it merely because a key appeared — but
-/// choosing this window from a menu is as explicit as pressing a button inside it, and a
-/// window whose every page said "press Read first" was asking twice for the same thing.
+/// **Opening this window is the request to read** — see `ManagerStore.deviceDidAppear`. The
+/// view only says when it appeared and which key it is looking at; the store decides.
 struct AuthenticatorManagerView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: ManagerStore
     @ObservedObject private var devices: DeviceStore
     @ObservedObject private var inventory: InventoryStore
+    @ObservedObject private var touchGate: TouchGate
 
-    @State private var tab: ManagerTab = .credentials
-    @State private var selectedCredential: String?
-    @State private var settingsError: String?
-    @State private var isApplyingSetting = false
-    @State private var chosenPath: String?
-    @State private var sheet: KeySheet?
-
-    init(store: HUDStore) {
+    init(store: ManagerStore, devices: DeviceStore, inventory: InventoryStore, touchGate: TouchGate) {
         self.store = store
-        self.devices = store.devices
-        self.inventory = store.inventory
-    }
-
-    private enum KeySheet: String, Identifiable {
-        case changePIN, reset
-        var id: String { rawValue }
-    }
-
-    private var device: FidoDevice? {
-        if let chosenPath, let match = devices.devices.first(where: { $0.path == chosenPath }) { return match }
-        return devices.devices.first
-    }
-
-    private var reading: InventoryStore.Reading {
-        guard let device else { return InventoryStore.Reading() }
-        return inventory.reading(for: device.path)
-    }
-
-    /// True from the moment the wizard opens until the key is erased or the flow cancelled.
-    private var isResetting: Bool { store.resetFlow != nil || devices.armedReset != nil }
-
-    private var isUnlocked: Bool {
-        guard let device else { return false }
-        return devices.state(for: device.path)?.unlocked == true
+        self.devices = devices
+        self.inventory = inventory
+        self.touchGate = touchGate
     }
 
     var body: some View {
@@ -69,40 +38,27 @@ struct AuthenticatorManagerView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 560)
-        // Opening the window is the request. Keyed on the device so switching keys reads the
-        // one now on screen rather than leaving the other one's answers up.
-        .task(id: device?.path) {
-            guard let device, !inventory.reading(for: device.path).hasAnything else { return }
-            // A reset makes the key reappear on a new path, which is exactly what re-triggers
-            // this. Reading it then would seize the device in the seconds-wide window where
-            // the reset has to be issued — and there is nothing worth reading off a key that
-            // is about to be erased.
-            guard !isResetting else { return }
-            await inventory.read(device)
+        // Keyed on the device so switching keys reads the one now on screen rather than
+        // leaving the other one's answers up.
+        .task(id: store.device?.path) { await store.deviceDidAppear() }
+        .onChange(of: store.isUnlocked) { unlocked in
+            guard unlocked else { return }
+            Task { await store.keyDidUnlock() }
         }
-        // Unlocking completes a read that stopped for want of a PIN. A key nobody asked
-        // about is left alone — `InventoryStore.resumeAfterUnlock` checks.
-        .onChange(of: isUnlocked) { unlocked in
-            guard unlocked, let device else { return }
-            Task { await inventory.resumeAfterUnlock(device) }
-        }
-        .sheet(item: $sheet) { which in
+        .sheet(item: $store.sheet) { which in
             switch which {
             case .changePIN:
-                ManagerChangePINSheet(store: store, devices: devices) { sheet = nil }
+                ManagerChangePINSheet(store: store, touchGate: touchGate)
             case .reset:
-                ManagerResetSheet(store: store) { sheet = nil }
+                ManagerResetSheet(store: store, touchGate: touchGate)
             }
         }
         .background {
             // No button for it: re-reading is rare, and a row of buttons was noise on a
             // window whose whole job is to be read.
-            Button("") {
-                guard let device else { return }
-                Task { await inventory.read(device) }
-            }
-            .keyboardShortcut("r", modifiers: [.command])
-            .opacity(0)
+            Button("") { Task { await store.read() } }
+                .keyboardShortcut("r", modifiers: [.command])
+                .opacity(0)
         }
     }
 
@@ -112,41 +68,38 @@ struct AuthenticatorManagerView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 if devices.devices.count > 1 {
-                    Picker("", selection: Binding(get: { device?.path ?? "" }, set: { chosenPath = $0 })) {
+                    Picker("", selection: Binding(get: { store.device?.path ?? "" }, set: { store.chosenPath = $0 })) {
                         ForEach(devices.devices) { candidate in
                             Text(candidate.displayName).tag(candidate.path)
                         }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 280)
-                } else if let device {
+                } else if let device = store.device {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(device.displayName).font(.system(size: 13, weight: .semibold))
                         Text(device.identityLabel).font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
                 Spacer(minLength: 8)
-                if reading.isReading || isApplyingSetting {
+                if store.reading.isReading || store.isApplying {
                     ProgressView().controlSize(.small)
                 }
             }
 
             // Only the locked state earns a line. Unlocked is the ordinary case, and a badge
             // that is almost always present is a badge nobody reads.
-            if !isUnlocked, !devices.devices.isEmpty {
+            if !store.isUnlocked, !devices.devices.isEmpty {
                 HStack(spacing: 6) {
                     Label("Key locked", systemImage: "lock").font(.caption)
                     Text("— credentials cannot be listed until it is.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Unlock…") {
-                        guard let device else { return }
-                        store.requestUnlock(devicePath: device.path)
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
+                    Button("Unlock…") { store.requestUnlock() }
+                        .buttonStyle(.link)
+                        .font(.caption)
                 }
             }
-            if let message = reading.infoError {
+            if let message = store.reading.infoError {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -159,12 +112,12 @@ struct AuthenticatorManagerView: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        List(selection: $tab) {
+        List(selection: $store.tab) {
             ForEach(ManagerTab.allCases) { candidate in
                 HStack {
                     Label(candidate.title, systemImage: candidate.symbol)
                     Spacer(minLength: 4)
-                    if candidate == .credentials, let count = reading.inventory?.credentialCount {
+                    if candidate == .credentials, let count = store.reading.inventory?.credentialCount {
                         Text("\(count)").font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
@@ -178,7 +131,8 @@ struct AuthenticatorManagerView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch tab {
+        let reading = store.reading
+        switch store.tab {
         case .overview:
             if let info = reading.info {
                 ScrollView {
@@ -192,7 +146,7 @@ struct AuthenticatorManagerView: View {
 
         case .credentials:
             if let inventory = reading.inventory {
-                CredentialsBrowserView(inventory: inventory, selection: $selectedCredential)
+                CredentialsBrowserView(inventory: inventory, selection: $store.selectedCredential)
             } else if let message = reading.inventoryError {
                 emptyState(title: "The credentials could not be read", message: message)
             } else if reading.needsUnlock {
@@ -202,36 +156,20 @@ struct AuthenticatorManagerView: View {
             }
 
         case .settings:
-            if let info = reading.info, let device {
+            if let info = reading.info {
                 ScrollView {
                     AuthenticatorSettingsView(
                         info: info,
-                        isUnlocked: isUnlocked,
-                        onUnlock: { store.requestUnlock(devicePath: device.path) },
-                        onToggleAlwaysUV: { apply { try await devices.toggleAlwaysUV(for: device) } },
-                        onRaiseMinimumPIN: { length in
-                            apply { try await devices.setMinimumPINLength(for: device, length: length) }
-                        },
-                        onForcePINChange: { apply { try await devices.forcePINChange(for: device) } },
-                        onEnableEnterpriseAttestation: {
-                            apply { try await devices.enableEnterpriseAttestation(for: device) }
-                        },
-                        onChangePIN: {
-                            store.errorText = nil
-                            store.pinForm.clear()
-                            sheet = .changePIN
-                        },
-                        onReset: {
-                            store.errorText = nil
-                            Task {
-                                await store.beginReset()
-                                // `beginReset` refuses with more than one key connected, and
-                                // says why in `errorText`. No sheet in that case.
-                                if store.resetFlow != nil { sheet = .reset }
-                            }
-                        },
-                        isBusy: isApplyingSetting || reading.isReading,
-                        errorText: settingsError)
+                        isUnlocked: store.isUnlocked,
+                        onUnlock: { store.requestUnlock() },
+                        onToggleAlwaysUV: { Task { await store.toggleAlwaysUV() } },
+                        onRaiseMinimumPIN: { length in Task { await store.raiseMinimumPIN(to: length) } },
+                        onForcePINChange: { Task { await store.forcePINChange() } },
+                        onEnableEnterpriseAttestation: { Task { await store.enableEnterpriseAttestation() } },
+                        onChangePIN: { store.beginChangePIN() },
+                        onReset: { Task { await store.beginReset() } },
+                        isBusy: store.isApplying || reading.isReading,
+                        errorText: store.settingsError)
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -243,9 +181,9 @@ struct AuthenticatorManagerView: View {
 
     @ViewBuilder
     private var readingOrError: some View {
-        if reading.isReading {
+        if store.reading.isReading {
             emptyState(title: "Reading the key…", message: nil)
-        } else if let message = reading.infoError {
+        } else if let message = store.reading.infoError {
             emptyState(title: "The key could not be read", message: message)
         } else {
             emptyState(title: "Nothing read yet", message: "Press ⌘R to read the key.")
@@ -265,28 +203,5 @@ struct AuthenticatorManagerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)
-    }
-
-    // MARK: - Settings
-
-    /// Runs one setting change and then re-reads the key.
-    ///
-    /// The re-read is not optional: `alwaysUv` is a *toggle*, so the resulting state is
-    /// whatever the key now says rather than what the switch was moved to, and a control
-    /// showing the app's guess instead of the key's answer is how a setting silently reads
-    /// backwards.
-    private func apply(_ operation: @escaping () async throws -> Void) {
-        guard let device, !isApplyingSetting else { return }
-        settingsError = nil
-        isApplyingSetting = true
-        Task {
-            do {
-                try await operation()
-            } catch {
-                settingsError = FidoPassErrorPresenter.message(for: error).fullText()
-            }
-            await inventory.refreshInfo(device)
-            isApplyingSetting = false
-        }
     }
 }

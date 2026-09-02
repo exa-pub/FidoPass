@@ -93,7 +93,10 @@ final class AuxiliaryWindows {
             present(managerWindow)
             return
         }
-        let view = AuthenticatorManagerView(store: container.panel)
+        let view = AuthenticatorManagerView(store: container.manager,
+                                            devices: container.devices,
+                                            inventory: container.inventory,
+                                            touchGate: container.touchGate)
             .environment(\.clipboard, container.clipboard)
         let window = makeWindow(title: "FIDO Manager",
                                 content: AnyView(view),

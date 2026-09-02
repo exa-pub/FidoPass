@@ -5,33 +5,44 @@ import FidoPassCore
 ///
 /// A wizard because the key imposes the steps: most authenticators accept a reset only within
 /// seconds of being plugged in, so a physical reconnect is part of the flow rather than a
-/// nicety. The staging logic lives in `HUDStore`, which is what coordinates the device, the
-/// accounts and the label histories that all die with the key; this only draws it.
+/// nicety. The staging logic lives in `ResetCoordinator`; this only draws it.
 struct ManagerResetSheet: View {
-    @ObservedObject var store: HUDStore
-    let onClose: () -> Void
+    @ObservedObject var store: ManagerStore
+    @ObservedObject private var reset: ResetCoordinator
+    @ObservedObject private var touchGate: TouchGate
 
-    /// Seconds the key has been waiting for its touch.
+    /// Redrawn once a second while the key waits for its touch.
     ///
     /// Without it the wizard sits on one sentence for half a minute, which reads as a hang —
     /// and the usual way a reset fails is precisely that nobody touched the key in time. A
     /// number that moves is the difference between "waiting for you" and "stuck".
-    @State private var waited = 0
+    @State private var now = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    /// Read from the store on every draw rather than taken as a parameter.
-    ///
-    /// It used to be passed in as a snapshot, and a sheet's content closure is not
-    /// re-evaluated by its parent the way an ordinary child view is — so the wizard kept
-    /// drawing the stage it was opened with while the flow moved on beneath it. The key
-    /// would be blinking for its touch under a sheet still saying "plug it back in".
-    private var flow: HUDStore.ResetFlow? { store.resetFlow }
-
-    var body: some View {
-        if let flow { content(flow) } else { finished }
+    init(store: ManagerStore, touchGate: TouchGate) {
+        self.store = store
+        self.reset = store.reset
+        self.touchGate = touchGate
     }
 
-    /// The flow is over — the key was erased, or someone cancelled it elsewhere.
+    /// Seconds the key has been waiting for its touch, from the prompt the gate is showing.
+    private var waited: Int {
+        guard let prompt = touchGate.managerPrompt else { return 0 }
+        return max(0, Int(now.timeIntervalSince(prompt.startedAt)))
+    }
+
+    var body: some View {
+        Group {
+            if let flow = reset.flow { content(flow) } else { finished }
+        }
+        // The flow ends in the coordinator — the key was erased, or someone cancelled it —
+        // and the sheet follows it down rather than lingering on "Done".
+        .onChange(of: reset.flow == nil) { over in
+            if over { store.resetSheetFinished() }
+        }
+        .onReceive(ticker) { now = $0 }
+    }
+
     private var finished: some View {
         VStack(spacing: 8) {
             Text("Done").font(.system(size: 13, weight: .semibold))
@@ -39,10 +50,9 @@ struct ManagerResetSheet: View {
         }
         .padding(30)
         .frame(width: 300)
-        .onAppear(perform: onClose)
     }
 
-    private func content(_ flow: HUDStore.ResetFlow) -> some View {
+    private func content(_ flow: ResetFlow) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Reset \(flow.deviceName)").font(.system(size: 15, weight: .semibold))
 
@@ -59,7 +69,7 @@ struct ManagerResetSheet: View {
                               : "It is blinking and waiting for a finger — about \(max(0, 30 - waited)) seconds left.")
             }
 
-            if let error = store.errorText {
+            if let error = reset.error {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -69,14 +79,11 @@ struct ManagerResetSheet: View {
             HStack {
                 Spacer()
                 if flow.stage != .running {
-                    Button("Cancel") {
-                        store.cancelReset()
-                        onClose()
-                    }
-                    .keyboardShortcut(.cancelAction)
+                    Button("Cancel") { store.cancelReset() }
+                        .keyboardShortcut(.cancelAction)
                 }
                 if flow.stage == .confirm {
-                    Button("Erase the key") { store.armReset() }
+                    Button("Erase the key") { reset.arm() }
                         .buttonStyle(.borderedProminent)
                         .tint(.red)
                         .disabled(!flow.canProceed)
@@ -85,14 +92,10 @@ struct ManagerResetSheet: View {
         }
         .padding(20)
         .frame(width: 440)
-        .onReceive(ticker) { _ in
-            guard flow.stage == .running else { waited = 0; return }
-            waited += 1
-        }
     }
 
     @ViewBuilder
-    private func confirmStage(_ flow: HUDStore.ResetFlow) -> some View {
+    private func confirmStage(_ flow: ResetFlow) -> some View {
         Label("This erases every credential on the key and its PIN. There is no way back.",
               systemImage: "exclamationmark.triangle.fill")
             .font(.caption)
@@ -122,8 +125,8 @@ struct ManagerResetSheet: View {
         // worse than no checkbox — which is exactly how it read.
         if !flow.isKnownEmpty {
             Toggle("I understand that this cannot be undone",
-                   isOn: Binding(get: { store.resetFlow?.acknowledged ?? false },
-                                 set: { store.resetFlow?.acknowledged = $0 }))
+                   isOn: Binding(get: { reset.flow?.acknowledged ?? false },
+                                 set: { reset.flow?.acknowledged = $0 }))
                 .font(.caption)
         }
 
@@ -132,8 +135,8 @@ struct ManagerResetSheet: View {
         if flow.requiresTypedConfirmation {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Type RESET to confirm").font(.caption).foregroundStyle(.secondary)
-                TextField("", text: Binding(get: { store.resetFlow?.typed ?? "" },
-                                            set: { store.resetFlow?.typed = $0 }))
+                TextField("", text: Binding(get: { reset.flow?.typed ?? "" },
+                                            set: { reset.flow?.typed = $0 }))
                     .textFieldStyle(.roundedBorder)
             }
         }

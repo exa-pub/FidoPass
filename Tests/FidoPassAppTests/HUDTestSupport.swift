@@ -363,6 +363,21 @@ enum HUDTestFactory {
         makeContainer(backend: backend, suite: suite).panel
     }
 
+    /// The container a panel store was built in — the way to the other windows' stores.
+    @MainActor
+    static func container(for store: HUDStore) -> AppContainer {
+        guard let container = retained.first(where: { $0.panel === store }) else {
+            preconditionFailure("the store was not built by this factory")
+        }
+        return container
+    }
+
+    @MainActor
+    static func manager(for store: HUDStore) -> ManagerStore { container(for: store).manager }
+
+    @MainActor
+    static func reset(for store: HUDStore) -> ResetCoordinator { container(for: store).reset }
+
     /// The usual starting point: one key, unlocked, with two accounts on it.
     @MainActor
     static func unlockedStore(accounts: [Account]? = nil) async -> (HUDStore, MockKeyBackend, FidoDevice) {
