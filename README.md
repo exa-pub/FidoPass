@@ -43,8 +43,10 @@ macOS prompt, not an error.
 3. Enter the key's PIN. It stays in memory for five minutes of inactivity and is never
    written anywhere; locking the Mac or unplugging the key clears it at once.
 4. Press **⌘N** to create an account — `vault`, say. Leave it **portable**: such an account
-   shows a backup key once, and that backup key entered on a second security key reproduces
-   the same passwords. Write it down.
+   shows a backup key once, and that backup key imported on a second security key reproduces
+   the same passwords. Write it down. The backup key is 60 characters and carries the
+   account's *identity* — the coloured strip under its name — so the copy on the second key
+   shows the same one.
 5. Type a label and press **Copy password**. Touch the key when it blinks.
 
 The same account plus the same label always produce the same password, so keep labels
@@ -68,8 +70,10 @@ after 8 wrong PINs** — there is no reset.
 
 There is no reset, so plan for it in advance:
 
-- **Keep the backup key** of a portable account. Entered on another FIDO2 key, it makes that
-  key produce the same passwords.
+- **Keep the backup key** of a portable account. Imported on another FIDO2 key (⌘N →
+  Import), it makes that key produce the same passwords and show the same identity. Backup
+  keys written down by earlier versions — 44 characters — still import; the form asks for an
+  identity then.
 - **Print the recovery sheet** (right-click an account). It holds everything needed to
   reproduce that account's passwords and contains no secrets, so it is safe to file with
   your documents — and useless without the key or the backup key.
@@ -90,6 +94,20 @@ password asks the key for an assertion with a salt derived from `label + rpId + 
 the key answers with 32 bytes that never leave it in any other form, which are stretched
 with HKDF and mapped into a password. Portable accounts XOR an imported master key with the
 key-derived secret, which is what lets a second authenticator reproduce the same passwords.
+
+Every account also shows an identity: twelve bytes, drawn as hex and as a strip of twelve
+colours. It takes no part in any derivation and is not a secret — it exists so that the same
+account on two keys can be recognised by eye, and told from another account with the same
+name. Local accounts derive it from their credential id; portable accounts keep it on the key
+after the key material and carry it in the backup key.
+
+## Accounts from earlier versions
+
+A portable account created before identities existed shows grey, marked *needs migration*.
+Its passwords are unchanged and it still exports its backup key; generating and encrypting
+wait for the migration, which writes an identity to the key under the PIN, without a touch.
+If the same account was already migrated on another key, enter the identity that key shows so
+that both agree about what is the same account.
 
 Derivation for policy version 1 is a frozen contract: the output will never change. Golden
 vectors pin the salts, the character mapping and the generator, so an accidental change

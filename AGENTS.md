@@ -183,6 +183,40 @@ the current value as a fact and asks separately for a new, larger one. It used t
 whose lower bound *was* the current value, so pressing "down" did nothing and the whole thing
 read as broken.
 
+### Account identity
+
+Every account shows a 12-byte identity (`AccountIdentity`): hex in groups of four and a
+twelve-cell colour strip (`IdentityFingerprintView`, `IdentityPalette`). It exists so that a
+person can tell "the same vault on a second key" from "another account named vault" by eye.
+**It is not an input to derivation** — `DerivationContractTests.testIdentityDoesNotAffectDerivation`
+pins that, and the golden vectors do not know the type exists. It is not a secret either: it
+goes on the recovery sheet, into the manager's JSON export and onto the clipboard without a
+countdown.
+
+- A local account derives it from its credential id and stores nothing.
+- A portable account stores it on the key after its key material: `user.name` is
+  base64(external ‖ identity), 44 bytes, 60 characters. **CTAP lets an authenticator keep 64
+  bytes of `user.name`**, which is why the identity is 12 bytes and not 16 — 48 bytes would
+  encode to exactly 64. `CredentialUserFieldsTests` pins the margin. Nothing reads the field
+  back after writing to check for truncation; that is a decision, not an oversight, and the
+  hardware checklist in `ai.tmp/ID-PLAN.md` covers it once per key model.
+- The backup (`PortableBackup`) is base64(masterKey ‖ identity), 60 characters, and importing
+  it gives the new account the same identity. Backups printed by earlier versions are 44
+  characters and still import; the form asks for an identity then. `PortableBackup` is
+  deliberately not `Codable` and has no description — it must not be able to reach a log or
+  an export by accident.
+- **Compatibility runs one way.** This version reads every layout ever written; earlier
+  versions cannot read a payload with an identity. A portable account written before
+  identities (`Account.needsMigration`) is drawn grey and refused a password or an encryption
+  key until migrated: `PanelStore` gates both, `PanelReducer` turns ⏎ into `.migrate`, and
+  `PanelStoreTests` pins the gate — and pins that **the backup key is not gated**, because
+  export must never wait. Migration is `assignIdentity`: one `credman_set_dev_rk` under the
+  PIN, no touch, the material untouched, so no password changes. The manager shows
+  identities and never migrates — writing accounts is the panel's job.
+- Import is not a third `AccountKind`: rp ids enter the salt and are frozen. `EnrollDraft.Mode`
+  is the form's three-way choice, `AccountStore.EnrollRequest` is what the store runs, and
+  both collapse to `.portable` on the key.
+
 ### Known, deliberate gaps
 
 - A pending key operation cannot really be cancelled. `DeviceAccessing.withOpenedDevice`
@@ -202,8 +236,9 @@ read as broken.
 Sources/FidoPassCore/
   Public/       facade
   Models/       Account (what the key holds), AccountHandle (account + connected key),
-                DerivationParameters, PasswordPolicy, PinPolicy, FidoDevice, AuthenticatorInfo,
-                CredentialInventory, ResidentCredential
+                AccountIdentity, PortablePayload, PortableBackup, DerivationParameters,
+                PasswordPolicy, PinPolicy, FidoDevice, AuthenticatorInfo, CredentialInventory,
+                ResidentCredential
   Protocols/    DI seams used by tests — one gerund per protocol: Enrolling, SecretDeriving, …
   Devices/      libfido2 device access, capability probing, PIN set/change and reset,
                 wide inspection, authenticator configuration
@@ -303,9 +338,10 @@ second must not redraw the whole panel. Keep new state in the store that owns it
   must not happen is a read triggered by anything else: a key being plugged in, a refresh, a
   window merely existing. `InventoryStore` never reads on its own, and `InventoryStoreTests`
   pins that the way `DeviceAccessTests` pins it for the panel.
-- **Credential management never needs a touch, only the PIN** — listing, renaming and
-  deleting a credential all come back without one. Only `makeCredential`, `getAssertion` and
-  `reset` make the key wait for a finger, so only they go through `withTouchPrompt`.
+- **Credential management never needs a touch, only the PIN** — listing, renaming, deleting
+  and migrating a credential (`assignIdentity` is a rename of `user.name`) all come back
+  without one. Only `makeCredential`, `getAssertion` and `reset` make the key wait for a
+  finger, so only they go through `withTouchPrompt`.
 - **A key does not refuse a duplicate credential — it replaces one.** `makeCredential` with
   the same `rp.id` and the same `user.id` overwrites the existing resident credential and
   the slot count does not move. That is what the duplicate check in `EnrollmentService.enroll`
