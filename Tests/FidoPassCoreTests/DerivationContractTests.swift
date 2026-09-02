@@ -67,6 +67,38 @@ final class DerivationContractTests: XCTestCase {
         XCTAssertNotEqual(standard, otherVersion, "policy.version feeds HKDF info and must change the output")
     }
 
+    /// The identity names the account and takes no part in deriving from it: payloads with
+    /// the same material and different identities — or none at all — produce the same
+    /// password and open each other's encrypted text. This is what makes migrating an
+    /// account a rename of a field on the key rather than a change of key.
+    func testIdentityDoesNotAffectDerivation() throws {
+        let secret = Self.secretService()
+        let generator = PasswordGenerator(secretDerivationService: secret)
+        let encryption = SecretEncryptionService(secretDerivationService: secret)
+        let external = Data(repeating: 0x3C, count: 32)
+        let variants = [
+            PortablePayload(external: external)!,
+            PortablePayload(external: external, identity: AccountIdentity(hex: "000000000000000000000000"))!,
+            PortablePayload(external: external, identity: AccountIdentity(hex: "ffffffffffffffffffffffff"))!,
+            PortablePayload(external: external, identity: .random())!
+        ]
+        let handles = variants.map { AccountHandle.fixture(id: "vault", kind: .portable, portable: $0) }
+
+        let passwords = try handles.map {
+            try generator.generatePassword($0, label: "vault", parameters: .v1, pinProvider: nil)
+        }
+        XCTAssertEqual(Set(passwords).count, 1, "every identity, and no identity, derives the same password")
+
+        let keys = try handles.map {
+            try encryption.deriveEncryptionKey($0, label: "vault", parameters: .v1, pinProvider: nil)
+        }
+        let sealed = try encryption.seal("plain", with: keys[0])
+        for key in keys.dropFirst() {
+            XCTAssertEqual(try encryption.open(sealed, with: key), "plain",
+                           "text sealed before migration opens after it")
+        }
+    }
+
     func testPortableLabelIsolation() {
         XCTAssertNotEqual(SaltFactory.portableLabelSalt("vault"),
                           SaltFactory.portableLabelSalt("other"))

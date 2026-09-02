@@ -117,33 +117,49 @@ public final class MockEnrollmentService: Enrolling, @unchecked Sendable {
 public final class MockPortableEnrollmentService: PortableEnrolling, @unchecked Sendable {
     public init() {}
 
-    public var enrollPortableClosure: ((String, String, (@Sendable () -> String?)?, String?) throws -> (AccountHandle, String?))?
+    public var enrollPortableClosure: ((String, String, (@Sendable () -> String?)?, PortableBackup?) throws -> (AccountHandle, PortableBackup?))?
     public private(set) var reportedSteps: [PortableEnrollmentStep] = []
     public private(set) var enrollPortableCalls: [(String, String)] = []
 
-    public var exportClosure: ((AccountHandle, (@Sendable () -> String?)?) throws -> String)?
+    public var exportClosure: ((AccountHandle, (@Sendable () -> String?)?) throws -> PortableBackup)?
     public private(set) var exportCalls: [AccountHandle] = []
+
+    public var assignIdentityClosure: ((AccountHandle, AccountIdentity, (@Sendable () -> String?)?) throws -> AccountHandle)?
+    public private(set) var assignIdentityCalls: [(AccountHandle, AccountIdentity)] = []
 
     public func enrollPortable(accountId: String,
                                devicePath: String,
                                askPIN: (@Sendable () -> String?)?,
-                               importedKeyB64: String?,
-                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (AccountHandle, String?) {
+                               imported: PortableBackup?,
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (AccountHandle, PortableBackup?) {
         enrollPortableCalls.append((accountId, devicePath))
         onStep.map { report in [PortableEnrollmentStep.creatingCredential].forEach(report) }
         if let closure = enrollPortableClosure {
-            return try closure(accountId, devicePath, askPIN, importedKeyB64)
+            return try closure(accountId, devicePath, askPIN, imported)
         }
-        return (AccountHandle.fixture(id: accountId, kind: .portable, devicePath: devicePath), nil)
+        return (AccountHandle.portableFixture(id: accountId, identity: imported?.identity, devicePath: devicePath), nil)
     }
 
-    public func exportImportedKey(_ handle: AccountHandle,
-                                  pinProvider: (@Sendable () -> String?)?) throws -> String {
+    public func exportBackup(_ handle: AccountHandle,
+                             pinProvider: (@Sendable () -> String?)?) throws -> PortableBackup {
         exportCalls.append(handle)
         if let closure = exportClosure {
             return try closure(handle, pinProvider)
         }
-        return ""
+        return PortableBackup(masterKey: Data(repeating: 0x00, count: PortableBackup.masterKeyByteCount),
+                              identity: handle.account.identity)!
+    }
+
+    public func assignIdentity(_ handle: AccountHandle,
+                               identity: AccountIdentity,
+                               pinProvider: (@Sendable () -> String?)?) throws -> AccountHandle {
+        assignIdentityCalls.append((handle, identity))
+        if let closure = assignIdentityClosure {
+            return try closure(handle, identity, pinProvider)
+        }
+        var updated = handle
+        updated.account.portable = handle.account.portable.flatMap { PortablePayload(external: $0.external, identity: identity) }
+        return updated
     }
 }
 
@@ -215,5 +231,31 @@ public extension AccountHandle {
                         portable: PortablePayload? = nil) -> AccountHandle {
         AccountHandle(account: .fixture(id: id, kind: kind, credentialId: credentialId, portable: portable),
                       devicePath: devicePath)
+    }
+
+    static func portableFixture(id: String = "vault",
+                                credentialId: Data? = nil,
+                                identity: AccountIdentity? = nil,
+                                legacy: Bool = false,
+                                devicePath: String = "/dev/mock") -> AccountHandle {
+        AccountHandle(account: .portableFixture(id: id, credentialId: credentialId, identity: identity, legacy: legacy),
+                      devicePath: devicePath)
+    }
+}
+
+public extension Account {
+    /// A portable account with key material on it — the way this version writes one, with an
+    /// identity (a fixed one derived from the id, unless given), or with `legacy: true` the
+    /// way earlier versions wrote it: material only, needing migration.
+    static func portableFixture(id: String = "vault",
+                                credentialId: Data? = nil,
+                                identity: AccountIdentity? = nil,
+                                legacy: Bool = false) -> Account {
+        let external = Data((0..<PortablePayload.externalByteCount).map { UInt8(truncatingIfNeeded: $0 &* 13 &+ 7) })
+        let resolvedIdentity = legacy ? nil : (identity ?? AccountIdentity.derived(fromCredentialId: Data("identity:\(id)".utf8)))
+        return fixture(id: id,
+                       kind: .portable,
+                       credentialId: credentialId,
+                       portable: PortablePayload(external: external, identity: resolvedIdentity))
     }
 }

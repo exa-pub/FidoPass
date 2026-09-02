@@ -129,16 +129,17 @@ public final class FidoPassCore: Sendable {
                                      askPIN: askPIN)
     }
 
-    /// Creates a portable account: two touches, and a backup key to show the user once.
+    /// Creates a portable account: two touches, and — when the key material is fresh rather
+    /// than imported — a backup to show the user once.
     public func enrollPortable(accountId: String,
                                devicePath: String,
                                askPIN: (@Sendable () -> String?)? = nil,
-                               importedKeyB64: String?,
-                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (AccountHandle, String?) {
+                               imported: PortableBackup?,
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (AccountHandle, PortableBackup?) {
         try portableEnrollmentService.enrollPortable(accountId: accountId,
                                                      devicePath: devicePath,
                                                      askPIN: askPIN,
-                                                     importedKeyB64: importedKeyB64,
+                                                     imported: imported,
                                                      onStep: onStep)
     }
 
@@ -164,9 +165,18 @@ public final class FidoPassCore: Sendable {
                                                 pin: pin)
     }
 
-    public func exportImportedKey(_ handle: AccountHandle,
-                                  pinProvider: (@Sendable () -> String?)? = nil) throws -> String {
-        try portableEnrollmentService.exportImportedKey(handle, pinProvider: pinProvider)
+    /// The account's backup — master key and identity. One touch.
+    public func exportBackup(_ handle: AccountHandle,
+                             pinProvider: (@Sendable () -> String?)? = nil) throws -> PortableBackup {
+        try portableEnrollmentService.exportBackup(handle, pinProvider: pinProvider)
+    }
+
+    /// Gives a portable account written before identities existed one. PIN, no touch, and
+    /// no change to any password: the identity is not an input to derivation.
+    public func assignIdentity(_ handle: AccountHandle,
+                               identity: AccountIdentity,
+                               pinProvider: (@Sendable () -> String?)? = nil) throws -> AccountHandle {
+        try portableEnrollmentService.assignIdentity(handle, identity: identity, pinProvider: pinProvider)
     }
 
     /// Derives the key used by the text editor. Costs one touch of the authenticator.

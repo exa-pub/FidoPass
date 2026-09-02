@@ -20,11 +20,14 @@ final class FidoPassCoreFacadeTests: XCTestCase {
             [AccountHandle.fixture(id: "acct", kind: .local, devicePath: devicePath)]
         }
 
+        let generatedBackup = PortableBackup(masterKey: Data(repeating: 0x01, count: 32),
+                                             identity: AccountIdentity(hex: "0102030405060708090a0b0c"))!
+        let exportedBackup = PortableBackup(masterKey: Data(repeating: 0x02, count: 32), identity: nil)!
         let portable = MockPortableEnrollmentService()
         portable.enrollPortableClosure = { accountId, devicePath, _, _ in
-            (AccountHandle.fixture(id: accountId, kind: .portable, devicePath: devicePath), "generated")
+            (AccountHandle.portableFixture(id: accountId, devicePath: devicePath), generatedBackup)
         }
-        portable.exportClosure = { _, _ in "exported" }
+        portable.exportClosure = { _, _ in exportedBackup }
 
         let secret = MockSecretDerivationService()
         let passwordGenerator = MockPasswordGenerator()
@@ -51,9 +54,9 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         let (portableAccount, portableKey) = try core.enrollPortable(accountId: "pacct",
                                                                      devicePath: "/dev/mock",
                                                                      askPIN: nil,
-                                                                     importedKeyB64: nil)
+                                                                     imported: nil)
         XCTAssertEqual(portableAccount.id, "pacct")
-        XCTAssertEqual(portableKey, "generated")
+        XCTAssertEqual(portableKey, generatedBackup)
         XCTAssertEqual(portable.enrollPortableCalls.count, 1)
 
         let password = try core.generatePassword(enrolled, label: "label", pinProvider: nil)
@@ -66,9 +69,15 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         XCTAssertEqual(enumerated.count, 1)
         XCTAssertEqual(enrollment.enumerateCalls.count, 1)
 
-        let exported = try core.exportImportedKey(portableAccount, pinProvider: nil)
-        XCTAssertEqual(exported, "exported")
+        let exported = try core.exportBackup(portableAccount, pinProvider: nil)
+        XCTAssertEqual(exported, exportedBackup)
         XCTAssertEqual(portable.exportCalls.count, 1)
+
+        let legacy = AccountHandle.portableFixture(id: "old", legacy: true)
+        let identity = AccountIdentity(hex: "0c0b0a090807060504030201")!
+        let migrated = try core.assignIdentity(legacy, identity: identity, pinProvider: nil)
+        XCTAssertEqual(migrated.account.identity, identity)
+        XCTAssertEqual(portable.assignIdentityCalls.count, 1)
 
         try core.deleteAccount(enrolled, pin: "1234")
         XCTAssertEqual(enrollment.deleteCalls.count, 1)

@@ -221,9 +221,12 @@ final class EnrollmentService: Enrolling, Sendable {
     /// Value written to the credential's `name` field.
     ///
     /// For a portable account this carries the key material, because that is where every
-    /// released version of FidoPass looks for it. Moving it elsewhere made accounts created
-    /// by this build unreadable by earlier ones, which failed with
-    /// "Portable userName must contain base64 External (32 bytes)".
+    /// released version of FidoPass looks for it; moving it elsewhere once made accounts
+    /// created by this build unreadable by earlier ones. Since identities exist the payload
+    /// is 44 bytes rather than 32 (`PortablePayload`), which earlier versions reject with
+    /// "must contain base64 External (32 bytes)" — compatibility runs one way: this version
+    /// reads every layout ever written, earlier versions read only their own. The value is
+    /// 60 characters, under the 64 bytes CTAP lets an authenticator keep for `user.name`.
     static func credentialName(kind: AccountKind,
                                        accountId: String,
                                        portable: PortablePayload?) -> String {
@@ -248,11 +251,12 @@ final class EnrollmentService: Enrolling, Sendable {
 
     /// Reads the portable key material back out of the two credential strings.
     ///
-    /// The written layout puts a portable payload in `name`, which is what every released
-    /// version reads. The prefixed `displayName` form is still accepted because builds
-    /// between the refactor and this fix wrote it, and those accounts are on real keys —
-    /// losing the payload would make their passwords unreproducible. A local account never
-    /// carries any, whatever its strings happen to look like.
+    /// The written layout puts a portable payload in `name` — 32 bytes from earlier versions,
+    /// 32 plus a 12-byte identity from this one; `PortablePayload` tells them apart by length
+    /// and reports the first as needing migration. The prefixed `displayName` form is still
+    /// accepted because builds between the refactor and its fix wrote it, and those accounts
+    /// are on real keys — losing the payload would make their passwords unreproducible. A
+    /// local account never carries any, whatever its strings happen to look like.
     static func decodeUserFields(kind: AccountKind,
                                  name: String,
                                  displayName: String) -> PortablePayload? {
