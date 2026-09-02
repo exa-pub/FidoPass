@@ -15,9 +15,25 @@ final class CredentialRedactionTests: XCTestCase {
 
     func testPortableKeyMaterialIsWithheld() {
         let name = CredentialUserName.classify(rawName: payload, rpId: AccountKind.portable.rpId)
-        XCTAssertEqual(name, .portableKeyMaterialWithheld)
+        XCTAssertEqual(name, .portableKeyMaterialWithheld(identity: nil))
         XCTAssertNil(name.revealed, "the material must not be reachable through the model")
         XCTAssertFalse(name.display.contains(payload), "the display string must not carry it either")
+    }
+
+    /// The current layout appends the account's identity to the material. The identity is
+    /// not a secret and comes through; the 32 bytes in front of it still do not.
+    func testCurrentLayoutWithholdsTheMaterialButKeepsTheIdentity() throws {
+        let identity = try XCTUnwrap(AccountIdentity(hex: "0102030405060708090a0b0c"))
+        let payload = try XCTUnwrap(PortablePayload(external: Data(repeating: 0xA7, count: 32), identity: identity))
+        let name = CredentialUserName.classify(rawName: payload.base64, rpId: AccountKind.portable.rpId)
+        XCTAssertEqual(name, .portableKeyMaterialWithheld(identity: identity))
+        XCTAssertNil(name.revealed)
+        XCTAssertFalse(name.display.contains(String(payload.base64.prefix(8))))
+
+        let json = String(decoding: try JSONEncoder().encode(name), as: UTF8.self)
+        XCTAssertTrue(json.contains(identity.hex), "the identity is what the export may show")
+        XCTAssertFalse(json.contains(String(payload.base64.prefix(8))))
+        XCTAssertFalse(json.contains(Data(repeating: 0xA7, count: 32).base64EncodedString().prefix(8)))
     }
 
     /// Redaction is keyed on the relying party, not on the shape of the string. A foreign

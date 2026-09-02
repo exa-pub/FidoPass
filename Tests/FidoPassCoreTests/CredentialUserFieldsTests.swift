@@ -56,6 +56,70 @@ final class CredentialUserFieldsTests: XCTestCase {
         XCTAssertNil(PortablePayload(external: Data(repeating: 0x01, count: 33)))
         XCTAssertNotNil(PortablePayload(external: Data(repeating: 0x01, count: 32)))
         XCTAssertNil(PortablePayload(base64: "definitely not base64 %%%"))
+        // The two layouts are told apart by length alone, so every other length is nothing.
+        for count in [16, 33, 43, 45, 48] {
+            XCTAssertNil(PortablePayload(base64: Data(repeating: 0x01, count: count).base64EncodedString()),
+                         "\(count) bytes is not a payload")
+        }
+        XCTAssertNotNil(PortablePayload(base64: Data(repeating: 0x01, count: 44).base64EncodedString()))
+    }
+
+    // MARK: - Layout v2: key material followed by the identity
+
+    private let identity = AccountIdentity(bytes: Data((0..<12).map { UInt8($0 &* 5 &+ 1) }))!
+
+    func testCurrentLayoutCarriesTheIdentity() throws {
+        let written = PortablePayload(external: payload, identity: identity)!
+        XCTAssertEqual(Data(base64Encoded: written.base64)?.count, 44)
+
+        let decoded = try XCTUnwrap(EnrollmentService.decodeUserFields(kind: .portable,
+                                                                       name: written.base64,
+                                                                       displayName: "acct"))
+        XCTAssertEqual(decoded.external, payload)
+        XCTAssertEqual(decoded.identity, identity)
+        XCTAssertFalse(decoded.needsMigration)
+    }
+
+    /// A payload from an earlier version has the material and nothing after it. It reads,
+    /// and it says that an identity is missing rather than inventing one.
+    func testPreviousLayoutReadsAsNeedingMigration() throws {
+        let decoded = try XCTUnwrap(EnrollmentService.decodeUserFields(kind: .portable,
+                                                                       name: payload.base64EncodedString(),
+                                                                       displayName: "acct"))
+        XCTAssertEqual(decoded.external, payload)
+        XCTAssertNil(decoded.identity)
+        XCTAssertTrue(decoded.needsMigration)
+        XCTAssertTrue(Account.fixture(kind: .portable, portable: decoded).needsMigration)
+    }
+
+    /// CTAP lets an authenticator keep at most 64 bytes of `user.name`. The v2 layout is
+    /// 60 characters of base64 — ASCII, so 60 bytes — and that margin is why the identity
+    /// is twelve bytes and not sixteen: 48 bytes would encode to exactly 64.
+    func testCurrentLayoutFitsTheCtapNameLimit() {
+        let written = PortablePayload(external: payload, identity: identity)!
+        let name = EnrollmentService.credentialName(kind: .portable, accountId: "vault", portable: written)
+        XCTAssertEqual(name.count, 60)
+        XCTAssertLessThanOrEqual(name.utf8.count, 64)
+    }
+
+    /// The identity is derived for a local account and stored for a portable one; a
+    /// portable account from before identities has none.
+    func testAccountIdentityPerKind() {
+        let local = Account.fixture(id: "disk", kind: .local, credentialId: Data("cred".utf8))
+        XCTAssertEqual(local.identity, AccountIdentity.derived(fromCredentialId: Data("cred".utf8)))
+        XCTAssertFalse(local.needsMigration, "a local account never needs migrating")
+
+        let portable = Account.fixture(kind: .portable, portable: PortablePayload(external: payload, identity: identity))
+        XCTAssertEqual(portable.identity, identity)
+        XCTAssertFalse(portable.needsMigration)
+
+        let legacy = Account.fixture(kind: .portable, portable: PortablePayload(external: payload))
+        XCTAssertNil(legacy.identity)
+        XCTAssertTrue(legacy.needsMigration)
+
+        let unreadable = Account.fixture(kind: .portable, portable: nil)
+        XCTAssertNil(unreadable.identity)
+        XCTAssertFalse(unreadable.needsMigration, "missing material is a different failure from a missing identity")
     }
 
     func testAccountKindRoundTripsThroughRpId() {
