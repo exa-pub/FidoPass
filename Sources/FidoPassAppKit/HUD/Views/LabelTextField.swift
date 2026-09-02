@@ -1,4 +1,3 @@
-#if canImport(AppKit)
 import AppKit
 import SwiftUI
 
@@ -158,4 +157,3 @@ struct LabelTextField: NSViewRepresentable {
         }
     }
 }
-#endif

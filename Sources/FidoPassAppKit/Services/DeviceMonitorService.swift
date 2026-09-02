@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import IOKit.hid
 
@@ -70,11 +69,3 @@ final class DeviceMonitorService {
         }
     }
 }
-#else
-final class DeviceMonitorService {
-    init(debounceInterval: TimeInterval = 0.35, notify: @escaping () -> Void) {
-        _ = debounceInterval
-        _ = notify
-    }
-}
-#endif

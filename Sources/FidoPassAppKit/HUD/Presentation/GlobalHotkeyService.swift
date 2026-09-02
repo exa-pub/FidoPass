@@ -1,4 +1,3 @@
-#if canImport(Carbon)
 import Carbon.HIToolbox
 import Foundation
 
@@ -50,4 +49,3 @@ final class GlobalHotkeyService {
         onPress?()
     }
 }
-#endif

@@ -1,4 +1,3 @@
-#if os(macOS)
 import AppKit
 
 /// Observes macOS session lock/unlock and notifies listeners.
@@ -53,11 +52,3 @@ final class SessionLockMonitor {
         distributedObservers.removeAll()
     }
 }
-#else
-final class SessionLockMonitor {
-    init(onLock: @escaping () -> Void, onUnlock: (() -> Void)? = nil) {
-        _ = onLock
-        _ = onUnlock
-    }
-}
-#endif

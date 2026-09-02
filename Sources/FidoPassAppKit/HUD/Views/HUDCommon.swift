@@ -1,7 +1,5 @@
 import SwiftUI
-#if canImport(AppKit)
 import AppKit
-#endif
 
 /// Metrics shared by every HUD screen.
 ///
@@ -15,7 +13,6 @@ enum HUDMetrics {
     static let padding: CGFloat = 12
 }
 
-#if canImport(AppKit)
 /// The system popover material, so the panel looks like every other menu-bar window.
 struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
@@ -28,11 +25,6 @@ struct VisualEffectBackground: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
-#else
-struct VisualEffectBackground: View {
-    var body: some View { Color(nsColor: .windowBackgroundColor) }
-}
-#endif
 
 /// The key is waiting for a finger.
 ///

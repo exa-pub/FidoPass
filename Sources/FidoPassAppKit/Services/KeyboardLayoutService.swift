@@ -1,11 +1,8 @@
 import Foundation
-#if canImport(AppKit)
 import AppKit
 import Carbon.HIToolbox
-#endif
 
 enum KeyboardLayoutService {
-    #if canImport(AppKit)
     static func preferEnglishLayoutIfNeeded() {
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         if languages(for: current).contains(where: { $0.hasPrefix("en") }) {
@@ -50,7 +47,4 @@ enum KeyboardLayoutService {
         guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
         return Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
     }
-    #else
-    static func preferEnglishLayoutIfNeeded() {}
-    #endif
 }

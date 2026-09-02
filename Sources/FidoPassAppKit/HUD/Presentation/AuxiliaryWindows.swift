@@ -1,4 +1,3 @@
-#if canImport(AppKit)
 import AppKit
 import SwiftUI
 
@@ -168,4 +167,3 @@ private final class WindowCloseDelegate: NSObject, NSWindowDelegate {
         action()
     }
 }
-#endif

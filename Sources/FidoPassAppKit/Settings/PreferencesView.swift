@@ -1,7 +1,5 @@
 import SwiftUI
-#if canImport(AppKit)
 import AppKit
-#endif
 
 /// The settings window.
 ///
@@ -192,9 +190,7 @@ struct PreferencesView: View {
 /// sits in the value column, where a shortcut field belongs.
 struct HotkeyRecorderView: View {
     @ObservedObject var preferences: Preferences
-#if canImport(AppKit)
     @State private var monitor: Any?
-#endif
 
     private var isRecording: Bool { preferences.isRecordingHotkey }
 
@@ -214,13 +210,10 @@ struct HotkeyRecorderView: View {
                 .disabled(preferences.hotkey == .default || isRecording)
                 .help("Back to \(HotkeyCombo.default.display)")
         }
-#if canImport(AppKit)
         .onDisappear(perform: stop)
-#endif
     }
 
     private func start() {
-#if canImport(AppKit)
         // Releases the global shortcut, so pressing the current combination records it
         // instead of firing it.
         preferences.isRecordingHotkey = true
@@ -235,20 +228,16 @@ struct HotkeyRecorderView: View {
             stop()
             return nil
         }
-#endif
     }
 
     private func stop() {
-#if canImport(AppKit)
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         // Re-registers whatever the combination now is — the new one, or the old one when
         // the recording was cancelled.
         preferences.isRecordingHotkey = false
-#endif
     }
 
-#if canImport(AppKit)
     static func combo(from event: NSEvent) -> HotkeyCombo? {
         var carbon: UInt32 = 0
         var display = ""
@@ -262,5 +251,4 @@ struct HotkeyRecorderView: View {
         guard !character.isEmpty, character.rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
         return HotkeyCombo(keyCode: UInt32(event.keyCode), modifiers: carbon, display: display + character)
     }
-#endif
 }

@@ -1,7 +1,5 @@
 import SwiftUI
-#if canImport(AppKit)
 import AppKit
-#endif
 
 /// A text view with every macOS text convenience switched off.
 ///
@@ -81,7 +79,6 @@ struct PlainTextEditor: NSViewRepresentable {
     }
 }
 
-#if canImport(AppKit)
 extension NSTextView {
     /// Clears the text and the undo history together.
     ///
@@ -92,4 +89,3 @@ extension NSTextView {
         undoManager?.removeAllActions()
     }
 }
-#endif

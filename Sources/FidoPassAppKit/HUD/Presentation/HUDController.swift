@@ -1,4 +1,3 @@
-#if canImport(AppKit)
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -254,4 +253,3 @@ final class HUDController: NSObject, NSWindowDelegate {
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
     }
 }
-#endif

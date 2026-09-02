@@ -1,4 +1,3 @@
-#if canImport(AppKit)
 import AppKit
 import SwiftUI
 
@@ -46,4 +45,3 @@ final class HUDPanel: NSPanel {
         onCancel?()
     }
 }
-#endif

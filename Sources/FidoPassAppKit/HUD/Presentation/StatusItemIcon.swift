@@ -1,4 +1,3 @@
-#if canImport(AppKit)
 import AppKit
 
 /// The menu-bar icon.
@@ -46,4 +45,3 @@ enum StatusItemIcon {
         state == .clipboardHot
     }
 }
-#endif

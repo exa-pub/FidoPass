@@ -1,8 +1,6 @@
 import SwiftUI
 import FidoPassCore
-#if canImport(AppKit)
 import AppKit
-#endif
 
 /// The FIDO manager window: what is on the key, as the key describes it.
 ///

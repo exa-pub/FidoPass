@@ -1,8 +1,6 @@
 import Foundation
 import FidoPassCore
-#if canImport(ServiceManagement)
 import ServiceManagement
-#endif
 
 /// A key combination registered system-wide.
 struct HotkeyCombo: Codable, Equatable, Sendable {
@@ -116,30 +114,21 @@ final class Preferences: ObservableObject {
     // MARK: - Launch at login
 
     var launchAtLogin: Bool {
-        get {
-#if canImport(ServiceManagement)
-            if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
-#endif
-            return false
-        }
+        get { SMAppService.mainApp.status == .enabled }
         set {
-#if canImport(ServiceManagement)
-            if #available(macOS 13.0, *) {
-                do {
-                    if newValue {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                } catch {
-                    // Registration fails for an app that is not in /Applications, which is
-                    // normal during development. Surfacing it as a crash would be worse than
-                    // leaving the switch where the user put it.
-                    NSLog("FidoPass: launch at login change failed")
+            do {
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
                 }
-                objectWillChange.send()
+            } catch {
+                // Registration fails for an app that is not in /Applications, which is
+                // normal during development. Surfacing it as a crash would be worse than
+                // leaving the switch where the user put it.
+                NSLog("FidoPass: launch at login change failed")
             }
-#endif
+            objectWillChange.send()
         }
     }
 

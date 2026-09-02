@@ -60,10 +60,8 @@ final class DeviceStore: ObservableObject {
     private(set) var pinTTL: TimeInterval
     /// How long to wait before believing that a key which was here a moment ago is gone.
     private let emptyConfirmationDelay: Duration
-#if os(macOS)
     private var deviceMonitor: DeviceMonitorService?
     private var sessionMonitor: SessionLockMonitor?
-#endif
 
     init(backend: KeyBackend,
          pinVault: SecurePinVault = SecurePinVault(defaultTTL: 300),
@@ -74,7 +72,6 @@ final class DeviceStore: ObservableObject {
         self.pinVault = pinVault
         self.pinTTL = pinTTL
         self.emptyConfirmationDelay = emptyConfirmationDelay
-#if os(macOS)
         guard enableMonitors else { return }
         deviceMonitor = DeviceMonitorService { [weak self] in
             Task { @MainActor in await self?.refresh() }
@@ -82,7 +79,6 @@ final class DeviceStore: ObservableObject {
         sessionMonitor = SessionLockMonitor { [weak self] in
             Task { @MainActor in self?.handleSessionLock() }
         }
-#endif
     }
 
     deinit {

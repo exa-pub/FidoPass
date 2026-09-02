@@ -1,7 +1,5 @@
 import Foundation
-#if canImport(AppKit)
 import AppKit
-#endif
 
 /// Puts a derived secret on the pasteboard with the handling such a value deserves.
 ///
@@ -33,7 +31,6 @@ enum ClipboardService {
                            clearAfter: TimeInterval = defaultClearInterval,
                            syncAcrossDevices: Bool = false,
                            onCleared: (() -> Void)? = nil) -> Date? {
-        #if canImport(AppKit)
         let pasteboard = NSPasteboard.general
         clearWorkItem?.cancel()
 
@@ -61,16 +58,11 @@ enum ClipboardService {
         clearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter, execute: work)
         return Date().addingTimeInterval(clearAfter)
-        #else
-        return nil
-        #endif
     }
 
     /// Clears the pasteboard immediately, but only if it still holds what we put there.
     static func clearIfOwned() {
-        #if canImport(AppKit)
         clearWorkItem?.perform()
         clearWorkItem = nil
-        #endif
     }
 }
