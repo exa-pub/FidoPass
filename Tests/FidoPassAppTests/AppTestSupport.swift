@@ -41,7 +41,10 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     var accountsByPath: [String: [Account]] = [:]
     var statusByPath: [String: DeviceStatus] = [:]
     var generatedPassword = "PASSWORD-from-key"
-    var backupKeyValue = "BACKUP-KEY"
+    /// What a fresh portable enrolment hands back, and the master key every export answers
+    /// with. The identity of an export is the account's own — none for a legacy account.
+    var backupValue = PortableBackup(masterKey: Data(repeating: 0x42, count: 32),
+                                     identity: AccountIdentity(hex: "424242424242424242424242"))!
     var enumerateError: Error?
     var listDevicesError: Error?
     /// When set, `enumerateAccounts` blocks until the gate is opened.
@@ -62,9 +65,11 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     var inspectError: Error?
     var inventoryError: Error?
     private(set) var generateCalls: [(accountId: String, label: String)] = []
-    private(set) var enrollCalls: [(accountId: String, kind: AccountKind, imported: String?)] = []
+    private(set) var enrollCalls: [(accountId: String, kind: AccountKind, imported: PortableBackup?)] = []
     private(set) var deleteCalls: [String] = []
     private(set) var exportCalls: [String] = []
+    private(set) var assignIdentityCalls: [(accountId: String, identity: AccountIdentity)] = []
+    var assignIdentityError: Error?
     private(set) var setInitialPINCalls: [(path: String, pin: String)] = []
     private(set) var changePINCalls: [(path: String, old: String, new: String)] = []
     private(set) var resetCalls: [String] = []
@@ -231,14 +236,16 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     func enrollPortable(accountId: String,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
-                        importedKeyB64: String?,
-                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, String?) {
-        enrollCalls.append((accountId, .portable, importedKeyB64))
+                        imported: PortableBackup?,
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, PortableBackup?) {
+        enrollCalls.append((accountId, .portable, imported))
         onStep(.creatingCredential)
         onStep(.derivingBackupKey)
-        let account = Account.fixture(id: accountId, kind: .portable)
+        // As the real service: an import keeps its identity, fresh material gets the one the
+        // backup will carry.
+        let account = Account.portableFixture(id: accountId, identity: imported?.identity ?? backupValue.identity)
         accountsByPath[devicePath, default: []].append(account)
-        return (AccountHandle(account: account, devicePath: devicePath), importedKeyB64 == nil ? backupKeyValue : nil)
+        return (AccountHandle(account: account, devicePath: devicePath), imported == nil ? backupValue : nil)
     }
 
     func generatePassword(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
@@ -246,9 +253,22 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         return generatedPassword
     }
 
-    func exportImportedKey(_ handle: AccountHandle, pinProvider: @escaping @Sendable () -> String?) throws -> String {
+    func exportBackup(_ handle: AccountHandle, pinProvider: @escaping @Sendable () -> String?) throws -> PortableBackup {
         exportCalls.append(handle.id)
-        return backupKeyValue
+        // What the key answers: this account's identity, or none for a legacy one.
+        return PortableBackup(masterKey: backupValue.masterKey, identity: handle.account.identity)!
+    }
+
+    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle {
+        assignIdentityCalls.append((handle.id, identity))
+        if let assignIdentityError { throw assignIdentityError }
+        guard pins[handle.devicePath] == pin else { throw Self.wrongPin }
+        var updated = handle
+        updated.account.portable = handle.account.portable.flatMap { PortablePayload(external: $0.external, identity: identity) }
+        if let index = accountsByPath[handle.devicePath]?.firstIndex(of: handle.account) {
+            accountsByPath[handle.devicePath]?[index] = updated.account
+        }
+        return updated
     }
 
     /// `EncryptionKey` is only constructible inside the core, so the mock borrows a core
@@ -394,7 +414,7 @@ enum AppTestFactory {
         backend.devices = [device]
         backend.pins[device.path] = "1234"
         backend.accountsByPath[device.path] = accounts ?? [
-            Account.fixture(id: "vault", kind: .portable),
+            Account.portableFixture(id: "vault"),
             Account.fixture(id: "disk", kind: .local)
         ]
         let store = makeStore(backend: backend)

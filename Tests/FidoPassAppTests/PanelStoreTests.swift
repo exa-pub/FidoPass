@@ -201,38 +201,121 @@ final class PanelStoreTests: XCTestCase {
     func testPortableEnrolmentEndsOnTheBackupKeyScreen() async {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
         store.enrollDraft.accountId = "  backup  "
-        store.enrollDraft.kind = .portable
+        store.enrollDraft.mode = .portable
         await store.createAccount()
 
         XCTAssertEqual(backend.enrollCalls.last?.accountId, "backup", "the id must be trimmed before it reaches the key")
-        XCTAssertEqual(store.route, .backupKey(AccountRef(accountId: "backup", devicePath: device.path)),
-                       "a freshly created backup key has to be shown once, immediately")
-        XCTAssertEqual(store.backupKey, backend.backupKeyValue)
+        XCTAssertNil(backend.enrollCalls.last?.imported)
+        let ref = AccountRef(accountId: "backup", devicePath: device.path)
+        XCTAssertEqual(store.route, .backupKey(ref), "a freshly created backup key has to be shown once, immediately")
+        XCTAssertEqual(store.backup, backend.backupValue)
+        XCTAssertEqual(store.backup?.base64.count, 60)
+        XCTAssertEqual(store.accounts.account(ref)?.account.identity, store.backup?.identity,
+                       "the backup carries the identity the new account shows")
     }
 
     func testLocalEnrolmentProducesNoBackupKey() async {
         let (store, _, _) = await AppTestFactory.unlockedStore()
         store.enrollDraft.accountId = "disk-2"
-        store.enrollDraft.kind = .local
+        store.enrollDraft.mode = .local
         await store.createAccount()
 
         XCTAssertEqual(store.route, .accounts)
-        XCTAssertNil(store.backupKey)
+        XCTAssertNil(store.backup)
     }
 
-    func testImportedKeyMustBeThirtyTwoBytes() {
-        var draft = PanelStore.EnrollDraft()
+    /// Anything but a whole backup would derive different passwords, silently.
+    func testImportRequiresAWholeBackup() {
+        var draft = EnrollDraft()
         draft.accountId = "vault"
-        draft.importedKeyB64 = "not-base64"
-        XCTAssertNotNil(draft.importedKeyError)
+        draft.mode = .import
+        XCTAssertFalse(draft.canCreate, "nothing pasted yet")
+        XCTAssertNil(draft.importError, "an empty field is not an error")
+
+        draft.importText = "not-base64"
+        XCTAssertNotNil(draft.importError)
         XCTAssertFalse(draft.canCreate)
 
-        draft.importedKeyB64 = Data(repeating: 7, count: 32).base64EncodedString()
-        XCTAssertNil(draft.importedKeyError)
-        XCTAssertTrue(draft.canCreate)
+        draft.importText = Data(repeating: 7, count: 16).base64EncodedString()
+        XCTAssertNotNil(draft.importError, "a short key would derive different passwords, silently")
 
-        draft.importedKeyB64 = Data(repeating: 7, count: 16).base64EncodedString()
-        XCTAssertNotNil(draft.importedKeyError, "a short key would derive different passwords, silently")
+        let current = PortableBackup(masterKey: Data(repeating: 7, count: 32),
+                                     identity: AccountIdentity(hex: "070707070707070707070707"))!
+        draft.importText = " " + current.base64 + "\n"
+        XCTAssertNil(draft.importError)
+        XCTAssertTrue(draft.canCreate)
+        XCTAssertEqual(draft.request, .import(current))
+
+        // A backup from before identities parses, but is not complete until it has one.
+        draft.importText = Data(repeating: 7, count: 32).base64EncodedString()
+        XCTAssertNil(draft.importError)
+        XCTAssertTrue(draft.importIsLegacy)
+        XCTAssertFalse(draft.canCreate)
+        draft.legacyIdentityHex = "not hex"
+        XCTAssertNotNil(draft.legacyIdentityError)
+        XCTAssertFalse(draft.canCreate)
+        draft.legacyIdentityHex = "0102 0304 0506 0708 090a 0b0c"
+        XCTAssertNil(draft.legacyIdentityError)
+        XCTAssertTrue(draft.canCreate)
+        XCTAssertEqual(draft.parsedImport?.identity, AccountIdentity(hex: "0102030405060708090a0b0c"))
+        XCTAssertEqual(draft.parsedImport?.masterKey, Data(repeating: 7, count: 32))
+
+        // Local and portable ignore whatever is left in the import field.
+        draft.mode = .local
+        draft.importText = "garbage"
+        XCTAssertNil(draft.importError)
+        XCTAssertTrue(draft.canCreate)
+        XCTAssertEqual(draft.request, .local)
+    }
+
+    /// An import already has its backup — the one that was just pasted — so it ends on the
+    /// list, and the new account shows the identity the backup carried.
+    func testImportEndsOnTheAccountList() async {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let backup = PortableBackup(masterKey: Data(repeating: 9, count: 32),
+                                    identity: AccountIdentity(hex: "090909090909090909090909"))!
+        store.enrollDraft.accountId = "copy"
+        store.enrollDraft.mode = .import
+        store.enrollDraft.importText = backup.base64
+        await store.createAccount()
+
+        XCTAssertEqual(backend.enrollCalls.last?.imported, backup)
+        XCTAssertEqual(store.route, .accounts)
+        XCTAssertNil(store.backup)
+        let ref = AccountRef(accountId: "copy", devicePath: device.path)
+        XCTAssertEqual(store.selection, ref)
+        XCTAssertEqual(store.accounts.account(ref)?.account.identity, backup.identity)
+    }
+
+    /// A backup printed before identities existed gets one on import: random unless the
+    /// user types the one the account shows elsewhere.
+    func testImportingALegacyBackupTakesAnIdentity() async {
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        store.enrollDraft.accountId = "old"
+        store.enrollDraft.mode = .import
+        store.enrollDraft.importText = Data(repeating: 3, count: 32).base64EncodedString()
+
+        XCTAssertTrue(store.enrollDraft.importIsLegacy)
+        XCTAssertNotNil(store.enrollDraft.legacyIdentity, "a random identity is offered the moment a legacy backup is recognised")
+        XCTAssertTrue(store.enrollDraft.canCreate)
+
+        let chosen = AccountIdentity(hex: "0c0b0a090807060504030201")!
+        store.enrollDraft.legacyIdentityHex = chosen.groupedHex
+        await store.createAccount()
+
+        XCTAssertEqual(backend.enrollCalls.last?.imported?.masterKey, Data(repeating: 3, count: 32))
+        XCTAssertEqual(backend.enrollCalls.last?.imported?.identity, chosen)
+        XCTAssertEqual(store.route, .accounts)
+    }
+
+    /// The list shows the identity beside every account: stored for a portable one, derived
+    /// for a local one. Nothing on the key is read for the second.
+    func testEveryAccountHasAnIdentity() async {
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        for handle in store.visibleAccounts {
+            XCTAssertNotNil(handle.account.identity, handle.id)
+            XCTAssertFalse(handle.account.needsMigration, handle.id)
+        }
     }
 
     func testDeletingRemovesTheAccountFromTheList() async {

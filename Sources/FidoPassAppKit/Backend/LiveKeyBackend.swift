@@ -42,12 +42,12 @@ struct LiveKeyBackend: KeyBackend {
     func enrollPortable(accountId: String,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
-                        importedKeyB64: String?,
-                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, String?) {
+                        imported: PortableBackup?,
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, PortableBackup?) {
         try core.enrollPortable(accountId: accountId,
                                 devicePath: devicePath,
                                 askPIN: askPIN,
-                                importedKeyB64: importedKeyB64,
+                                imported: imported,
                                 onStep: onStep)
     }
 
@@ -58,9 +58,13 @@ struct LiveKeyBackend: KeyBackend {
         try core.generatePassword(handle, label: label, parameters: .v1, pinProvider: pinProvider)
     }
 
-    func exportImportedKey(_ handle: AccountHandle,
-                           pinProvider: @escaping @Sendable () -> String?) throws -> String {
-        try core.exportImportedKey(handle, pinProvider: pinProvider)
+    func exportBackup(_ handle: AccountHandle,
+                      pinProvider: @escaping @Sendable () -> String?) throws -> PortableBackup {
+        try core.exportBackup(handle, pinProvider: pinProvider)
+    }
+
+    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle {
+        try core.assignIdentity(handle, identity: identity, pinProvider: { pin })
     }
 
     func deriveEncryptionKey(_ handle: AccountHandle,

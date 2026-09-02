@@ -17,30 +17,21 @@ final class PanelStore: ObservableObject {
     @Published var selection: AccountRef?
     @Published var pinDraft: String = ""
     /// Value being shown on the backup-key screen. Never persisted, dropped on leaving.
-    @Published private(set) var backupKey: String?
-    @Published var enrollDraft = EnrollDraft()
+    @Published private(set) var backup: PortableBackup?
+    @Published var enrollDraft = EnrollDraft() {
+        didSet {
+            // A backup from before identities has none. The moment one is recognised the
+            // identity field gets a random value, so Import is one click away; it stays
+            // editable for the case where the same account already shows one on another key.
+            if enrollDraft.importIsLegacy, enrollDraft.legacyIdentityHex.isEmpty {
+                enrollDraft.legacyIdentityHex = AccountIdentity.random().groupedHex
+            }
+        }
+    }
     @Published private(set) var enrollStep: String?
     /// Set while a system panel of our own is up — a save dialog takes key status away, and
     /// the HUD must not vanish behind it.
     @Published private(set) var isShowingSystemPanel = false
-
-    struct EnrollDraft: Equatable {
-        var accountId: String = ""
-        var kind: AccountKind = .portable
-        var importedKeyB64: String = ""
-
-        var trimmedId: String { accountId.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-        var importedKeyError: String? {
-            guard !importedKeyB64.isEmpty else { return nil }
-            guard let data = Data(base64Encoded: importedKeyB64), data.count == 32 else {
-                return "Requires a 32-byte base64 value"
-            }
-            return nil
-        }
-
-        var canCreate: Bool { !trimmedId.isEmpty && importedKeyError == nil }
-    }
 
     let devices: DeviceStore
     let accounts: AccountStore
@@ -207,7 +198,7 @@ final class PanelStore: ObservableObject {
         pinDraft = ""
         pinForm.clear()
         error = nil
-        backupKey = nil
+        backup = nil
         enrollStep = nil
         // The reset wizard is not touched here any more: it runs in the manager window, and
         // closing the panel — which happens the moment that window takes focus — must not
@@ -279,7 +270,7 @@ final class PanelStore: ObservableObject {
 
     func show(_ route: PanelRoute) {
         self.route = route
-        if case .backupKey = route {} else { backupKey = nil }
+        if case .backupKey = route {} else { backup = nil }
     }
 
     /// Whether clicking away must leave the panel open.
@@ -569,22 +560,20 @@ final class PanelStore: ObservableObject {
 
     func createAccount() async {
         guard !isWorking else { return }
-        guard enrollDraft.canCreate,
+        guard let request = enrollDraft.request,
               let path = devices.selectedPath,
               let device = selectedDevice else { return }
         let draft = enrollDraft
-        let imported = draft.importedKeyB64.isEmpty ? nil : draft.importedKeyB64
 
         do {
             let created = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                                message: draft.kind == .portable
+                                                                message: request.kind == .portable
                                                                     ? "Step 1 of 2 — creating the credential."
                                                                     : "Confirming with the key.",
                                                                 deviceName: device.displayName)) {
                 try await self.accounts.enroll(accountId: draft.trimmedId,
-                                               kind: draft.kind,
-                                               devicePath: path,
-                                               importedKeyB64: imported) { step in
+                                               request: request,
+                                               devicePath: path) { step in
                     Task { @MainActor in self.enrollStep = Self.stepMessage(step) }
                 }
             }
@@ -592,19 +581,30 @@ final class PanelStore: ObservableObject {
             enrollDraft = EnrollDraft()
             select(AccountRef(created.0))
 
-            if let backup = created.1 {
+            if let generated = created.1 {
                 // Shown on its own screen, never in a field that reads like a password:
                 // this value reproduces every password of the account without the key.
-                backupKey = backup
-                show(.backupKey(AccountRef(accountId: draft.trimmedId, devicePath: path)))
+                backup = generated
+                show(.backupKey(AccountRef(created.0)))
             } else {
+                // An import has its backup already — the one that was just pasted.
                 show(.accounts)
-                setStatus("Account added")
+                if case .import = request {
+                    setStatus("Account imported — it derives the same passwords as the original")
+                } else {
+                    setStatus("Account added")
+                }
             }
         } catch {
             enrollStep = nil
             present(error)
         }
+    }
+
+    /// A fresh identity for a backup that predates them. The one the form filled in is
+    /// random too; this is for someone who typed over it and wants a random one back.
+    func randomiseImportIdentity() {
+        enrollDraft.legacyIdentityHex = AccountIdentity.random().groupedHex
     }
 
     static func stepMessage(_ step: PortableEnrollmentStep) -> String {
@@ -642,12 +642,12 @@ final class PanelStore: ObservableObject {
         guard !isWorking else { return }
         guard let account = accounts.account(ref), account.kind == .portable else { return }
         do {
-            let key = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                            message: "Recovering the backup key.",
-                                                            deviceName: selectedDevice?.displayName ?? "Security key")) {
-                try await self.accounts.exportBackupKey(for: account)
+            let exported = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
+                                                                 message: "Recovering the backup key.",
+                                                                 deviceName: selectedDevice?.displayName ?? "Security key")) {
+                try await self.accounts.exportBackup(for: account)
             }
-            backupKey = key
+            backup = exported
             show(.backupKey(ref))
         } catch {
             present(error)
@@ -655,8 +655,8 @@ final class PanelStore: ObservableObject {
     }
 
     func copyBackupKey() {
-        guard let key = backupKey, case .backupKey(let ref) = route else { return }
-        generation.copy(key, as: .backupKey, for: ref)
+        guard let backup, case .backupKey(let ref) = route else { return }
+        generation.copy(backup.base64, as: .backupKey, for: ref)
         setStatus("Backup key copied — store it offline, not in a password manager")
     }
 
@@ -743,7 +743,7 @@ final class PanelStore: ObservableObject {
         // The backup key on screen was derived from the key that just went away; it must not
         // outlive it, and there is nothing to come back to.
         if case .backupKey = route {
-            backupKey = nil
+            backup = nil
             route = .accounts
         }
     }
@@ -751,7 +751,7 @@ final class PanelStore: ObservableObject {
     /// The machine locked. Every key is locked by now and every store emptied; the panel
     /// goes back to the PIN field and out of sight.
     func sessionDidLock() {
-        backupKey = nil
+        backup = nil
         selection = nil
         focusLabels(on: nil)
         route = .unlock

@@ -83,26 +83,44 @@ final class AccountStore: ObservableObject {
 
     // MARK: - Enrolment
 
+    /// What to create. Import is not a third kind of account: it creates a portable one from
+    /// an existing backup, under the same relying party, deriving the same passwords and
+    /// showing the same identity as the account the backup came from.
+    enum EnrollRequest: Equatable {
+        case local
+        case portable
+        case `import`(PortableBackup)
+
+        var kind: AccountKind {
+            switch self {
+            case .local: return .local
+            case .portable, .import: return .portable
+            }
+        }
+    }
+
     /// Creates an account on the key.
     ///
-    /// Portable is not just a flag: it costs a second touch and produces a backup key that
-    /// the caller must show the user immediately. Returning it here rather than storing it
-    /// keeps that value out of the store's memory a moment longer than necessary.
+    /// Portable is not just a flag: it costs a second touch and — when the material is fresh
+    /// — produces a backup that the caller must show the user immediately. Returning it here
+    /// rather than storing it keeps that value out of the store's memory a moment longer
+    /// than necessary.
     func enroll(accountId: String,
-                kind: AccountKind,
+                request: EnrollRequest,
                 devicePath: String,
-                importedKeyB64: String?,
-                onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) async throws -> (AccountHandle, String?) {
+                onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) async throws -> (AccountHandle, PortableBackup?) {
         guard let provider = pinProviderFor(devicePath) else { throw KeyLockedError() }
 
-        let result: (AccountHandle, String?)
-        switch kind {
-        case .portable:
+        let result: (AccountHandle, PortableBackup?)
+        switch request {
+        case .portable, .import:
+            let imported: PortableBackup?
+            if case .import(let backup) = request { imported = backup } else { imported = nil }
             result = try await worker.accounts {
                 try $0.enrollPortable(accountId: accountId,
                                       devicePath: devicePath,
                                       askPIN: provider,
-                                      importedKeyB64: importedKeyB64,
+                                      imported: imported,
                                       onStep: onStep)
             }
         case .local:
@@ -117,6 +135,20 @@ final class AccountStore: ObservableObject {
         return result
     }
 
+    /// Gives a portable account from before identities one. PIN, no touch, and no change to
+    /// any password — see `Account.needsMigration`.
+    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity) async throws -> AccountHandle {
+        guard let pin = pinFor(handle.devicePath) else { throw KeyLockedError() }
+        let updated = try await worker.accounts { try $0.assignIdentity(handle, identity: identity, pin: pin) }
+        if let index = accounts.firstIndex(of: handle) {
+            accounts[index] = updated
+        } else {
+            accounts.append(updated)
+            accounts.sort { $0.id < $1.id }
+        }
+        return updated
+    }
+
     func delete(_ handle: AccountHandle) async throws {
         guard let pin = pinFor(handle.devicePath) else { throw KeyLockedError() }
         try await worker.accounts { try $0.deleteAccount(handle, pin: pin) }
@@ -125,9 +157,9 @@ final class AccountStore: ObservableObject {
 
     // MARK: - Key material
 
-    func exportBackupKey(for handle: AccountHandle) async throws -> String {
+    func exportBackup(for handle: AccountHandle) async throws -> PortableBackup {
         guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
-        return try await worker.accounts { try $0.exportImportedKey(handle, pinProvider: provider) }
+        return try await worker.accounts { try $0.exportBackup(handle, pinProvider: provider) }
     }
 
     func deriveEncryptionKey(for handle: AccountHandle, label: String) async throws -> EncryptionKey {

@@ -30,13 +30,16 @@ protocol KeyAccountBackend: Sendable {
     func enrollPortable(accountId: String,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
-                        importedKeyB64: String?,
-                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, String?)
+                        imported: PortableBackup?,
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, PortableBackup?)
     func generatePassword(_ handle: AccountHandle,
                           label: String,
                           pinProvider: @escaping @Sendable () -> String?) throws -> String
-    func exportImportedKey(_ handle: AccountHandle,
-                           pinProvider: @escaping @Sendable () -> String?) throws -> String
+    /// The account's master key and identity. One touch.
+    func exportBackup(_ handle: AccountHandle,
+                      pinProvider: @escaping @Sendable () -> String?) throws -> PortableBackup
+    /// Writes an identity onto a portable account from before identities. PIN, no touch.
+    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle
     func deriveEncryptionKey(_ handle: AccountHandle,
                              label: String,
                              pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey
