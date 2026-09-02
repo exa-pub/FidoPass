@@ -134,10 +134,13 @@ struct AccountRowView: View {
                 .truncationMode(.middle)
                 .help(identityTooltip)
             KindTag(kind: account.kind, needsMigration: needsMigration)
+            Spacer(minLength: 0)
+
+            // At the trailing edge, so that the swatches of several rows line up under each
+            // other — that is where they get compared.
             if let identity = account.account.identity {
                 IdentityFingerprintView(identity: identity, style: .swatch)
             }
-            Spacer(minLength: 0)
 
             if isHovering || isSelected {
                 Menu {
