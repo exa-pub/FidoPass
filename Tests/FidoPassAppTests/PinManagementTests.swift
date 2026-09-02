@@ -159,11 +159,13 @@ final class PinManagementTests: XCTestCase {
         let store = HUDTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
 
-        XCTAssertEqual(store.effectiveRoute, .changePIN)
+        // Changing the PIN lives in the manager window now, so the panel's job is to say so
+        // and offer the way there.
+        XCTAssertEqual(store.effectiveRoute, .pinChangeRequired)
         // Not a screen the user can navigate away from: the key would refuse whatever they
         // navigated to, and an unexplained refusal is worse than a screen they did not ask for.
         store.backToAccounts()
-        XCTAssertEqual(store.effectiveRoute, .changePIN)
+        XCTAssertEqual(store.effectiveRoute, .pinChangeRequired)
     }
 
     // MARK: - Reset
@@ -258,7 +260,11 @@ final class PinManagementTests: XCTestCase {
     /// Fetching a backup key is the one legitimate detour out of this wizard — it is the last
     /// moment that value can be had. Coming back must return to the wizard rather than drop
     /// the user on the account list with a reset still armed behind it.
-    func testLeavingForABackupKeyReturnsToTheWizard() async {
+    ///
+    /// The wizard is a sheet in the manager window now, so the panel is free to go wherever
+    /// the user sends it — what must not happen is the flow quietly disappearing while it is
+    /// still armed.
+    func testFetchingABackupKeyDoesNotAbandonAnArmedReset() async {
         let (store, _, _) = await HUDTestFactory.unlockedStore()
         await store.beginReset()
         guard let portable = store.resetFlow?.doomed.first(where: { $0.kind == .portable }) else {
@@ -269,8 +275,8 @@ final class PinManagementTests: XCTestCase {
         XCTAssertEqual(store.route, .backupKey(portable.ref))
 
         store.backToAccounts()
-        XCTAssertEqual(store.route, .resetKey)
-        XCTAssertNotNil(store.resetFlow)
+        XCTAssertEqual(store.route, .accounts)
+        XCTAssertNotNil(store.resetFlow, "the wizard is in another window and outlives this one")
     }
 
     /// A user who unplugged the key and then thought better of it must not be held in the
@@ -282,7 +288,7 @@ final class PinManagementTests: XCTestCase {
         await store.devices.refresh()
         XCTAssertEqual(store.resetFlow?.stage, .replug)
 
-        XCTAssertTrue(store.handleEscape())
+        store.cancelReset()
         XCTAssertNil(store.resetFlow)
         XCTAssertNil(store.devices.armedReset)
 
@@ -292,32 +298,35 @@ final class PinManagementTests: XCTestCase {
         XCTAssertTrue(backend.resetCalls.isEmpty, "a cancelled wizard must not still fire")
     }
 
-    /// The wizard tells the user to unplug the key. When they do, it must still be the thing
-    /// on screen — it used to fall through to "No security key connected", which made it look
-    /// as though the operation had been forgotten.
-    func testTheWizardStaysOnScreenWhileTheKeyIsOut() async {
-        let (store, backend, _) = await armedResetStore()
+    /// The acknowledgement is waived only for a key that is *known* to hold nothing. A locked
+    /// key enumerates to an empty list precisely because its contents are unknown, and waiving
+    /// the warning there would skip it in the one case where the user knows least about what
+    /// they are erasing. It used to be waived on any empty list, which also left the checkbox
+    /// on screen doing nothing.
+    func testAcknowledgementIsOnlyWaivedForAKeyKnownToBeEmpty() {
+        var unreadable = HUDStore.ResetFlow(deviceName: "Key", expectedAAGUID: nil,
+                                            doomed: [], accountsReadable: false, scopes: [])
+        XCTAssertFalse(unreadable.isKnownEmpty)
+        XCTAssertFalse(unreadable.canProceed, "an unreadable key still needs the warning read")
+        unreadable.acknowledged = true
+        XCTAssertTrue(unreadable.canProceed)
 
-        backend.devices = []
-        await store.devices.refresh()
-
-        XCTAssertEqual(store.effectiveRoute, .resetKey)
-        XCTAssertEqual(store.resetFlow?.stage, .replug)
+        let empty = HUDStore.ResetFlow(deviceName: "Key", expectedAAGUID: nil,
+                                       doomed: [], accountsReadable: true, scopes: [])
+        XCTAssertTrue(empty.isKnownEmpty)
+        XCTAssertTrue(empty.canProceed, "nothing to acknowledge — and no checkbox is shown")
     }
 
-    /// The panel stays open under a wizard, and — this is the part that broke — stops staying
-    /// open the moment the wizard is gone. Pinning used to be remembered from the last
-    /// `show(_:)`, so a route nobody could see kept the HUD on screen with no way to explain it.
-    func testPinningFollowsWhatIsOnScreen() async {
+    /// The wizard tells the user to unplug the key. When they do, the flow must survive the
+    /// key being gone — that absence is the step, not a failure.
+    func testTheWizardSurvivesTheKeyBeingOut() async {
         let (store, backend, _) = await armedResetStore()
-        XCTAssertTrue(store.isPinnedOpen)
 
         backend.devices = []
         await store.devices.refresh()
-        XCTAssertTrue(store.isPinnedOpen, "the wizard is still up, waiting for the key")
 
-        store.cancelReset()
-        XCTAssertFalse(store.isPinnedOpen, "nothing is left to protect — clicking away must close it")
+        XCTAssertNotNil(store.resetFlow)
+        XCTAssertEqual(store.resetFlow?.stage, .replug)
     }
 
     /// The bootstrap screen appears on its own, just by plugging in a new key. It may not
@@ -331,12 +340,32 @@ final class PinManagementTests: XCTestCase {
         XCTAssertTrue(store.isPinnedOpen, "half a PIN is something the user cannot get back")
     }
 
-    /// An arming that outlived its screen would fire on the next key plugged in, whatever it
-    /// was brought out for.
-    func testClosingThePanelDisarmsTheReset() async {
+    /// Closing the panel must **not** disarm the reset any more: the wizard lives in the
+    /// manager window, and that window taking focus is what closes the panel. Disarming there
+    /// would cancel the flow at the exact moment the user went to drive it.
+    func testClosingThePanelLeavesTheResetArmed() async {
         let (store, backend, device) = await armedResetStore()
 
         store.panelDidClose()
+
+        XCTAssertNotNil(store.resetFlow)
+        XCTAssertNotNil(store.devices.armedReset)
+
+        backend.devices = []
+        await store.devices.refresh()
+        backend.devices = [device]
+        await store.devices.refresh()
+        await store.resetTask?.value
+
+        XCTAssertEqual(backend.resetCalls, [device.path], "the flow the user armed still runs")
+    }
+
+    /// The arming still has to expire on its own, or a reset nobody is watching would fire on
+    /// whatever key is plugged in next. That timeout lives in `DeviceStore.armReset`.
+    func testCancellingDisarmsTheReset() async {
+        let (store, backend, device) = await armedResetStore()
+
+        store.cancelReset()
         backend.devices = []
         await store.devices.refresh()
         backend.devices = [device]

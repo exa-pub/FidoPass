@@ -34,7 +34,7 @@ final class BlockingGate: @unchecked Sendable {
 /// CI has no authenticator, so every store test runs against this. It is deliberately
 /// picky about the PIN: "wrong PIN decrements the attempts the user is shown" is one of the
 /// behaviours worth pinning down.
-final class MockKeyBackend: KeyBackend, @unchecked Sendable {
+class MockKeyBackend: KeyBackend, @unchecked Sendable {
 
     var devices: [FidoDevice] = []
     var pins: [String: String] = [:]
@@ -53,6 +53,14 @@ final class MockKeyBackend: KeyBackend, @unchecked Sendable {
     /// Counted, not just answered: "did anything open the key" is the assertion, and an
     /// opened key is one no other process can use.
     private(set) var statusCallCount = 0
+    /// Counted for the same reason as `statusCallCount`: both open the key, and "did anything
+    /// open it" is the assertion the manager's tests are about.
+    private(set) var inspectCallCount = 0
+    private(set) var inventoryCallCount = 0
+    var infoByPath: [String: AuthenticatorInfo] = [:]
+    var inventoryByPath: [String: CredentialInventory] = [:]
+    var inspectError: Error?
+    var inventoryError: Error?
     private(set) var generateCalls: [(accountId: String, label: String)] = []
     private(set) var enrollCalls: [(accountId: String, kind: AccountKind, imported: String?)] = []
     private(set) var deleteCalls: [String] = []
@@ -84,6 +92,114 @@ final class MockKeyBackend: KeyBackend, @unchecked Sendable {
         let next = queue.removeFirst()
         if !queue.isEmpty { listDevicesResults = queue }
         return next
+    }
+
+    private(set) var configCalls: [String] = []
+    var alwaysUVByPath: [String: Bool] = [:]
+    var configError: Error?
+
+    func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool {
+        configCalls.append("toggleAlwaysUV")
+        guard pins[devicePath] == pin else { throw MockKeyBackend.wrongPin }
+        if let configError { throw configError }
+        let flipped = !(alwaysUVByPath[devicePath] ?? false)
+        alwaysUVByPath[devicePath] = flipped
+        return flipped
+    }
+
+    func setMinimumPINLength(devicePath: String, length: Int, pin: String) throws {
+        configCalls.append("setMinimumPINLength(\(length))")
+        guard pins[devicePath] == pin else { throw MockKeyBackend.wrongPin }
+        if let configError { throw configError }
+    }
+
+    func forcePINChange(devicePath: String, pin: String) throws {
+        configCalls.append("forcePINChange")
+        guard pins[devicePath] == pin else { throw MockKeyBackend.wrongPin }
+        if let configError { throw configError }
+    }
+
+    func enableEnterpriseAttestation(devicePath: String, pin: String) throws {
+        configCalls.append("enableEnterpriseAttestation")
+        guard pins[devicePath] == pin else { throw MockKeyBackend.wrongPin }
+        if let configError { throw configError }
+    }
+
+    func inspect(devicePath: String) throws -> AuthenticatorInfo {
+        inspectCallCount += 1
+        if let inspectError { throw inspectError }
+        return infoByPath[devicePath] ?? MockKeyBackend.info()
+    }
+
+    func inventory(devicePath: String, pin: String) throws -> CredentialInventory {
+        inventoryCallCount += 1
+        guard pins[devicePath] == pin else { throw MockKeyBackend.wrongPin }
+        if let inventoryError { throw inventoryError }
+        return inventoryByPath[devicePath] ?? CredentialInventory(relyingParties: [],
+                                                                  residentKeysUsed: 0,
+                                                                  residentKeysRemaining: 100,
+                                                                  largeBlobArrayBytes: nil)
+    }
+
+    static func info(supportsCredentialManagement: Bool = true,
+                     options: [AuthenticatorInfo.Option] = [.init(name: "credMgmt", value: true),
+                                                            .init(name: "authnrCfg", value: true),
+                                                            .init(name: "alwaysUv", value: false),
+                                                            .init(name: "setMinPINLength", value: true)]) -> AuthenticatorInfo {
+        AuthenticatorInfo(isFIDO2: true,
+                          ctapHIDProtocol: 2,
+                          ctapHIDVersion: "5.7.4",
+                          capabilities: ["cbor"],
+                          supportsPIN: true,
+                          supportsUV: false,
+                          supportsCredentialManagement: supportsCredentialManagement,
+                          supportsCredentialProtection: true,
+                          supportsPermissions: true,
+                          hasPIN: true,
+                          hasUV: false,
+                          pinRetriesRemaining: 8,
+                          uvRetriesRemaining: nil,
+                          versions: ["FIDO_2_1"],
+                          extensions: ["hmac-secret"],
+                          options: options,
+                          aaguid: "ff4dac45ede84ec2acedcf66103f4335",
+                          pinProtocols: [2, 1],
+                          algorithms: [AuthenticatorInfo.Algorithm(cose: -7, type: "public-key")],
+                          transports: ["usb"],
+                          certifications: [],
+                          firmwareVersion: 0x050704,
+                          limits: AuthenticatorInfo.Limits(maxMessageSize: 1536,
+                                                           maxCredentialCountInList: 8,
+                                                           maxCredentialIdLength: 128,
+                                                           maxCredentialBlobLength: 32,
+                                                           maxLargeBlob: 4096,
+                                                           maxRPIDsForMinPINLength: 1),
+                          minPINLength: 4,
+                          forcePINChange: false,
+                          remainingResidentKeys: 92,
+                          uvAttempts: nil,
+                          uvModalities: [])
+    }
+
+    static func inventory(rpId: String = "example.org", count: Int = 1) -> CredentialInventory {
+        let credentials = (0..<count).map { index in
+            ResidentCredential(rpId: rpId,
+                               credentialIdB64: "cred-\(rpId)-\(index)",
+                               userIdHex: "0\(index)",
+                               userIdUTF8: "user\(index)",
+                               userName: .value("user\(index)"),
+                               userDisplayName: "User \(index)",
+                               coseAlgorithm: -7,
+                               publicKeyB64: nil,
+                               credentialProtection: .uvOptional,
+                               hasLargeBlobKey: true)
+        }
+        return CredentialInventory(
+            relyingParties: [CredentialInventory.RelyingParty(id: rpId, name: nil, idHashHex: "aa",
+                                                              credentials: credentials)],
+            residentKeysUsed: count,
+            residentKeysRemaining: 100 - count,
+            largeBlobArrayBytes: 1)
     }
 
     func status(devicePath: String) throws -> DeviceStatus {

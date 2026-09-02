@@ -443,15 +443,6 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertEqual(store.effectiveRoute, .unlock)
     }
 
-    /// Key info needs neither PIN nor touch, so it is the one screen a locked key may show.
-    func testKeyInfoSurvivesALockedKey() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        store.show(.keyInfo)
-        store.lockSelectedKey()
-
-        XCTAssertEqual(store.effectiveRoute, .keyInfo)
-    }
-
     /// ⌘N while the key is locked: unlock first, then land on the screen that was asked for.
     func testAScreenRequestedWhileLockedSurvivesUnlocking() async {
         let (store, _, _) = await HUDTestFactory.unlockedStore()

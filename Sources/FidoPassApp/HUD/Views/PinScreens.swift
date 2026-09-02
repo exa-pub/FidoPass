@@ -8,7 +8,9 @@ import FidoPassCore
 /// resulting message advised setting a PIN with no way to do so.
 struct SetPINView: View {
     @ObservedObject var store: HUDStore
-    @FocusState private var newFocused: Bool
+
+    private enum Field: Hashable { case new, confirm }
+    @FocusState private var focus: Field?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,12 +24,13 @@ struct SetPINView: View {
 
                 SecureField("New PIN", text: $store.pinForm.new)
                     .textFieldStyle(.roundedBorder)
-                    .focused($newFocused)
+                    .focused($focus, equals: .new)
 
                 // A typo in a single field would produce a key whose PIN its owner does not
                 // know — which is a dead key. That is what the second field is for.
                 SecureField("Repeat PIN", text: $store.pinForm.confirm)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focus, equals: .confirm)
                     .onSubmit { Task { await store.setInitialPIN() } }
 
                 PinRuleFooter(store: store, forChange: false)
@@ -43,76 +46,9 @@ struct SetPINView: View {
             .padding(.horizontal, HUDMetrics.padding)
             .padding(.bottom, 12)
         }
+        .tabFocusChain([Field.new, .confirm], focus: $focus)
         .onAppear {
-            newFocused = true
-            KeyboardLayoutService.preferEnglishLayoutIfNeeded()
-        }
-    }
-}
-
-/// Replacing the PIN.
-struct ChangePINView: View {
-    @ObservedObject var store: HUDStore
-    @ObservedObject var devices: DeviceStore
-    @FocusState private var currentFocused: Bool
-
-    private var forced: Bool { devices.selectedState?.forcePINChange == true }
-    private var retries: Int? { devices.selectedState?.pinRetriesRemaining }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HUDScreenHeader(title: "Change PIN", subtitle: store.selectedDevice?.displayName) {
-                guard !forced else { return }
-                store.pinForm.clear()
-                store.backToAccounts()
-            }
-
-            VStack(alignment: .leading, spacing: 9) {
-                if forced {
-                    HUDWarningBox(title: "This key requires a new PIN",
-                                  message: "It will refuse everything else until the PIN is changed.")
-                }
-
-                // Stated here, where the fear lives: people expect a PIN change to invalidate
-                // what the key produces. It does not — the PIN opens the key, it is not an
-                // input to the derivation.
-                Text("Your passwords will not change. The PIN opens the key; it is not part of how passwords are derived.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                SecureField("Current PIN", text: $store.pinForm.current)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($currentFocused)
-                SecureField("New PIN", text: $store.pinForm.new)
-                    .textFieldStyle(.roundedBorder)
-                SecureField("Repeat new PIN", text: $store.pinForm.confirm)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await store.changePIN() } }
-
-                PinRuleFooter(store: store, forChange: true)
-                if let retries { PinAttemptsLabel(remaining: retries) }
-
-                HStack {
-                    Spacer()
-                    if !forced {
-                        Button("Cancel") {
-                            store.pinForm.clear()
-                            store.backToAccounts()
-                        }
-                        .keyboardShortcut(.cancelAction)
-                    }
-                    Button("Change PIN") { Task { await store.changePIN() } }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(!store.canSubmitPinForm(forChange: true))
-                }
-            }
-            .padding(.horizontal, HUDMetrics.padding)
-            .padding(.bottom, 12)
-        }
-        .onAppear {
-            currentFocused = true
+            focus = .new
             KeyboardLayoutService.preferEnglishLayoutIfNeeded()
         }
     }
@@ -122,7 +58,7 @@ struct ChangePINView: View {
 ///
 /// One line that changes rather than two that compete: showing the requirement and the
 /// complaint at once makes the reader work out which one applies to them.
-private struct PinRuleFooter: View {
+struct PinRuleFooter: View {
     @ObservedObject var store: HUDStore
     let forChange: Bool
 

@@ -87,6 +87,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let preferences = NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
         preferences.target = self
         appMenu.addItem(preferences)
+        let manager = NSMenuItem(title: "Manager…", action: #selector(showManager), keyEquivalent: "k")
+        manager.keyEquivalentModifierMask = [.command, .shift]
+        manager.target = self
+        appMenu.addItem(manager)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide FidoPass", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit FidoPass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -106,6 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(editItem)
 
         NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func showManager() {
+        AuxiliaryWindows.shared.showAuthenticatorManager(store: store)
     }
 
     @objc private func showPreferences() {

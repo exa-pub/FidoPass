@@ -7,13 +7,12 @@ enum HUDRoute: Equatable {
     case unlock
     /// The key has no PIN. Nothing else on it works until it does.
     case setPIN
-    case changePIN
+    /// The key refuses everything until its PIN is changed, and changing it now lives in the
+    /// manager window. A signpost, not a screen that does the work.
+    case pinChangeRequired
     case enroll
     case backupKey(AccountRef)
     case confirmDelete(AccountRef)
-    case keyInfo
-    /// Erasing the key: a wizard, because the key itself imposes the steps.
-    case resetKey
 }
 
 /// The key is waiting to be touched.
@@ -116,8 +115,16 @@ final class HUDStore: ObservableObject {
         /// nothing to enumerate and nothing to spell out.
         var requiresTypedConfirmation: Bool { hasLocalAccounts }
 
+        /// Whether the key is *known* to hold nothing.
+        ///
+        /// An empty `doomed` is not the same as an empty key: a locked key cannot be
+        /// enumerated, so the list is empty precisely when the contents are unknown. Waiving
+        /// the acknowledgement on that would skip the warning in the one case where the user
+        /// has the least idea what they are about to erase.
+        var isKnownEmpty: Bool { doomed.isEmpty && accountsReadable }
+
         var canProceed: Bool {
-            guard acknowledged || doomed.isEmpty else { return false }
+            guard acknowledged || isKnownEmpty else { return false }
             guard requiresTypedConfirmation else { return true }
             return typed == "RESET"
         }
@@ -159,6 +166,8 @@ final class HUDStore: ObservableObject {
     let devices: DeviceStore
     let accounts: AccountStore
     let generation: GenerationStore
+    /// What the manager window has read. Empty until that window asks for something.
+    let inventory: InventoryStore
     let labels: LabelStore
     let preferences: Preferences
 
@@ -170,6 +179,12 @@ final class HUDStore: ObservableObject {
     /// path that revokes access to that account has to take the window with it.
     var onRequestCloseEditor: (() -> Void)?
     var onRequestSaveRecoverySheet: ((RecoverySheet) -> Void)?
+    /// Opens the FIDO manager window. A window, not a route: the panel is the wrong shape
+    /// for it, and the manager has to survive the panel closing behind it.
+    var onRequestOpenManager: (() -> Void)?
+    /// Brings the panel up. Used by the manager window, which has no PIN field of its own —
+    /// a second place to type a PIN is a second place to spend one of the eight attempts.
+    var onRequestOpenPanel: (() -> Void)?
     /// Raised when the key state changes in a way the menu-bar icon must reflect.
     var onStateChanged: (() -> Void)?
 
@@ -198,6 +213,8 @@ final class HUDStore: ObservableObject {
                                      pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })
         self.generation = GenerationStore(backend: backend,
                                           pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })
+        self.inventory = InventoryStore(backend: backend,
+                                        pin: { [weak deviceStore] path in deviceStore?.pin(for: path) })
         self.labels = labels ?? LabelStore()
         self.preferences = settings
 
@@ -269,20 +286,16 @@ final class HUDStore: ObservableObject {
         // it asks the user to unplug, and the key being gone is what it waits for. Falling
         // through to "No security key connected" made the wizard vanish at exactly the moment
         // it was doing its job.
-        if resetFlow != nil, case .resetKey = route { return .resetKey }
         guard !devices.devices.isEmpty else { return .accounts }
-        // Key info is read without a PIN and without a touch, so it stays available whatever
-        // else is true of the key.
-        if case .keyInfo = route { return .keyInfo }
         // A key that says it must have its PIN changed will refuse every other operation, and
         // silent refusals are impossible to explain. Changing it proves knowledge of the old
         // PIN, so this works on a locked key too.
-        if devices.selectedState?.forcePINChange == true { return .changePIN }
+        if devices.selectedState?.forcePINChange == true { return .pinChangeRequired }
         guard isSelectedKeyUnlocked else {
             // A key with no PIN cannot be unlocked at all; offering the field would be a dead
             // end, which is exactly what it used to be.
             if devices.selectedState?.hasPIN == false { return .setPIN }
-            if case .changePIN = route { return .changePIN }
+            if case .pinChangeRequired = route { return .pinChangeRequired }
             return .unlock
         }
         return route
@@ -321,12 +334,9 @@ final class HUDStore: ObservableObject {
         errorText = nil
         backupKey = nil
         enrollStep = nil
-        // An armed reset with no screen to explain it would fire on the next key plugged in,
-        // whatever it was brought out for. It only survives while its wizard is visible.
-        if resetFlow != nil {
-            devices.disarmReset()
-            resetFlow = nil
-        }
+        // The reset wizard is not touched here any more: it runs in the manager window, and
+        // closing the panel — which happens the moment that window takes focus — must not
+        // disarm a reset the user is halfway through.
         if case .accounts = route {} else { route = .accounts }
     }
 
@@ -409,24 +419,18 @@ final class HUDStore: ObservableObject {
         switch effectiveRoute {
         case .accounts, .unlock:
             return false
-        case .setPIN, .changePIN:
-            // These can appear on their own — a key with no PIN, a key demanding a change —
-            // so they hold the panel only once there is typing in them to lose.
+        case .setPIN:
+            // It can appear on its own — a key with no PIN — so it holds the panel only once
+            // there is typing in it to lose.
             return !pinForm.isEmpty
-        case .enroll, .backupKey, .confirmDelete, .keyInfo, .resetKey:
+        case .pinChangeRequired:
+            return false
+        case .enroll, .backupKey, .confirmDelete:
             return true
         }
     }
 
     func backToAccounts() {
-        // A reset in progress is a wizard the user was pulled out of — to fetch a backup key
-        // they are seconds away from losing. Landing them on the account list would abandon
-        // it silently, leaving a flow armed with nothing on screen to say so.
-        if resetFlow != nil {
-            show(.resetKey)
-            errorText = nil
-            return
-        }
         show(.accounts)
         errorText = nil
     }
@@ -516,20 +520,10 @@ final class HUDStore: ObservableObject {
             // There is nowhere to go back to: every other screen needs a PIN this key has not
             // got. Escape closes the panel, as it does on the account list.
             return false
-        case .changePIN:
-            // Unless the key insists — then leaving is not a choice the app can offer.
-            guard devices.selectedState?.forcePINChange != true else { return true }
-            pinForm.clear()
-            backToAccounts()
+        case .pinChangeRequired:
+            // Nowhere to go back to: the key refuses everything until the PIN is changed.
             return true
-        case .resetKey:
-            // Cancellable right up until the key is being erased — a user who unplugged and
-            // then thought better of it must not be held in the wizard. Once the reset itself
-            // is running there is nothing left to cancel: the key is doing it.
-            guard resetFlow?.stage != .running else { return true }
-            cancelReset()
-            return true
-        case .enroll, .backupKey, .confirmDelete, .keyInfo:
+        case .enroll, .backupKey, .confirmDelete:
             backToAccounts()
             return true
         }
@@ -545,14 +539,12 @@ final class HUDStore: ObservableObject {
             return ["⏎ unlock"]
         case .setPIN:
             return ["⏎ set PIN"]
-        case .changePIN:
-            return devices.selectedState?.forcePINChange == true ? ["⏎ change PIN"] : ["⏎ change PIN", "esc cancel"]
+        case .pinChangeRequired:
+            return []
         case .enroll:
             return ["⏎ create", "esc cancel"]
-        case .backupKey, .keyInfo:
+        case .backupKey:
             return ["esc back"]
-        case .resetKey:
-            return resetFlow?.stage == .running ? [] : ["esc cancel"]
         case .confirmDelete:
             return ["esc cancel"]
         case .accounts:
@@ -888,7 +880,6 @@ final class HUDStore: ObservableObject {
                               },
                               accountsReadable: readable,
                               scopes: onKey.map { LabelScope(credentialId: $0.credentialIdB64) })
-        show(.resetKey)
     }
 
     /// Confirmed. From here on the key is what drives the flow.
@@ -903,7 +894,6 @@ final class HUDStore: ObservableObject {
     func cancelReset() {
         devices.disarmReset()
         resetFlow = nil
-        backToAccounts()
     }
 
     /// The key came back while a reset was armed. This runs on the millisecond, not after the
@@ -1036,6 +1026,19 @@ final class HUDStore: ObservableObject {
 
     // MARK: - Housekeeping
 
+    /// Sends the user to the panel's PIN field for a key the manager needs opened.
+    func requestUnlock(devicePath: String) {
+        devices.selectedPath = devicePath
+        route = .accounts
+        onRequestOpenPanel?()
+    }
+
+    /// Opens the manager window. Reads nothing by itself — the window asks first.
+    func openManager() {
+        onRequestOpenManager?()
+        onRequestClose?()
+    }
+
     private func handleKeyClosed(_ path: String) {
         // The wizard is waiting for exactly this: the key has gone, so the next thing to
         // happen is it coming back.
@@ -1048,6 +1051,15 @@ final class HUDStore: ObservableObject {
         closeEditor(ifBoundTo: path)
         accounts.drop(devicePath: path)
         generation.dropEverything(forDevicePath: path)
+        // A key that merely locked keeps what it said about *itself* — that is public
+        // information about the model — but loses its credential list, which names other
+        // services' accounts. A key that was unplugged loses both: `DeviceStore` has already
+        // removed its state by the time this runs, so its absence is the test.
+        if devices.state(for: path) == nil {
+            inventory.drop(devicePath: path)
+        } else {
+            inventory.dropInventory(devicePath: path)
+        }
         if selection?.devicePath == path {
             selection = nil
             focusLabels(on: nil)
@@ -1070,6 +1082,7 @@ final class HUDStore: ObservableObject {
         generation.clearClipboard()
         generation.dropEverything()
         accounts.dropAll()
+        inventory.dropAll()
         selection = nil
         focusLabels(on: nil)
         route = .unlock

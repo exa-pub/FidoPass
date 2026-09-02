@@ -24,6 +24,11 @@ public enum FidoStatus: Equatable, Sendable {
     case pinAuthInvalid
     case noCredentials
     case actionTimeout
+    /// The authenticator asked for a touch and gave up waiting. Distinct from
+    /// `actionTimeout`, which is the *client* giving up: this one is the key's own verdict,
+    /// and it is the usual way a reset fails — the command arrived in time, the finger did
+    /// not. Left unnamed it surfaced as "libfido2 error 47", which explains nothing.
+    case userActionTimeout
     case userPresenceRequired
     case keyStoreFull
     case unsupportedOption
@@ -45,6 +50,7 @@ public enum FidoStatus: Equatable, Sendable {
         case FIDO_ERR_PIN_AUTH_INVALID:      self = .pinAuthInvalid
         case FIDO_ERR_NO_CREDENTIALS:        self = .noCredentials
         case FIDO_ERR_ACTION_TIMEOUT:        self = .actionTimeout
+        case FIDO_ERR_USER_ACTION_TIMEOUT:   self = .userActionTimeout
         case FIDO_ERR_UP_REQUIRED:           self = .userPresenceRequired
         case FIDO_ERR_KEY_STORE_FULL:        self = .keyStoreFull
         case FIDO_ERR_UNSUPPORTED_OPTION:    self = .unsupportedOption

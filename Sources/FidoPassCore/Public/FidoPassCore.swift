@@ -10,6 +10,8 @@ public final class FidoPassCore {
     private let passwordGenerator: PasswordGenerating
     private let secretEncryption: SecretEncrypting
     private let deviceManagement: DeviceManaging
+    private let inspection: AuthenticatorInspecting
+    private let configuration: DeviceConfiguring
 
     public init(deviceLister: DeviceListing? = nil,
                 enrollmentService: EnrollmentServiceProtocol? = nil,
@@ -17,7 +19,9 @@ public final class FidoPassCore {
                 secretDerivationService: SecretDerivationServiceProtocol? = nil,
                 passwordGenerator: PasswordGenerating? = nil,
                 secretEncryption: SecretEncrypting? = nil,
-                deviceManagement: DeviceManaging? = nil) {
+                deviceManagement: DeviceManaging? = nil,
+                inspection: AuthenticatorInspecting? = nil,
+                configuration: DeviceConfiguring? = nil) {
         Libfido2Context.initialize()
 
         let resolvedDeviceRepository = DeviceRepository()
@@ -39,6 +43,8 @@ public final class FidoPassCore {
 
         self.secretEncryption = secretEncryption ?? SecretEncryptionService(secretDerivationService: resolvedSecretDerivation)
         self.deviceManagement = deviceManagement ?? DeviceManagementService(deviceRepository: resolvedDeviceRepository)
+        self.inspection = inspection ?? AuthenticatorInspectionService(deviceRepository: resolvedDeviceRepository)
+        self.configuration = configuration ?? DeviceConfigurationService(deviceRepository: resolvedDeviceRepository)
     }
 
     public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
@@ -55,6 +61,43 @@ public final class FidoPassCore {
     /// not report it — never treat that as "plenty left".
     public func pinRetriesRemaining(devicePath: String) throws -> Int? {
         try status(devicePath: devicePath).pinRetriesRemaining
+    }
+
+    // MARK: - Inspection
+
+    /// Everything the key reports about itself. No PIN and no touch — but it does open the
+    /// device, so only ever call it because the user asked to look.
+    public func inspect(devicePath: String) throws -> AuthenticatorInfo {
+        try inspection.inspect(devicePath: devicePath)
+    }
+
+    /// Every resident credential on the key, of every relying party — not just FidoPass's.
+    /// Needs the PIN, needs no touch.
+    public func inventory(devicePath: String, pin: String) throws -> CredentialInventory {
+        try inspection.inventory(devicePath: devicePath, pin: pin)
+    }
+
+    // MARK: - Authenticator settings
+
+    /// Flips `alwaysUv` and returns the state the key reports afterwards. Reversible.
+    @discardableResult
+    public func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool {
+        try configuration.toggleAlwaysUV(devicePath: devicePath, pin: pin)
+    }
+
+    /// Raises the shortest PIN the key accepts. **Cannot be undone or lowered.**
+    public func setMinimumPINLength(devicePath: String, length: Int, pin: String) throws {
+        try configuration.setMinimumPINLength(devicePath: devicePath, length: length, pin: pin)
+    }
+
+    /// Makes the key demand a new PIN before anything else works.
+    public func forcePINChange(devicePath: String, pin: String) throws {
+        try configuration.forcePINChange(devicePath: devicePath, pin: pin)
+    }
+
+    /// Turns on enterprise attestation. **Cannot be undone.**
+    public func enableEnterpriseAttestation(devicePath: String, pin: String) throws {
+        try configuration.enableEnterpriseAttestation(devicePath: devicePath, pin: pin)
     }
 
     public func enroll(accountId: String,

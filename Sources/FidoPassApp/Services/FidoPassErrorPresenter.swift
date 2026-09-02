@@ -157,6 +157,13 @@ enum FidoPassErrorPresenter {
                            details: details,
                            isRetryable: false)
 
+        case .userActionTimeout:
+            return Message(kind: .touchTimeout,
+                           title: "The key was not touched in time",
+                           recovery: "The key was waiting for a finger and gave up. Try again and touch it as soon as it starts blinking.",
+                           details: details,
+                           isRetryable: true)
+
         case .actionTimeout:
             return Message(kind: .touchTimeout,
                            title: "The key was not touched in time",

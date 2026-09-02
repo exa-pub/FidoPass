@@ -109,7 +109,15 @@ struct PinAttemptsLabel: View {
 /// a vault master password is unrecoverable.
 struct EnrollView: View {
     @ObservedObject var store: HUDStore
-    @FocusState private var idFocused: Bool
+
+    private enum Field: Hashable { case accountId, importedKey }
+    @FocusState private var focus: Field?
+
+    /// The backup-key field is only on screen for a portable account, so Tab must not stop
+    /// at a field that is not there.
+    private var fields: [Field] {
+        store.enrollDraft.kind == .portable ? [.accountId, .importedKey] : [.accountId]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -120,7 +128,7 @@ struct EnrollView: View {
             VStack(alignment: .leading, spacing: 9) {
                 TextField("Account ID, e.g. vault", text: $store.enrollDraft.accountId)
                     .textFieldStyle(.roundedBorder)
-                    .focused($idFocused)
+                    .focused($focus, equals: .accountId)
                     .onSubmit { Task { await store.createAccount() } }
 
                 Picker("", selection: $store.enrollDraft.kind) {
@@ -142,6 +150,7 @@ struct EnrollView: View {
                         TextField("Existing backup key (optional, base64)", text: $store.enrollDraft.importedKeyB64)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 11, design: .monospaced))
+                            .focused($focus, equals: .importedKey)
                         if let error = store.enrollDraft.importedKeyError {
                             Text(error).font(.caption2).foregroundStyle(.red)
                         } else {
@@ -170,7 +179,8 @@ struct EnrollView: View {
             .padding(.horizontal, HUDMetrics.padding)
             .padding(.bottom, 12)
         }
-        .onAppear { idFocused = true }
+        .tabFocusChain(fields, focus: $focus)
+        .onAppear { focus = .accountId }
     }
 }
 
@@ -250,54 +260,31 @@ struct ConfirmDeleteView: View {
     }
 }
 
-/// What the key itself reports. Read without a PIN and without a touch.
-struct KeyInfoView: View {
+/// The key refuses everything until its PIN is changed.
+///
+/// A signpost rather than a form: changing the PIN lives in the manager window now, and this
+/// screen exists only because the panel must not leave the user staring at a key that rejects
+/// every operation with no way to reach the one thing that fixes it.
+struct PINChangeRequiredView: View {
     @ObservedObject var store: HUDStore
-    @ObservedObject var devices: DeviceStore
-    @State private var status: DeviceStatus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HUDScreenHeader(title: "Key info", subtitle: store.selectedDevice?.displayName) { store.backToAccounts() }
+            HUDScreenHeader(title: "A new PIN is required", subtitle: store.selectedDevice?.displayName) {}
 
-            VStack(alignment: .leading, spacing: 7) {
-                if let device = store.selectedDevice {
-                    row("Identifier", device.identityLabel)
+            VStack(alignment: .leading, spacing: 10) {
+                HUDWarningBox(title: "This key requires a new PIN",
+                              message: "It will refuse everything else — including generating passwords — until the PIN is changed. Your passwords will not change: the PIN opens the key, it is not part of how they are derived.")
+
+                HStack {
+                    Spacer()
+                    Button("Change PIN…") { store.openManager() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
                 }
-                if let status {
-                    row("PIN configured", status.hasPIN ? "yes" : "no — enrolment needs one")
-                    row("hmac-secret", status.supportsHmacSecret ? "supported" : "missing — passwords cannot be derived")
-                    row("PIN attempts left", status.pinRetriesRemaining.map(String.init) ?? "not reported")
-                    row("Shortest PIN allowed", status.minPINLength.map(String.init) ?? "4 (the protocol minimum)")
-                    if status.forcePINChange {
-                        row("PIN change", "required before anything else")
-                    }
-                    row("Free credential slots", status.remainingResidentKeys.map(String.init) ?? "not reported")
-                } else {
-                    HStack { ProgressView().controlSize(.small); Text("Reading…").font(.caption).foregroundStyle(.secondary) }
-                }
-                if let aaguid = status?.aaguid {
-                    row("Model (AAGUID)", String(aaguid.prefix(8)))
-                }
-                Text("Device paths change on every reconnect, so they are never stored. The AAGUID names the model, not this key — it is shared by every key like it.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 2)
             }
             .padding(.horizontal, HUDMetrics.padding)
             .padding(.bottom, 12)
-        }
-        .task {
-            guard let device = store.selectedDevice else { return }
-            status = await devices.status(for: device)
-        }
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack(alignment: .top) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value).font(.caption).multilineTextAlignment(.trailing)
         }
     }
 }

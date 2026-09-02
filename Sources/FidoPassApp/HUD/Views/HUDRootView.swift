@@ -65,20 +65,14 @@ struct HUDRootView: View {
             UnlockView(store: store, devices: devices)
         case .setPIN:
             SetPINView(store: store)
-        case .changePIN:
-            ChangePINView(store: store, devices: devices)
+        case .pinChangeRequired:
+            PINChangeRequiredView(store: store)
         case .enroll:
             EnrollView(store: store)
         case .backupKey(let ref):
             BackupKeyView(store: store, ref: ref)
         case .confirmDelete(let ref):
             ConfirmDeleteView(store: store, ref: ref)
-        case .keyInfo:
-            KeyInfoView(store: store, devices: devices)
-        case .resetKey:
-            if let flow = store.resetFlow {
-                ResetKeyView(store: store, flow: flow)
-            }
         }
     }
 
@@ -157,13 +151,7 @@ struct HUDHeaderView: View {
             Menu {
                 Button("New account…") { store.show(.enroll) }
                     .disabled(!store.isSelectedKeyUnlocked)
-                Button("Key info…") { store.show(.keyInfo) }
-                    .disabled(devices.devices.isEmpty)
-                // Available on a locked key: changing the PIN proves knowledge of the old one,
-                // which is the same proof unlocking asks for.
-                Button("Change PIN…") { store.show(.changePIN) }
-                    .disabled(devices.selectedState?.hasPIN != true)
-                Button("Reset key…") { Task { await store.beginReset() } }
+                Button("Manager…") { store.openManager() }
                     .disabled(devices.devices.isEmpty)
                 Button("Refresh") { Task { await store.refresh() } }
                 Divider()

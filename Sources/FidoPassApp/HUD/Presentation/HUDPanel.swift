@@ -28,6 +28,10 @@ final class HUDPanel: NSPanel {
         animationBehavior = .utilityWindow
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         isReleasedWhenClosed = false
+        // Tab between fields is *not* solved here. A borderless window builds no key-view
+        // loop, and `autorecalculatesKeyViewLoop` was tried and changed nothing — the field
+        // editor still had no `nextKeyView`. Each multi-field screen states its own order
+        // with `tabFocusChain` instead.
     }
 
     /// Called when the user presses Escape. `performClose` would only beep — a borderless

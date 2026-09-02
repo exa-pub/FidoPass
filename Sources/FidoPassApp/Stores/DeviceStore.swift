@@ -275,6 +275,44 @@ final class DeviceStore: ObservableObject {
         adoptResetKey(path: path)
     }
 
+    // MARK: - Authenticator settings
+
+    /// CTAP 2.1 `authenticatorConfig`. Grouped with the PIN operations because these change
+    /// the key itself, not what is stored on it — and, like a PIN change, they need the PIN
+    /// and no touch (verified on hardware, ~0.15 s each).
+    ///
+    /// Two of the four cannot be undone, which is the caller's problem to make plain before
+    /// getting here: this layer just performs them.
+    @discardableResult
+    func toggleAlwaysUV(for device: FidoDevice) async throws -> Bool {
+        let path = device.path
+        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        return try await worker.run { try $0.toggleAlwaysUV(devicePath: path, pin: pin) }
+    }
+
+    func setMinimumPINLength(for device: FidoDevice, length: Int) async throws {
+        let path = device.path
+        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        try await worker.run { try $0.setMinimumPINLength(devicePath: path, length: length, pin: pin) }
+        // The key may now consider the PIN in use too short, and it will refuse everything
+        // else until that is dealt with. Re-read rather than assume.
+        await refreshStatus(for: device)
+    }
+
+    func forcePINChange(for device: FidoDevice) async throws {
+        let path = device.path
+        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        try await worker.run { try $0.forcePINChange(devicePath: path, pin: pin) }
+        // The key now refuses every other operation, and the HUD routes on exactly this flag.
+        await refreshStatus(for: device)
+    }
+
+    func enableEnterpriseAttestation(for device: FidoDevice) async throws {
+        let path = device.path
+        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        try await worker.run { try $0.enableEnterpriseAttestation(devicePath: path, pin: pin) }
+    }
+
     // MARK: - Armed reset
 
     /// A reset waiting for the key to be plugged back in.
@@ -428,5 +466,15 @@ final class DeviceStore: ObservableObject {
     func status(for device: FidoDevice) async -> DeviceStatus? {
         let path = device.path
         return try? await worker.run { try $0.status(devicePath: path) }
+    }
+}
+
+enum DeviceStoreError: LocalizedError {
+    case keyLocked
+
+    var errorDescription: String? {
+        switch self {
+        case .keyLocked: return "The security key is locked. Enter its PIN and try again."
+        }
     }
 }

@@ -2,7 +2,7 @@
 import AppKit
 import SwiftUI
 
-/// The three windows that are not the HUD.
+/// The windows that are not the HUD.
 ///
 /// The text editor is a window by nature — its whole point is to sit beside the application
 /// you are pasting into, which a popover cannot do. Preferences and onboarding are rare and
@@ -15,6 +15,7 @@ final class AuxiliaryWindows {
     private var editorWindow: NSWindow?
     private var editorSession: CryptoEditorSession?
     private var preferencesWindow: NSWindow?
+    private var managerWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var delegates: [ObjectIdentifier: WindowCloseDelegate] = [:]
 
@@ -69,6 +70,25 @@ final class AuxiliaryWindows {
                                 resizable: false)
         onClose(of: window) { [weak self] in self?.preferencesWindow = nil }
         preferencesWindow = window
+        present(window)
+    }
+
+    // MARK: - FIDO manager
+
+    /// The manager is a window rather than a HUD screen: the panel is 340pt wide and
+    /// optimised for the shortest path to a password, and a table of every credential on a
+    /// key is neither of those things.
+    func showAuthenticatorManager(store: HUDStore) {
+        if let managerWindow {
+            present(managerWindow)
+            return
+        }
+        let window = makeWindow(title: "FIDO Manager",
+                                content: AnyView(AuthenticatorManagerView(store: store)),
+                                size: NSSize(width: 960, height: 620),
+                                resizable: true)
+        onClose(of: window) { [weak self] in self?.managerWindow = nil }
+        managerWindow = window
         present(window)
     }
 

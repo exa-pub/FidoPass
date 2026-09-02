@@ -26,6 +26,11 @@ final class HUDController: NSObject, NSWindowDelegate {
         }
         store.onRequestCloseEditor = { AuxiliaryWindows.shared.closeEditor() }
         store.onRequestSaveRecoverySheet = { [weak self] sheet in self?.presentSavePanel(for: sheet) }
+        store.onRequestOpenPanel = { [weak self] in self?.show() }
+        store.onRequestOpenManager = { [weak store] in
+            guard let store else { return }
+            AuxiliaryWindows.shared.showAuthenticatorManager(store: store)
+        }
     }
 
     // MARK: - Status item
