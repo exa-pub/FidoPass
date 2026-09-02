@@ -14,6 +14,9 @@ import FidoPassCore
 struct RecoverySheet {
     let accountId: String
     let kind: AccountKind
+    /// Not a secret, and no input to derivation — on the sheet because it is what tells
+    /// this account apart from a namesake, on this key or on the copy on another one.
+    let identity: AccountIdentity?
     let revision: Int
     let policy: PasswordPolicy
     let labels: [String]
@@ -27,6 +30,7 @@ struct RecoverySheet {
          generatedAt: Date = Date()) {
         self.accountId = account.id
         self.kind = account.kind
+        self.identity = account.identity
         self.revision = parameters.revision
         self.policy = parameters.policy
         self.labels = labels
@@ -45,6 +49,7 @@ struct RecoverySheet {
         lines.append("")
         lines.append("Account id   : \(accountId)")
         lines.append("Credential   : \(kind == .portable ? "portable (can be copied to a second key)" : "local (bound to one key)")")
+        lines.append("Identity     : \(identity?.groupedHex ?? "(not assigned — migrate this account first)")")
         lines.append("Revision     : \(revision)")
         lines.append("Length       : \(policy.length)")
         lines.append("Characters   : \(characterSummary)")
@@ -62,6 +67,10 @@ struct RecoverySheet {
                 lines.append("  • \(label)")
             }
         }
+        lines.append("")
+        lines.append("The identity is safe to share and takes no part in deriving passwords.")
+        lines.append("It tells this account apart from another with the same name: a copy of a")
+        lines.append("portable account on a second key shows the same identity.")
         lines.append("")
         lines.append("To recover: install FidoPass, connect this security key, unlock it with")
         lines.append("its PIN, select the account above and enter the same label. The password")

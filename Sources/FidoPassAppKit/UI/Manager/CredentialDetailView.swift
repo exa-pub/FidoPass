@@ -17,6 +17,9 @@ struct CredentialDetailView: View {
             if let utf8 = credential.userIdUTF8, !utf8.isEmpty {
                 ManagerRow(label: "User id (as text)", value: utf8)
             }
+            if credential.isFidoPassCredential {
+                identityRow
+            }
             ManagerRow(label: "Credential id", value: credential.credentialIdB64, monospaced: true, copyable: true)
             ManagerRow(label: "Algorithm",
                        value: credential.coseAlgorithm.map { "\(AuthenticatorInfo.algorithmName(cose: $0)) (\($0))" } ?? "not reported")
@@ -38,7 +41,7 @@ struct CredentialDetailView: View {
             }
 
             if case .portableKeyMaterialWithheld = credential.userName {
-                Label("This is a FidoPass portable account. Its backup key is stored in the credential's user name, so this window does not show it — use the panel's backup-key screen, which explains what the value is before revealing it.",
+                Label("This is a FidoPass portable account. Its key material is stored in the credential's user name, so this window shows only the identity that follows it — use the panel's backup-key screen, which explains what the value is before revealing it.",
                       systemImage: "lock.shield")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -52,5 +55,32 @@ struct CredentialDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 12)
         }
+    }
+
+    /// Laid out like a `ManagerRow`, with the fingerprint where the value would be. The
+    /// manager only shows it: migrating is the panel's job, like everything else that
+    /// writes an account.
+    private var identityRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("Identity")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 190, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                if let identity = credential.accountIdentity {
+                    IdentityFingerprintView(identity: identity)
+                    Text("Safe to share and no part of any derivation: the same account on another key shows the same identity.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Not assigned yet — this account was written by an earlier version. Open the panel and migrate it.")
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 2)
     }
 }

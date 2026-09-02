@@ -97,6 +97,36 @@ final class CredentialRedactionTests: XCTestCase {
         XCTAssertTrue(json.contains("portableKeyMaterialWithheld"), "but the fact of it should be visible")
     }
 
+    /// The manager shows an identity for FidoPass's own credentials — derived for a local
+    /// one, read from the withheld name for a portable one — and nothing for anyone else's.
+    func testResidentCredentialExposesTheIdentityAndOnlyThat() throws {
+        let identity = try XCTUnwrap(AccountIdentity(hex: "0102030405060708090a0b0c"))
+        func credential(rpId: String, name: CredentialUserName) -> ResidentCredential {
+            ResidentCredential(rpId: rpId,
+                               credentialIdB64: Data("cred".utf8).base64EncodedString(),
+                               userIdHex: "66", userIdUTF8: "f",
+                               userName: name, userDisplayName: "f",
+                               coseAlgorithm: -7, publicKeyB64: nil,
+                               credentialProtection: nil, hasLargeBlobKey: false)
+        }
+
+        let local = credential(rpId: AccountKind.local.rpId, name: .value("vault"))
+        XCTAssertEqual(local.accountIdentity, AccountIdentity.derived(fromCredentialId: Data("cred".utf8)))
+        XCTAssertFalse(local.needsMigration)
+
+        let portable = credential(rpId: AccountKind.portable.rpId, name: .portableKeyMaterialWithheld(identity: identity))
+        XCTAssertEqual(portable.accountIdentity, identity)
+        XCTAssertFalse(portable.needsMigration)
+
+        let legacy = credential(rpId: AccountKind.portable.rpId, name: .portableKeyMaterialWithheld(identity: nil))
+        XCTAssertNil(legacy.accountIdentity)
+        XCTAssertTrue(legacy.needsMigration)
+
+        let foreign = credential(rpId: "github.com", name: .value("alice"))
+        XCTAssertNil(foreign.accountIdentity, "a foreign credential has no FidoPass identity, whatever its id hashes to")
+        XCTAssertFalse(foreign.needsMigration)
+    }
+
     /// `hasLargeBlobKey` is a flag precisely so the key itself cannot end up here.
     func testLargeBlobKeyIsOnlyEverAFlag() throws {
         let credential = ResidentCredential(rpId: "example.org",

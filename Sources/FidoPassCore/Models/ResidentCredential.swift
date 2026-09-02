@@ -80,6 +80,28 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
     /// omission.
     public var isFidoPassCredential: Bool { AccountKind(rpId: rpId) != nil }
 
+    /// The identity of the FidoPass account this credential is, if it is one: derived from
+    /// the credential id for a local account, read out of the withheld name for a portable
+    /// one. `nil` for a foreign credential — and for a portable account written before
+    /// identities existed, which `needsMigration` says outright.
+    public var accountIdentity: AccountIdentity? {
+        switch AccountKind(rpId: rpId) {
+        case .local:
+            return Data(base64Encoded: credentialIdB64).map(AccountIdentity.derived(fromCredentialId:))
+        case .portable:
+            if case .portableKeyMaterialWithheld(let identity) = userName { return identity }
+            return nil
+        case nil:
+            return nil
+        }
+    }
+
+    /// A FidoPass portable account whose payload predates identities.
+    public var needsMigration: Bool {
+        if case .portableKeyMaterialWithheld(identity: .none) = userName { return true }
+        return false
+    }
+
     /// The best short label for a list row.
     public var listLabel: String {
         if let display = userDisplayName, !display.isEmpty { return display }
