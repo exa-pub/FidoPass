@@ -66,7 +66,6 @@ final class LabelStoreTests: XCTestCase {
 
         XCTAssertEqual(store.recent.first, "label-5")
         XCTAssertEqual(store.recent.count, LabelStore.limit)
-        XCTAssertEqual(store.current, "label-5")
     }
 
     /// Whitespace around a label would derive a different password from the one the user
@@ -121,7 +120,6 @@ final class LabelStoreTests: XCTestCase {
         store.focus(Self.vault)
 
         XCTAssertEqual(store.chips, ["default"])
-        XCTAssertEqual(store.current, "default")
         XCTAssertEqual(defaults.array(forKey: LabelStore.legacyStorageKey) as? [String], ["from-before"])
     }
 

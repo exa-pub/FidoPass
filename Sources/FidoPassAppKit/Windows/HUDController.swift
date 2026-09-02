@@ -98,7 +98,7 @@ final class HUDController: NSObject, NSWindowDelegate {
 
     @objc private func menuCopyPassword() {
         guard let ref = store.selection else { show(); return }
-        show(intent: .copyPassword(ref, label: store.labels.current))
+        show(intent: .copyPassword(ref, label: store.labelEditor.current))
     }
 
     @objc private func menuEncrypt() {

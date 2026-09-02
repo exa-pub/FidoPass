@@ -307,7 +307,7 @@ final class HUDStoreTests: XCTestCase {
 
         store.select(vault)
         XCTAssertEqual(store.labels.recent, ["vault-label"])
-        XCTAssertEqual(store.labels.current, "vault-label", "and the HUD opens on the one used here last")
+        XCTAssertEqual(store.labelEditor.current, "vault-label", "and the HUD opens on the one used here last")
 
         store.select(disk)
         XCTAssertEqual(store.labels.recent, ["disk-label"])
@@ -355,24 +355,24 @@ final class HUDStoreTests: XCTestCase {
         let chips = store.labels.chips
         XCTAssertEqual(chips.count, 2)
 
-        store.moveLabelFocus(by: 1)
-        XCTAssertEqual(store.labels.current, chips[1])
-        XCTAssertFalse(store.isEditingLabel)
+        store.labelEditor.moveFocus(by: 1)
+        XCTAssertEqual(store.labelEditor.current, chips[1])
+        XCTAssertFalse(store.labelEditor.isEditing)
 
-        store.moveLabelFocus(by: 1)
-        XCTAssertTrue(store.isEditingLabel, "past the last chip lies the custom field")
+        store.labelEditor.moveFocus(by: 1)
+        XCTAssertTrue(store.labelEditor.isEditing, "past the last chip lies the custom field")
 
-        store.moveLabelFocus(by: 1)
-        XCTAssertFalse(store.isEditingLabel)
-        XCTAssertEqual(store.labels.current, chips[0], "and past the field, back to the first chip")
+        store.labelEditor.moveFocus(by: 1)
+        XCTAssertFalse(store.labelEditor.isEditing)
+        XCTAssertEqual(store.labelEditor.current, chips[0], "and past the field, back to the first chip")
 
-        store.moveLabelFocus(by: -1)
-        XCTAssertTrue(store.isEditingLabel, "left from the first chip wraps onto the field")
-        XCTAssertTrue(store.labelFieldCaretAtEnd, "arriving from the right, the caret waits at the end")
+        store.labelEditor.moveFocus(by: -1)
+        XCTAssertTrue(store.labelEditor.isEditing, "left from the first chip wraps onto the field")
+        XCTAssertTrue(store.labelEditor.caretAtEnd, "arriving from the right, the caret waits at the end")
 
-        store.moveLabelFocus(by: -1)
-        XCTAssertFalse(store.isEditingLabel)
-        XCTAssertEqual(store.labels.current, chips.last)
+        store.labelEditor.moveFocus(by: -1)
+        XCTAssertFalse(store.labelEditor.isEditing)
+        XCTAssertEqual(store.labelEditor.current, chips.last)
     }
 
     /// A label typed by hand is the field's position, even before the field has focus.
@@ -380,13 +380,13 @@ final class HUDStoreTests: XCTestCase {
         let (store, _, _) = await HUDTestFactory.unlockedStore()
         HUDTestFactory.seedLabels(store, ["work"])
         store.setLabel("something-new")
-        XCTAssertFalse(store.isEditingLabel)
+        XCTAssertFalse(store.labelEditor.isEditing)
 
-        store.moveLabelFocus(by: -1)
-        XCTAssertEqual(store.labels.current, "work", "left steps back onto the last chip")
+        store.labelEditor.moveFocus(by: -1)
+        XCTAssertEqual(store.labelEditor.current, "work", "left steps back onto the last chip")
 
-        store.moveLabelFocus(by: 1)
-        XCTAssertTrue(store.isEditingLabel, "and right returns to the field holding that text")
+        store.labelEditor.moveFocus(by: 1)
+        XCTAssertTrue(store.labelEditor.isEditing, "and right returns to the field holding that text")
     }
 
     /// Switching label must drop a password derived from the previous one, exactly as
@@ -398,7 +398,7 @@ final class HUDStoreTests: XCTestCase {
         XCTAssertNotNil(store.generation.result)
 
         // Right, not left: the copy used the first chip, and there is nothing to its left.
-        store.moveLabelFocus(by: 1)
+        store.labelEditor.moveFocus(by: 1)
         XCTAssertNil(store.generation.result)
     }
 

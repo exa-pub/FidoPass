@@ -22,6 +22,7 @@ struct AccountsSectionView: View {
                         AccountRowView(store: store,
                                        generation: generation,
                                        labels: labels,
+                                       editor: store.labelEditor,
                                        account: account,
                                        ref: ref,
                                        index: index,
@@ -65,6 +66,7 @@ struct AccountRowView: View {
     @ObservedObject var store: HUDStore
     @ObservedObject var generation: GenerationStore
     @ObservedObject var labels: LabelStore
+    @ObservedObject var editor: LabelEditor
     let account: Account
     let ref: AccountRef
     let index: Int
@@ -72,8 +74,6 @@ struct AccountRowView: View {
     let isOnlyAccount: Bool
 
     @State private var isHovering = false
-    /// Text of the inline custom field. Empty whenever the current label is one of the chips.
-    @State private var customText = ""
 
     private var result: GenerationStore.Result? {
         guard let result = generation.result, result.ref == ref else { return nil }
@@ -157,56 +157,26 @@ struct AccountRowView: View {
             HStack(spacing: 4) {
                 ForEach(labels.chips, id: \.self) { label in
                     LabelChip(label: label,
-                              isCurrent: label == labels.current && !store.isEditingLabel,
-                              action: {
-                                  store.isEditingLabel = false
-                                  store.setLabel(label)
-                              })
+                              isCurrent: label == editor.current && !editor.isEditing,
+                              action: { store.setLabel(label) })
                 }
 
-                LabelTextField(text: $customText,
-                               isFocused: Binding(get: { store.isEditingLabel },
-                                                  set: { store.isEditingLabel = $0 }),
+                LabelTextField(text: Binding(get: { editor.draft }, set: { editor.draftChanged($0) }),
+                               isFocused: Binding(get: { editor.isEditing }, set: { editor.setEditing($0) }),
                                placeholder: "custom…",
-                               caretAtEnd: store.labelFieldCaretAtEnd,
+                               caretAtEnd: editor.caretAtEnd,
                                onSubmit: {
                                    // Leaving the field lets the label graduate into a chip
                                    // instead of sitting on screen twice, as text and as chip.
-                                   store.isEditingLabel = false
+                                   editor.setEditing(false)
                                    Task { await store.copyPassword(for: ref) }
                                },
-                               onExitLeft: { store.moveLabelFocus(by: -1) },
-                               onExitRight: { store.moveLabelFocus(by: 1) },
+                               onExitLeft: { editor.moveFocus(by: -1) },
+                               onExitRight: { editor.moveFocus(by: 1) },
                                onMoveAccount: { store.moveSelection(by: $0) })
                     .frame(minWidth: 64, maxHeight: 20)
             }
         }
-        .onAppear(perform: syncCustomField)
-        .onChange(of: labels.current) { _ in syncCustomField() }
-        // The history can change under a row that stays selected — a reconnect, or the other
-        // key being picked. A draft belongs to the account it was typed for, so it does not
-        // travel with the row.
-        .onChange(of: labels.scope) { _ in
-            customText = labels.chips.contains(labels.current) ? "" : labels.current
-        }
-        .onChange(of: store.isEditingLabel) { isEditing in
-            syncCustomField()
-            // Stepping back into the field means going back to what was typed there.
-            let draft = customText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if isEditing, !draft.isEmpty { store.setLabel(draft) }
-        }
-        .onChange(of: customText) { value in
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            store.setLabel(trimmed)
-        }
-    }
-
-    /// Text typed here is a draft: it survives losing focus and picking a chip, because
-    /// retyping a label is exactly the mistake that derives a different password.
-    private func syncCustomField() {
-        guard !store.isEditingLabel, !labels.chips.contains(labels.current) else { return }
-        customText = labels.current
     }
 
     private var actionRow: some View {

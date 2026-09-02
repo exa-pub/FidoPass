@@ -12,10 +12,12 @@ struct HUDRootView: View {
     @ObservedObject private var generation: GenerationStore
     @ObservedObject private var labels: LabelStore
     @ObservedObject private var touchGate: TouchGate
+    @ObservedObject private var labelEditor: LabelEditor
 
     init(store: HUDStore) {
         self.store = store
         self.touchGate = store.touchGate
+        self.labelEditor = store.labelEditor
         self.devices = store.devices
         self.accounts = store.accounts
         self.generation = store.generation
@@ -92,14 +94,14 @@ struct HUDRootView: View {
             // While the custom-label field has the keyboard, the arrows are its own: it
             // forwards up and down back here, and hands left back only from the caret's
             // starting position.
-            if store.effectiveRoute == .accounts, !store.isEditingLabel {
+            if store.effectiveRoute == .accounts, !labelEditor.isEditing {
                 Button("") { store.moveSelection(by: 1) }
                     .keyboardShortcut(.downArrow, modifiers: [])
                 Button("") { store.moveSelection(by: -1) }
                     .keyboardShortcut(.upArrow, modifiers: [])
-                Button("") { store.moveLabelFocus(by: 1) }
+                Button("") { labelEditor.moveFocus(by: 1) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
-                Button("") { store.moveLabelFocus(by: -1) }
+                Button("") { labelEditor.moveFocus(by: -1) }
                     .keyboardShortcut(.leftArrow, modifiers: [])
             }
             Button("") { store.show(.enroll) }

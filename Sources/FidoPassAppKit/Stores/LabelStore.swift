@@ -47,8 +47,6 @@ final class LabelStore: ObservableObject {
     @Published private(set) var scope: LabelScope?
     /// Labels used with `scope`, freshest first.
     @Published private(set) var recent: [String] = []
-    /// Label the HUD is currently pointed at.
-    @Published var current: String = "default"
 
     private var entries: [Entry] = []
 
@@ -64,7 +62,6 @@ final class LabelStore: ObservableObject {
         self.ubiStore = ubiStore
         self.notificationCenter = notificationCenter
         load()
-        current = Self.fallback
         observer = notificationCenter.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
                                                   object: ubiStore,
                                                   queue: .main) { [weak self] _ in
@@ -98,8 +95,7 @@ final class LabelStore: ObservableObject {
 
     // MARK: - Writing
 
-    /// Points the store at an account. `current` is not touched here — it is `HUDStore` that
-    /// decides what the label should be, through `HUDReducer.resolveLabel`.
+    /// Points the store at an account. Which label to start from is `LabelEditor`'s decision.
     func focus(_ target: LabelTarget?) {
         if let target { adoptLegacyEntry(for: target) }
         scope = target?.scope
@@ -148,7 +144,6 @@ final class LabelStore: ObservableObject {
 
         if target.scope == scope {
             recent = entry.labels
-            current = trimmed
         }
         save()
     }

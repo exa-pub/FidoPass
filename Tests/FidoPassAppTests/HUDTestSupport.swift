@@ -406,6 +406,11 @@ enum HUDTestFactory {
             XCTFail("no account selected, so there is no history to seed")
             return
         }
-        for label in labels { store.labels.use(label, in: target) }
+        // As generation would: the history is written, and the label just used becomes the
+        // one the row points at.
+        for label in labels {
+            store.labels.use(label, in: target)
+            store.labelEditor.adopt(label)
+        }
     }
 }

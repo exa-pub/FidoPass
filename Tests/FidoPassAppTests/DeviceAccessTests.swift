@@ -90,4 +90,34 @@ final class DeviceAccessTests: XCTestCase {
         XCTAssertEqual(store.devices.state(for: device.path)?.pinRetriesRemaining, 3)
         XCTAssertEqual(store.devices.state(for: device.path)?.hasPIN, true)
     }
+
+    /// A key that appears while the panel is already open has never been asked. Typing a PIN
+    /// is asking: the first character reads the attempts left, later ones do not.
+    func testTypingAPinReadsTheStatusOfAKeyNobodyAskedYet() async {
+        let (backend, _) = backendWithOneKey()
+        let store = HUDTestFactory.makeStore(backend: backend)
+        await store.devices.refresh()   // the hot-plug path: listed, never opened
+        XCTAssertEqual(backend.statusCallCount, 0)
+
+        store.pinDraft = "1"
+        await store.pinDraftDidChange()
+        XCTAssertEqual(backend.statusCallCount, 1)
+
+        store.pinDraft = "12"
+        await store.pinDraftDidChange()
+        XCTAssertEqual(backend.statusCallCount, 1, "one read per PIN being typed")
+    }
+
+    /// Once the panel has opened normally the key's state is known, and typing must not open
+    /// it a second time for the same answer.
+    func testTypingAPinAfterThePanelOpenedReadsNothingMore() async {
+        let (backend, _) = backendWithOneKey()
+        let store = HUDTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
+        XCTAssertEqual(backend.statusCallCount, 1)
+
+        store.pinDraft = "1"
+        await store.pinDraftDidChange()
+        XCTAssertEqual(backend.statusCallCount, 1)
+    }
 }

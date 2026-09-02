@@ -1,3 +1,4 @@
+import Combine
 @preconcurrency import FidoPassCore
 import Foundation
 
@@ -22,13 +23,6 @@ final class HUDStore: ObservableObject {
     /// Set while a system panel of our own is up — a save dialog takes key status away, and
     /// the HUD must not vanish behind it.
     @Published private(set) var isShowingSystemPanel = false
-    /// True while the label is being typed rather than picked. Arrow keys belong to the text
-    /// field then, not to the list behind it.
-    @Published var isEditingLabel = false
-    /// Where the caret goes when the arrows move focus into the custom field: at the end when
-    /// arriving from the right, so the next press keeps moving in the same direction instead
-    /// of bouncing straight back out.
-    @Published private(set) var labelFieldCaretAtEnd = false
 
     struct EnrollDraft: Equatable {
         var accountId: String = ""
@@ -64,8 +58,11 @@ final class HUDStore: ObservableObject {
     /// The bootstrap form. Separate from `pinDraft`, which is the unlock field: a half-typed
     /// new PIN must never be submitted as an unlock attempt.
     let pinForm: PinFormModel
+    /// The label row: the label the next password derives from, and the field it is typed in.
+    let labelEditor: LabelEditor
 
     private var pendingIntent: HUDIntent?
+    private var subscriptions: Set<AnyCancellable> = []
     private var statusTask: Task<Void, Never>?
 
     init(devices: DeviceStore,
@@ -91,6 +88,18 @@ final class HUDStore: ObservableObject {
                                     touchGate: touchGate,
                                     surface: .panel,
                                     device: { [weak devices] in devices?.selectedState?.device })
+        self.labelEditor = LabelEditor(history: labels)
+        // Switching label drops a password derived from the previous one, whichever way the
+        // switch happened — a chip, the keyboard, typing. Otherwise copying would hand over a
+        // secret derived from something else.
+        labelEditor.$current
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] label in
+                guard let self, let selection = self.selection else { return }
+                self.generation.invalidateResult(unless: selection, label: label)
+            }
+            .store(in: &subscriptions)
     }
 
     // MARK: - Derived state
@@ -263,8 +272,7 @@ final class HUDStore: ObservableObject {
     }
 
     private func focusLabels(on ref: AccountRef?) {
-        labels.focus(labelTarget(for: ref))
-        labels.current = HUDReducer.resolveLabel(recent: labels.recent)
+        labelEditor.focus(labelTarget(for: ref))
     }
 
     // MARK: - Navigation
@@ -307,7 +315,7 @@ final class HUDStore: ObservableObject {
         // otherwise a password derived from the previous one would stay on screen under an
         // account it does not belong to.
         focusLabels(on: ref)
-        generation.invalidateResult(unless: ref, label: labels.current)
+        generation.invalidateResult(unless: ref, label: labelEditor.current)
     }
 
     /// Moves the selection by one row. Clamped rather than wrapping: with two or three
@@ -320,37 +328,6 @@ final class HUDStore: ObservableObject {
         let next = min(max(current + offset, 0), refs.count - 1)
         guard next != current || selection == nil else { return }
         select(refs[next])
-    }
-
-    /// Walks the label row: chip, chip, …, and then the custom field.
-    ///
-    /// The field is a position like any other, so the arrows reach it instead of stopping at
-    /// the last chip. It is the last one, and once inside, the caret decides — the field
-    /// itself only hands control back when the caret is already at the start.
-    func moveLabelFocus(by offset: Int) {
-        let chips = labels.chips
-        let fieldIndex = chips.count          // the custom field is the last position
-        let count = fieldIndex + 1
-        guard count > 1 else { return }
-
-        // Standing on the field means either typing in it, or having a label that is not one
-        // of the chips — that text lives there whether or not it has focus.
-        let current = isEditingLabel || !chips.contains(labels.current)
-            ? fieldIndex
-            : (chips.firstIndex(of: labels.current) ?? 0)
-
-        // Wraps: with three or four positions, a dead end at each edge is just a key that
-        // does nothing.
-        let next = (current + offset + count) % count
-        guard next != current || offset == 0 else { return }
-
-        if next == fieldIndex {
-            labelFieldCaretAtEnd = offset < 0
-            isEditingLabel = true
-        } else {
-            isEditingLabel = false
-            setLabel(chips[next])
-        }
     }
 
     func selectAccount(at index: Int) {
@@ -367,18 +344,14 @@ final class HUDStore: ObservableObject {
     }
 
     func setLabel(_ label: String) {
-        labels.current = label
-        if let selection { generation.invalidateResult(unless: selection, label: label) }
+        labelEditor.set(label)
     }
 
     /// Escape: leave the screen, not the app.
     ///
     /// - Returns: true when the store handled it; false means the panel should close.
     func handleEscape() -> Bool {
-        if isEditingLabel {
-            isEditingLabel = false
-            return true
-        }
+        if labelEditor.escape() { return true }
         switch route {
         case .accounts, .unlock:
             return false
@@ -416,7 +389,7 @@ final class HUDStore: ObservableObject {
         case .accounts:
             guard !devices.devices.isEmpty else { return [] }
             guard !visibleAccounts.isEmpty else { return ["⌘N new account"] }
-            if isEditingLabel { return ["⏎ copy", "esc done"] }
+            if labelEditor.isEditing { return ["⏎ copy", "esc done"] }
             var hints = ["⏎ copy", "⌘⏎ show"]
             if visibleAccounts.count > 1 { hints.append("↑↓ account") }
             if !labels.chips.isEmpty { hints.append("←→ label") }
@@ -426,6 +399,29 @@ final class HUDStore: ObservableObject {
     }
 
     // MARK: - Unlock
+
+    private var statusRequestedForDraft = false
+
+    /// Asks the key how many attempts are left — on the first character typed, not when the
+    /// PIN screen appears, and only for a key nobody has asked yet.
+    ///
+    /// The PIN screen appears the moment a key is plugged in, and opening a key seizes it
+    /// (`libfido2/src/hid_osx.c`, `kIOHIDOptionsTypeSeizeDevice`). That is how a running
+    /// FidoPass used to break `ykman fido reset`: the key was taken over within a second of
+    /// being connected, before its owner had asked for anything. Typing a PIN is asking; the
+    /// key being present is not. A key the panel already asked when it opened is not asked
+    /// again: its state is known, and a second open buys nothing.
+    func pinDraftDidChange() async {
+        guard !pinDraft.isEmpty else {
+            statusRequestedForDraft = false
+            return
+        }
+        guard !statusRequestedForDraft,
+              let device = selectedDevice,
+              devices.state(for: device.path)?.hasPIN == nil else { return }
+        statusRequestedForDraft = true
+        await devices.refreshStatus(for: device)
+    }
 
     func submitPin() async {
         // A PIN attempt is a scarce resource: eight consecutive failures kill the key for
@@ -519,12 +515,12 @@ final class HUDStore: ObservableObject {
         guard !isWorking, generation.busyRef == nil else { return }
         guard let ref, let account = accounts.account(ref) else { return }
         guard isSelectedKeyUnlocked else {
-            requestIntent(reveal ? .revealPassword(ref, label: label ?? labels.current)
-                                 : .copyPassword(ref, label: label ?? labels.current))
+            requestIntent(reveal ? .revealPassword(ref, label: label ?? labelEditor.current)
+                                 : .copyPassword(ref, label: label ?? labelEditor.current))
             route = .unlock
             return
         }
-        let usedLabel = (label ?? labels.current).trimmingCharacters(in: .whitespacesAndNewlines)
+        let usedLabel = (label ?? labelEditor.current).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !usedLabel.isEmpty else {
             errorText = "Enter a label first — it is part of the derivation."
             return
@@ -543,6 +539,7 @@ final class HUDStore: ObservableObject {
                 try await self.generation.generate(account: account, label: usedLabel)
             }
             if let target = labelTarget(for: ref) { labels.use(usedLabel, in: target) }
+            labelEditor.adopt(usedLabel)
             if let device = selectedDevice {
                 preferences.remember(accountId: ref.accountId, label: usedLabel, device: device)
             }
@@ -689,7 +686,7 @@ final class HUDStore: ObservableObject {
     func openEncryptEditor(for ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref) else { return }
-        let label = labels.current.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = labelEditor.current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty else {
             errorText = "Enter a label first — the key is derived from it."
             return
