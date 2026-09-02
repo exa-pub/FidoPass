@@ -28,7 +28,7 @@ final class ResetCoordinator: ObservableObject {
     /// The wizard, or nil when none is running.
     @Published var flow: ResetFlow?
     /// What went wrong at the last step, for the wizard to show.
-    @Published private(set) var error: String?
+    @Published private(set) var error: PresentedError?
     /// The reset triggered by the key reappearing, while it runs. Held so the work is
     /// reachable: it starts from a hot-plug callback, and without a handle nothing — a test,
     /// or a later step of the wizard — can tell whether it has finished.
@@ -131,16 +131,9 @@ final class ResetCoordinator: ObservableObject {
             onCompleted?()
         } catch {
             self.flow?.stage = .replug
-            let presented = FidoPassErrorPresenter.message(for: error)
             // `FIDO_ERR_NOT_ALLOWED` here means the window closed: the command arrived too
             // late, not that anything was refused on its merits.
-            if presented.kind == .notAllowed {
-                self.error = [presented.title,
-                              "The key had already been awake too long — most keys only accept a reset in the first seconds after being plugged in. Unplug it and plug it back in to try again."]
-                    .joined(separator: "\n\n")
-            } else {
-                self.error = presented.fullText()
-            }
+            self.error = PresentedError(error, meaningOfRefusal: "The key had already been awake too long — most keys only accept a reset in the first seconds after being plugged in. Unplug it and plug it back in to try again.")
         }
     }
 }

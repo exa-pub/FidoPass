@@ -139,7 +139,7 @@ final class ManagerStoreTests: XCTestCase {
 
         await manager.changePIN()
 
-        XCTAssertNil(store.errorText)
+        XCTAssertNil(store.error)
         XCTAssertTrue(store.pinForm.isEmpty)
     }
 
@@ -168,6 +168,6 @@ final class ManagerStoreTests: XCTestCase {
         await manager.forcePINChange()
 
         XCTAssertNotNil(manager.settingsError)
-        XCTAssertNil(store.errorText, "the panel has nothing to do with it")
+        XCTAssertNil(store.error, "the panel has nothing to do with it")
     }
 }

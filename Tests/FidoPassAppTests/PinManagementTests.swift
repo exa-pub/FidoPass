@@ -97,7 +97,8 @@ final class PinManagementTests: XCTestCase {
 
         await store.setInitialPIN()
 
-        XCTAssertEqual(store.errorText?.contains("already has a PIN"), true)
+        XCTAssertEqual(store.error?.kind, .notAllowed)
+        XCTAssertEqual(store.error?.fullText().contains("already has a PIN"), true)
     }
 
     /// The bootstrap screen appears on its own, just by plugging in a new key. It may not

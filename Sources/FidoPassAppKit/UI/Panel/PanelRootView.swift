@@ -36,8 +36,10 @@ struct PanelRootView: View {
                 content
                 // One strip at the bottom: what just happened, or — when nothing did — what
                 // the keyboard can do here.
-                if store.statusText != nil || store.errorText != nil {
-                    PanelFooterView(status: store.statusText, error: store.errorText)
+                if store.statusText != nil || store.error != nil {
+                    PanelFooterView(status: store.statusText,
+                                    error: store.error,
+                                    retriesRemaining: devices.selectedState?.pinRetriesRemaining)
                 } else {
                     PanelHintsView(hints: store.keyboardHints)
                 }

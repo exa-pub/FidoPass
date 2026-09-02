@@ -100,7 +100,7 @@ struct AuthenticatorManagerView: View {
                 }
             }
             if let message = store.reading.infoError {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
+                Label(message.fullText(), systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -148,7 +148,7 @@ struct AuthenticatorManagerView: View {
             if let inventory = reading.inventory {
                 CredentialsBrowserView(inventory: inventory, selection: $store.selectedCredential)
             } else if let message = reading.inventoryError {
-                emptyState(title: "The credentials could not be read", message: message)
+                emptyState(title: "The credentials could not be read", message: message.fullText())
             } else if reading.needsUnlock {
                 emptyState(title: "The key is locked", message: "Unlock it to list the credentials it holds.")
             } else {
@@ -169,7 +169,7 @@ struct AuthenticatorManagerView: View {
                         onChangePIN: { store.beginChangePIN() },
                         onReset: { Task { await store.beginReset() } },
                         isBusy: store.isApplying || reading.isReading,
-                        errorText: store.settingsError)
+                        errorText: store.settingsError?.fullText())
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -184,7 +184,7 @@ struct AuthenticatorManagerView: View {
         if store.reading.isReading {
             emptyState(title: "Reading the key…", message: nil)
         } else if let message = store.reading.infoError {
-            emptyState(title: "The key could not be read", message: message)
+            emptyState(title: "The key could not be read", message: message.fullText())
         } else {
             emptyState(title: "Nothing read yet", message: "Press ⌘R to read the key.")
         }

@@ -191,7 +191,8 @@ final class InventoryStoreTests: XCTestCase {
         let reading = store.inventory.reading(for: device.path)
         XCTAssertFalse(reading.needsUnlock, "the key is open — this is not a lock")
         XCTAssertNotNil(reading.inventoryError)
-        XCTAssertTrue(reading.inventoryError?.contains("credential management") == true,
+        XCTAssertEqual(reading.inventoryError?.kind, .unsupported)
+        XCTAssertTrue(reading.inventoryError?.fullText().contains("credential management") == true,
                       "the reason must survive, not just the headline")
     }
 

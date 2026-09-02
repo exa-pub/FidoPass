@@ -22,9 +22,9 @@ final class ManagerStore: ObservableObject {
     @Published var selectedCredential: String?
     @Published var sheet: Sheet?
     @Published private(set) var isApplying = false
-    @Published private(set) var settingsError: String?
+    @Published private(set) var settingsError: PresentedError?
     /// What the change-PIN sheet has to say. Its own, not the panel's.
-    @Published private(set) var pinError: String?
+    @Published private(set) var pinError: PresentedError?
 
     /// The change-PIN form. The panel has its own for bootstrap; sharing one was a defect.
     let pinForm: PinFormModel
@@ -141,7 +141,7 @@ final class ManagerStore: ObservableObject {
         do {
             try await operation(device)
         } catch {
-            settingsError = FidoPassErrorPresenter.message(for: error).fullText()
+            settingsError = PresentedError(error)
         }
         await inventory.refreshInfo(device)
     }
@@ -168,8 +168,7 @@ final class ManagerStore: ObservableObject {
             guard try await pinForm.submit() else { return }
             sheet = nil
         } catch {
-            let presented = FidoPassErrorPresenter.message(for: error)
-            pinError = presented.fullText(retriesRemaining: keyState?.pinRetriesRemaining)
+            pinError = PresentedError(error)
         }
     }
 
@@ -182,7 +181,7 @@ final class ManagerStore: ObservableObject {
             try await reset.begin(device: device)
             sheet = .reset
         } catch {
-            settingsError = error.localizedDescription
+            settingsError = .plain(error.localizedDescription)
         }
     }
 

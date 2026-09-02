@@ -13,7 +13,7 @@ final class AccountStore: ObservableObject {
 
     /// Read failures, per device path. Kept separate from a global error so one unreadable
     /// key never implies the others are broken too.
-    @Published private(set) var readErrors: [String: String] = [:]
+    @Published private(set) var readErrors: [String: PresentedError] = [:]
 
     private let worker: KeyWorker
     private let pinFor: (String) -> String?
@@ -47,7 +47,7 @@ final class AccountStore: ObservableObject {
         defer { isLoading = false }
 
         var collected: [Account] = []
-        var errors: [String: String] = [:]
+        var errors: [String: PresentedError] = [:]
 
         for path in unlockedPaths {
             guard let pin = pinFor(path) else { continue }
@@ -58,7 +58,7 @@ final class AccountStore: ObservableObject {
                     // Keep the first failure per key: later kinds usually fail for the same
                     // underlying reason and would only overwrite it.
                     if errors[path] == nil {
-                        errors[path] = FidoPassErrorPresenter.message(for: error).title
+                        errors[path] = PresentedError(error)
                     }
                 }
             }

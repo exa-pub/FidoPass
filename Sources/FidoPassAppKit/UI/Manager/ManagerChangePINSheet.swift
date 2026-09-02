@@ -55,7 +55,7 @@ struct ManagerChangePINSheet: View {
             PinRuleFooter(form: form)
             if let retries { PinAttemptsLabel(remaining: retries) }
             if let error = store.pinError {
-                Text(error)
+                Text(error.fullText(retriesRemaining: retries))
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

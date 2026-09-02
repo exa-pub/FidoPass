@@ -19,8 +19,8 @@ final class InventoryStore: ObservableObject {
     struct Reading: Equatable {
         var info: AuthenticatorInfo?
         var inventory: CredentialInventory?
-        var infoError: String?
-        var inventoryError: String?
+        var infoError: PresentedError?
+        var inventoryError: PresentedError?
         var isReading = false
         /// True when the credential list was not read because the key is locked, as opposed
         /// to having failed. The difference decides whether the UI offers "unlock" or "retry".
@@ -59,7 +59,7 @@ final class InventoryStore: ObservableObject {
         do {
             reading.info = try await worker.run { try $0.inspect(devicePath: path) }
         } catch {
-            reading.infoError = FidoPassErrorPresenter.message(for: error).fullText()
+            reading.infoError = PresentedError(error)
         }
 
         if let pin = pinFor(path) {
@@ -67,7 +67,7 @@ final class InventoryStore: ObservableObject {
             do {
                 reading.inventory = try await worker.run { try $0.inventory(devicePath: path, pin: pin) }
             } catch {
-                reading.inventoryError = FidoPassErrorPresenter.message(for: error).fullText()
+                reading.inventoryError = PresentedError(error)
             }
         } else {
             // Not an error: the key simply has not been unlocked in this session.
@@ -102,7 +102,7 @@ final class InventoryStore: ObservableObject {
         do {
             reading.inventory = try await worker.run { try $0.inventory(devicePath: path, pin: pin) }
         } catch {
-            reading.inventoryError = FidoPassErrorPresenter.message(for: error).fullText()
+            reading.inventoryError = PresentedError(error)
         }
         reading.isReading = false
         readings[path] = reading
@@ -131,7 +131,7 @@ final class InventoryStore: ObservableObject {
             reading.info = try await worker.run { try $0.inspect(devicePath: path) }
             reading.infoError = nil
         } catch {
-            reading.infoError = FidoPassErrorPresenter.message(for: error).fullText()
+            reading.infoError = PresentedError(error)
         }
         reading.isReading = false
         readings[path] = reading

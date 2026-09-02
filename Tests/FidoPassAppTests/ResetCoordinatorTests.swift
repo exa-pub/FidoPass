@@ -50,7 +50,7 @@ final class ResetCoordinatorTests: XCTestCase {
 
         XCTAssertNotNil(manager.settingsError)
         XCTAssertNil(manager.sheet)
-        XCTAssertNil(store.errorText)
+        XCTAssertNil(store.error)
     }
 
     /// A local account cannot be recovered by any means, so a checkbox is not enough.

@@ -4,11 +4,13 @@ import AppKit
 /// One line of feedback under the content: what just happened, or what went wrong.
 struct PanelFooterView: View {
     let status: String?
-    let error: String?
+    let error: PresentedError?
+    /// PIN attempts left, for a wrong-PIN failure to say how many remain.
+    var retriesRemaining: Int? = nil
 
     var body: some View {
         if let error {
-            label(error, icon: "exclamationmark.triangle.fill", tint: .orange)
+            label(error.fullText(retriesRemaining: retriesRemaining), icon: "exclamationmark.triangle.fill", tint: .orange)
         } else if let status {
             label(status, icon: "checkmark.circle.fill", tint: .green)
         }

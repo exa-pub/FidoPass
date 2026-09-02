@@ -12,7 +12,7 @@ import Foundation
 final class PanelStore: ObservableObject {
 
     @Published private(set) var route: PanelRoute = .accounts
-    @Published var errorText: String?
+    @Published var error: PresentedError?
     @Published private(set) var statusText: String?
     @Published var selection: AccountRef?
     @Published var pinDraft: String = ""
@@ -189,9 +189,9 @@ final class PanelStore: ObservableObject {
 
     /// Called every time the panel is about to appear.
     func prepareForDisplay(intent: PanelIntent? = nil) async {
-        errorText = nil
+        error = nil
         await devices.refresh()
-        if let failure = devices.refreshError { errorText = failure }
+        if let failure = devices.refreshError { error = failure }
         await readStatusOfLockedKey()
         await reloadAccountsIfNeeded()
         restoreSelectionIfNeeded()
@@ -206,7 +206,7 @@ final class PanelStore: ObservableObject {
     func panelDidClose() {
         pinDraft = ""
         pinForm.clear()
-        errorText = nil
+        error = nil
         backupKey = nil
         enrollStep = nil
         // The reset wizard is not touched here any more: it runs in the manager window, and
@@ -238,7 +238,7 @@ final class PanelStore: ObservableObject {
         await accounts.reload(unlockedPaths: unlocked)
         // An unreadable key would otherwise look like a key with no accounts on it.
         if let path = devices.selectedPath, let failure = accounts.readErrors[path] {
-            errorText = failure
+            error = failure
         }
     }
 
@@ -306,7 +306,7 @@ final class PanelStore: ObservableObject {
 
     func backToAccounts() {
         show(.accounts)
-        errorText = nil
+        error = nil
     }
 
     func select(_ ref: AccountRef) {
@@ -434,7 +434,7 @@ final class PanelStore: ObservableObject {
             try await touchGate.withBusy("Checking the PIN…") {
                 try await devices.unlock(device, pin: pin)
                 pinDraft = ""
-                errorText = nil
+                error = nil
                 await reloadAccountsIfNeeded()
                 restoreSelectionIfNeeded()
                 // Only the PIN screen is replaced: a screen requested while the key was locked
@@ -446,8 +446,7 @@ final class PanelStore: ObservableObject {
             await runPendingIntentIfPossible()
         } catch {
             pinDraft = ""
-            let presented = FidoPassErrorPresenter.message(for: error)
-            errorText = presented.fullText(retriesRemaining: devices.selectedState?.pinRetriesRemaining)
+            present(error)
         }
     }
 
@@ -457,7 +456,7 @@ final class PanelStore: ObservableObject {
     func setInitialPIN() async {
         do {
             let accepted = try await pinForm.submit {
-                errorText = nil
+                error = nil
                 await reloadAccountsIfNeeded()
                 restoreSelectionIfNeeded()
                 route = .accounts
@@ -522,7 +521,7 @@ final class PanelStore: ObservableObject {
         }
         let usedLabel = (label ?? labelEditor.current).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !usedLabel.isEmpty else {
-            errorText = "Enter a label first — it is part of the derivation."
+            error = .plain("Enter a label first — it is part of the derivation.")
             return
         }
 
@@ -675,7 +674,7 @@ final class PanelStore: ObservableObject {
     func recoverySheetFinished(saved: Bool, failure: String? = nil) {
         isShowingSystemPanel = false
         if let failure {
-            errorText = "Could not save the recovery sheet: \(failure)"
+            error = .plain("Could not save the recovery sheet: \(failure)")
         } else if saved {
             setStatus("Recovery sheet saved — it contains no secrets")
         }
@@ -688,7 +687,7 @@ final class PanelStore: ObservableObject {
         guard let account = accounts.account(ref) else { return }
         let label = labelEditor.current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty else {
-            errorText = "Enter a label first — the key is derived from it."
+            error = .plain("Enter a label first — the key is derived from it.")
             return
         }
         do {
@@ -768,27 +767,19 @@ final class PanelStore: ObservableObject {
 
     func refresh() async {
         await devices.refresh()
-        if let failure = devices.refreshError { errorText = failure }
+        if let failure = devices.refreshError { error = failure }
         await reloadAccountsIfNeeded()
         restoreSelectionIfNeeded()
     }
 
-    private func present(_ error: Error) {
-        errorText = FidoPassErrorPresenter.message(for: error).fullText()
+    private func present(_ failure: Error) {
+        error = PresentedError(failure)
     }
 
-    /// Presents an error, supplying the meaning of a bare refusal.
-    ///
-    /// `FIDO_ERR_NOT_ALLOWED` means "not in this state", and which state depends entirely on
-    /// what was attempted — a PIN that already exists, a reset window that has closed. The
-    /// status mapping cannot know that; the operation can.
-    private func present(_ error: Error, whenRefused meaning: String) {
-        let presented = FidoPassErrorPresenter.message(for: error)
-        guard presented.kind == .notAllowed else {
-            errorText = presented.fullText(retriesRemaining: devices.selectedState?.pinRetriesRemaining)
-            return
-        }
-        errorText = [presented.title, meaning].joined(separator: "\n\n")
+    /// Presents an error, supplying the meaning of a bare refusal — see
+    /// `PresentedError.init(_:meaningOfRefusal:)`.
+    private func present(_ failure: Error, whenRefused meaning: String) {
+        error = PresentedError(failure, meaningOfRefusal: meaning)
     }
 
     private func setStatus(_ text: String) {

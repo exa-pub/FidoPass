@@ -70,7 +70,7 @@ struct ManagerResetSheet: View {
             }
 
             if let error = reset.error {
-                Text(error)
+                Text(error.fullText())
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

@@ -41,7 +41,7 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     /// Set when the last enumeration failed. Distinct from "no devices": the difference is
     /// the whole point.
-    @Published private(set) var refreshError: String?
+    @Published private(set) var refreshError: PresentedError?
     /// Which key the HUD is pointed at. Only meaningful with more than one connected.
     @Published var selectedPath: String?
 
@@ -136,7 +136,7 @@ final class DeviceStore: ObservableObject {
             // "Could not ask" is not "nothing is there". Clearing here would release the PIN
             // token and drop every account of a key that never went anywhere — which is
             // exactly what a transient enumeration failure after a touch used to do.
-            refreshError = FidoPassErrorPresenter.message(for: error).title
+            refreshError = PresentedError(error)
             return
         }
 
@@ -149,7 +149,7 @@ final class DeviceStore: ObservableObject {
             do {
                 confirmation = try await worker.run { try $0.listDevices() }
             } catch {
-                refreshError = FidoPassErrorPresenter.message(for: error).title
+                refreshError = PresentedError(error)
                 return
             }
             let confirmed = confirmation

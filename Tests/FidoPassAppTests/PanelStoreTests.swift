@@ -52,7 +52,7 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertEqual(store.route, .unlock)
         XCTAssertEqual(store.devices.state(for: device.path)?.pinRetriesRemaining, 3)
         XCTAssertTrue(store.pinDraft.isEmpty, "a failed attempt must not leave the PIN in the field")
-        XCTAssertNotNil(store.errorText)
+        XCTAssertNotNil(store.error)
     }
 
     /// Nothing about a locked key may stay reachable: not its accounts, not a password it
@@ -480,7 +480,7 @@ final class PanelStoreTests: XCTestCase {
         await store.refresh()
 
         XCTAssertTrue(store.accounts.accounts.isEmpty)
-        XCTAssertNotNil(store.errorText, "an empty list with no explanation is the worst of both")
+        XCTAssertNotNil(store.error, "an empty list with no explanation is the worst of both")
     }
 
     /// The bug that made the HUD hang on "no security key connected" after one successful
@@ -496,7 +496,7 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertEqual(store.devices.devices.map(\.path), [device.path], "the key must survive a failed read")
         XCTAssertTrue(store.isSelectedKeyUnlocked, "and so must its unlocked state")
         XCTAssertFalse(store.accounts.accounts.isEmpty)
-        XCTAssertNotNil(store.errorText, "but the user has to be told the read failed")
+        XCTAssertNotNil(store.error, "but the user has to be told the read failed")
     }
 
     /// A key re-enumerates on the HID bus right after it is touched, so a single empty read
@@ -558,7 +558,7 @@ final class PanelEditorLifetimeTests: XCTestCase {
         store.setLabel("   ")
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
 
-        XCTAssertNotNil(store.errorText)
+        XCTAssertNotNil(store.error)
         XCTAssertNil(store.editor.boundDevicePath)
         XCTAssertTrue(backend.generateCalls.isEmpty)
     }
