@@ -5,7 +5,7 @@ import TestSupport
 @testable import FidoPassAppKit
 
 @MainActor
-final class HUDStoreTests: XCTestCase {
+final class PanelStoreTests: XCTestCase {
 
     // MARK: - Unlock and the pending intent
 
@@ -19,7 +19,7 @@ final class HUDStoreTests: XCTestCase {
         backend.pins[device.path] = "1234"
         backend.accountsByPath[device.path] = [Account.fixture(id: "vault", kind: .portable, devicePath: device.path)]
 
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
         await store.prepareForDisplay(intent: .copyPassword(ref, label: "work"))
 
@@ -44,7 +44,7 @@ final class HUDStoreTests: XCTestCase {
                                                          supportsHmacSecret: true,
                                                          remainingResidentKeys: 10)
 
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
         store.pinDraft = "0000"
         await store.submitPin()
@@ -58,7 +58,7 @@ final class HUDStoreTests: XCTestCase {
     /// Nothing about a locked key may stay reachable: not its accounts, not a password it
     /// derived, not the selection that points at it.
     func testLockingDropsEverythingDerivedFromThatKey() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
         await store.copyPassword(for: ref, label: "vault")
         XCTAssertNotNil(store.generation.result)
@@ -81,7 +81,7 @@ final class HUDStoreTests: XCTestCase {
         backend.pins[device.path] = "1234"
         let gate = BlockingGate()
 
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
         store.pinDraft = "1234"
         backend.enumerateGate = gate
@@ -108,7 +108,7 @@ final class HUDStoreTests: XCTestCase {
         backend.devices = [device]
         backend.pins[device.path] = "1234"
 
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
         let before = backend.enumerateCallCount
         store.pinDraft = "0000"
@@ -123,7 +123,7 @@ final class HUDStoreTests: XCTestCase {
     /// Same reasoning, cheaper stakes: a duplicated generate costs the user a second touch
     /// of the key for a password they already have.
     func testDuplicateGenerateRequestsCollapseIntoOne() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
 
         async let first: Void = store.copyPassword(for: ref, label: "vault")
@@ -136,7 +136,7 @@ final class HUDStoreTests: XCTestCase {
     // MARK: - Generation
 
     func testGeneratingRaisesTheTouchPromptAndRemembersTheChoice() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
 
         var sawPrompt = false
@@ -157,7 +157,7 @@ final class HUDStoreTests: XCTestCase {
     }
 
     func testCopiedPasswordIsRecordedAgainstItsOwnAccount() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let vault = AccountRef(accountId: "vault", devicePath: device.path)
         await store.copyPassword(for: vault, label: "vault")
 
@@ -168,7 +168,7 @@ final class HUDStoreTests: XCTestCase {
 
     /// Revealing is the alternative to copying, not an extra step after it.
     func testRevealDoesNotTouchTheClipboard() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         await store.revealPassword(for: AccountRef(accountId: "vault", devicePath: device.path), label: "vault")
 
         XCTAssertEqual(store.generation.result?.revealed, true)
@@ -178,7 +178,7 @@ final class HUDStoreTests: XCTestCase {
     /// Editing the label used to leave the previous password on screen, so copying handed
     /// over a secret derived from something else entirely.
     func testChangingTheLabelDropsAStaleResult() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
         await store.copyPassword(for: ref, label: "vault")
         XCTAssertNotNil(store.generation.result)
@@ -188,7 +188,7 @@ final class HUDStoreTests: XCTestCase {
     }
 
     func testSwitchingAccountsDropsTheResult() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         await store.copyPassword(for: AccountRef(accountId: "vault", devicePath: device.path), label: "vault")
         XCTAssertNotNil(store.generation.result)
 
@@ -199,7 +199,7 @@ final class HUDStoreTests: XCTestCase {
     // MARK: - Enrolment
 
     func testPortableEnrolmentEndsOnTheBackupKeyScreen() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         store.enrollDraft.accountId = "  backup  "
         store.enrollDraft.kind = .portable
         await store.createAccount()
@@ -211,7 +211,7 @@ final class HUDStoreTests: XCTestCase {
     }
 
     func testLocalEnrolmentProducesNoBackupKey() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         store.enrollDraft.accountId = "disk-2"
         store.enrollDraft.kind = .local
         await store.createAccount()
@@ -221,7 +221,7 @@ final class HUDStoreTests: XCTestCase {
     }
 
     func testImportedKeyMustBeThirtyTwoBytes() {
-        var draft = HUDStore.EnrollDraft()
+        var draft = PanelStore.EnrollDraft()
         draft.accountId = "vault"
         draft.importedKeyB64 = "not-base64"
         XCTAssertNotNil(draft.importedKeyError)
@@ -236,7 +236,7 @@ final class HUDStoreTests: XCTestCase {
     }
 
     func testDeletingRemovesTheAccountFromTheList() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         await store.deleteAccount(AccountRef(accountId: "disk", devicePath: device.path))
 
         XCTAssertEqual(backend.deleteCalls, ["disk"])
@@ -247,7 +247,7 @@ final class HUDStoreTests: XCTestCase {
     /// Deleting an account takes its labels with it: nothing may be left pointing at a
     /// credential that no longer exists.
     func testDeletingAnAccountForgetsItsLabels() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let ref = AccountRef(accountId: "disk", devicePath: device.path)
         let scope = store.labelTarget(for: ref)!.scope
         await store.copyPassword(for: ref, label: "disk-label")
@@ -260,7 +260,7 @@ final class HUDStoreTests: XCTestCase {
     /// Shortening the timeout is something a user does because they want the key to lock
     /// sooner — including the key that is unlocked right now.
     func testChangingTheLockTimeoutAppliesToTheKeyAlreadyUnlocked() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         XCTAssertEqual(store.devices.pinTTL, 300)
 
         store.preferences.lockTimeout = 60
@@ -271,7 +271,7 @@ final class HUDStoreTests: XCTestCase {
     /// with a key unlocked and an account preselected, the daily action is "copy this
     /// password", never "now choose an account".
     func testThePrimaryActionOfAnUnlockedKeyIsToCopy() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         XCTAssertEqual(store.primaryAction, .generateAndCopy(store.selection!))
 
         store.lockSelectedKey()
@@ -288,7 +288,7 @@ final class HUDStoreTests: XCTestCase {
                                                          hasPIN: false,
                                                          supportsHmacSecret: true,
                                                          remainingResidentKeys: 25)
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
 
         XCTAssertEqual(store.primaryAction, .setPIN(devicePath: device.path))
@@ -299,7 +299,7 @@ final class HUDStoreTests: XCTestCase {
     /// The chips have to follow the account. A label belonging to another one derives a
     /// password that is perfectly valid and perfectly wrong.
     func testSelectingAnAccountSwitchesItsLabelHistory() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let vault = AccountRef(accountId: "vault", devicePath: device.path)
         let disk = AccountRef(accountId: "disk", devicePath: device.path)
         await store.copyPassword(for: vault, label: "vault-label")
@@ -317,7 +317,7 @@ final class HUDStoreTests: XCTestCase {
     /// The sheet's whole purpose is to record what cannot be derived again — and it says
     /// "labels used with this account", so it has to be true.
     func testRecoverySheetCarriesOnlyThisAccountsLabels() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let vault = AccountRef(accountId: "vault", devicePath: device.path)
         await store.copyPassword(for: vault, label: "vault-label")
         await store.copyPassword(for: AccountRef(accountId: "disk", devicePath: device.path), label: "disk-label")
@@ -331,7 +331,7 @@ final class HUDStoreTests: XCTestCase {
     // MARK: - Keyboard navigation
 
     func testArrowsMoveBetweenAccounts() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         store.select(AccountRef(accountId: "disk", devicePath: device.path))
 
         store.moveSelection(by: -1)
@@ -350,8 +350,8 @@ final class HUDStoreTests: XCTestCase {
     /// position like any other rather than a dead end past the last chip. The row is a ring:
     /// with three or four positions, a key that does nothing at the edge is just a dead key.
     func testArrowsWalkTheChipsAndTheCustomFieldInARing() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        HUDTestFactory.seedLabels(store, ["work", "vault"])   // chips: ["vault", "work"]
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        AppTestFactory.seedLabels(store, ["work", "vault"])   // chips: ["vault", "work"]
         let chips = store.labels.chips
         XCTAssertEqual(chips.count, 2)
 
@@ -377,8 +377,8 @@ final class HUDStoreTests: XCTestCase {
 
     /// A label typed by hand is the field's position, even before the field has focus.
     func testACustomLabelCountsAsBeingAtTheField() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        HUDTestFactory.seedLabels(store, ["work"])
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        AppTestFactory.seedLabels(store, ["work"])
         store.setLabel("something-new")
         XCTAssertFalse(store.labelEditor.isEditing)
 
@@ -392,8 +392,8 @@ final class HUDStoreTests: XCTestCase {
     /// Switching label must drop a password derived from the previous one, exactly as
     /// clicking a chip does — the keyboard is not a second, sloppier path.
     func testMovingBetweenLabelsDropsAStaleResult() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        HUDTestFactory.seedLabels(store, ["work", "archive"])   // two choices, or there is nothing to cycle between
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        AppTestFactory.seedLabels(store, ["work", "archive"])   // two choices, or there is nothing to cycle between
         await store.copyPassword(for: store.selection)
         XCTAssertNotNil(store.generation.result)
 
@@ -404,7 +404,7 @@ final class HUDStoreTests: XCTestCase {
 
     /// A shortcut nobody knows about is the same as one that does not exist.
     func testHintsNameTheNonObviousShortcuts() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         XCTAssertTrue(store.keyboardHints.contains("⏎ copy"))
         XCTAssertTrue(store.keyboardHints.contains("↑↓ account"))
 
@@ -416,14 +416,14 @@ final class HUDStoreTests: XCTestCase {
     func testHintsOmitArrowsWhenThereIsNothingToMoveBetween() async {
         let device = MockKeyBackend.device()
         let single = [Account.fixture(id: "vault", kind: .portable, devicePath: device.path)]
-        let (store, _, _) = await HUDTestFactory.unlockedStore(accounts: single)
+        let (store, _, _) = await AppTestFactory.unlockedStore(accounts: single)
 
         XCTAssertFalse(store.keyboardHints.contains("↑↓ account"))
     }
 
     /// Escape on a pushed screen goes back; only at the top level does it close the panel.
     func testEscapeLeavesTheScreenBeforeItLeavesTheApp() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         store.show(.confirmDelete(AccountRef(accountId: "vault", devicePath: device.path)))
 
         XCTAssertTrue(store.handleEscape())
@@ -437,7 +437,7 @@ final class HUDStoreTests: XCTestCase {
     /// stale route used to paint "No accounts on this key" — with a Create button — under a
     /// header reading "Locked". The account list of a locked key is unread, not empty.
     func testALockedKeyAlwaysShowsThePinScreen() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         store.lockSelectedKey()
         store.show(.accounts)
 
@@ -446,7 +446,7 @@ final class HUDStoreTests: XCTestCase {
 
     /// ⌘N while the key is locked: unlock first, then land on the screen that was asked for.
     func testAScreenRequestedWhileLockedSurvivesUnlocking() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         store.lockSelectedKey()
         store.show(.enroll)
         XCTAssertEqual(store.effectiveRoute, .unlock)
@@ -461,7 +461,7 @@ final class HUDStoreTests: XCTestCase {
 
     /// Screens the user is reading or typing into must not vanish when focus moves.
     func testReadingScreensHoldThePanelOpen() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         XCTAssertFalse(store.isPinnedOpen)
 
         store.show(.backupKey(AccountRef(accountId: "vault", devicePath: device.path)))
@@ -474,7 +474,7 @@ final class HUDStoreTests: XCTestCase {
     /// A key that cannot be read looks exactly like a key with nothing on it. Saying which
     /// one it is matters most for the person whose accounts have just "disappeared".
     func testAnUnreadableKeyExplainsItselfInsteadOfLookingEmpty() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
         backend.enumerateError = TestError.generic("Key is busy")
 
         await store.refresh()
@@ -487,7 +487,7 @@ final class HUDStoreTests: XCTestCase {
     /// generation: enumeration failed for a moment, and the failure was read as "the desk is
     /// empty" — releasing the PIN token and every account of a key that never moved.
     func testEnumerationFailureDoesNotLookLikeAnUnpluggedKey() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         XCTAssertFalse(store.devices.devices.isEmpty)
 
         backend.listDevicesError = TestError.generic("device busy")
@@ -502,7 +502,7 @@ final class HUDStoreTests: XCTestCase {
     /// A key re-enumerates on the HID bus right after it is touched, so a single empty read
     /// in that window is noise rather than an unplug.
     func testOneEmptyReadAfterATouchIsNotAnUnplug() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         backend.listDevicesResults = [[], [device]]
 
         await store.refresh()
@@ -512,7 +512,7 @@ final class HUDStoreTests: XCTestCase {
     }
 
     func testUnpluggingAKeyClearsItsState() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         await store.copyPassword(for: AccountRef(accountId: "vault", devicePath: device.path), label: "vault")
 
         backend.devices = []
@@ -528,10 +528,10 @@ final class HUDStoreTests: XCTestCase {
 /// revokes access to an account has to take that window with it — otherwise "locked"
 /// describes the account list while the secrets stay reachable elsewhere.
 @MainActor
-final class HUDEditorLifetimeTests: XCTestCase {
+final class PanelEditorLifetimeTests: XCTestCase {
 
     func testLockingTheKeyClosesTheEditor() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
+        let (store, _, device) = await AppTestFactory.unlockedStore()
         let router = store.router as! RecordingWindowRouter
 
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
@@ -544,7 +544,7 @@ final class HUDEditorLifetimeTests: XCTestCase {
     }
 
     func testUnpluggingTheKeyClosesTheEditor() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         let router = store.router as! RecordingWindowRouter
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
 
@@ -554,7 +554,7 @@ final class HUDEditorLifetimeTests: XCTestCase {
     }
 
     func testAnEmptyLabelIsRefusedBeforeTheKeyIsTouched() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         store.setLabel("   ")
         await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
 

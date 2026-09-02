@@ -4,7 +4,7 @@ import FidoPassCore
 /// Creating an account. Portable is the default because losing the only key that can derive
 /// a vault master password is unrecoverable.
 struct EnrollView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
 
     private enum Field: Hashable { case accountId, importedKey }
     @FocusState private var focus: Field?
@@ -17,7 +17,7 @@ struct EnrollView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HUDScreenHeader(title: "New account", subtitle: store.selectedDevice?.displayName) {
+            PanelScreenHeader(title: "New account", subtitle: store.selectedDevice?.displayName) {
                 store.backToAccounts()
             }
 
@@ -72,7 +72,7 @@ struct EnrollView: View {
                         .disabled(!store.enrollDraft.canCreate || store.isWorking)
                 }
             }
-            .padding(.horizontal, HUDMetrics.padding)
+            .padding(.horizontal, PanelMetrics.padding)
             .padding(.bottom, 12)
         }
         .tabFocusChain(fields, focus: $focus)

@@ -6,7 +6,7 @@ import FidoPassCore
 /// Expanding only the selected account is what keeps the panel compact while leaving the
 /// daily action — copy the password — a single click away.
 struct AccountsSectionView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
     @ObservedObject var accounts: AccountStore
     @ObservedObject var generation: GenerationStore
     @ObservedObject var labels: LabelStore
@@ -63,7 +63,7 @@ struct EmptyAccountsView: View {
 }
 
 struct AccountRowView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
     @ObservedObject var generation: GenerationStore
     @ObservedObject var labels: LabelStore
     @ObservedObject var editor: LabelEditor
@@ -320,7 +320,7 @@ struct ResultView: View {
 
 /// One menu, reachable two ways: right-click on the row, or the hover `···`.
 struct AccountActionsMenu: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
     let account: Account
     let ref: AccountRef
 

@@ -14,8 +14,8 @@ final class WindowIsolationTests: XCTestCase {
     /// fields. Closing the panel — which happens the moment any other window takes focus —
     /// wiped a PIN the user was halfway through typing in the manager.
     func testClosingThePanelLeavesTheManagerPinFormAlone() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         manager.pinForm.current = "1234"
         manager.pinForm.new = "246813"
         manager.pinForm.confirm = "246813"
@@ -29,7 +29,7 @@ final class WindowIsolationTests: XCTestCase {
 
     /// And the other way round: the panel's own bootstrap form is the one `panelDidClose` wipes.
     func testClosingThePanelClearsItsOwnForm() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         store.pinForm.new = "246813"
 
         store.panelDidClose()
@@ -42,7 +42,7 @@ final class WindowIsolationTests: XCTestCase {
     /// The icon is the one thing visible while the panel is closed, so its state is derived
     /// from the stores rather than remembered separately.
     func testIconReflectsLockingTheKey() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         XCTAssertEqual(store.iconState, .unlocked)
 
         store.lockSelectedKey()
@@ -51,7 +51,7 @@ final class WindowIsolationTests: XCTestCase {
     }
 
     func testIconReflectsAnUnpluggedKey() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
         backend.devices = []
 
         await store.refresh()
@@ -61,7 +61,7 @@ final class WindowIsolationTests: XCTestCase {
 
     /// Abandoning a touch hides the prompt at once, whatever the key is still doing.
     func testAbandoningATouchReturnsTheIconToItsRestingState() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
+        let (store, _, _) = await AppTestFactory.unlockedStore()
         let latch = Latch()
 
         let operation = Task { @MainActor in

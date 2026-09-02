@@ -14,7 +14,7 @@ protocol WindowRouter: AnyObject {
     func openPreferences()
     func openEditor(_ session: CryptoEditorSession)
     func closeEditor()
-    /// Runs the save dialog. The outcome comes back through `HUDStore.recoverySheetFinished`.
+    /// Runs the save dialog. The outcome comes back through `PanelStore.recoverySheetFinished`.
     func saveRecoverySheet(_ sheet: RecoverySheet)
     func quit()
 }

@@ -24,7 +24,7 @@ final class AppContainer {
     let router: WindowRouter
     let reset: ResetCoordinator
     /// The menu-bar panel's store.
-    let panel: HUDStore
+    let panel: PanelStore
     /// The manager window's store. Reads nothing until that window opens.
     let manager: ManagerStore
 
@@ -80,7 +80,7 @@ final class AppContainer {
                                     touchGate: touchGate,
                                     reset: reset,
                                     router: router)
-        self.panel = HUDStore(devices: deviceStore,
+        self.panel = PanelStore(devices: deviceStore,
                               accounts: accountStore,
                               generation: generationStore,
                               inventory: inventoryStore,

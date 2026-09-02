@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// A screen title with a way back, used by every pushed screen.
-struct HUDScreenHeader: View {
+struct PanelScreenHeader: View {
     let title: String
     var subtitle: String?
     /// Omitted when there is nowhere to go back to. A visible arrow that does nothing is
@@ -28,7 +28,7 @@ struct HUDScreenHeader: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, HUDMetrics.padding)
+        .padding(.horizontal, PanelMetrics.padding)
         .padding(.top, 10)
         .padding(.bottom, 6)
     }

@@ -52,7 +52,7 @@ final class KeyAccessSerialisationTests: XCTestCase {
         let device = MockKeyBackend.device()
         backend.devices = [device]
         backend.pins[device.path] = "1234"
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.devices.refresh()
 
         // The manager reading while the panel refreshes: two windows, one key.

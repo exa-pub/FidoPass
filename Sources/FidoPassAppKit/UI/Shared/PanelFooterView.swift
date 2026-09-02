@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// One line of feedback under the content: what just happened, or what went wrong.
-struct HUDFooterView: View {
+struct PanelFooterView: View {
     let status: String?
     let error: String?
 
@@ -24,7 +24,7 @@ struct HUDFooterView: View {
             Spacer(minLength: 0)
         }
         .font(.caption)
-        .padding(.horizontal, HUDMetrics.padding)
+        .padding(.horizontal, PanelMetrics.padding)
         .padding(.vertical, 8)
         .background(.quaternary.opacity(0.4))
     }

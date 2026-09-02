@@ -5,7 +5,7 @@ import FidoPassCore
 /// stores. The click budget in `ai.tmp/HUD-PLAN.md` is enforced here rather than described:
 /// with a key unlocked and an account preselected the answer must be `generateAndCopy`, not
 /// "select an account first".
-struct HUDSnapshot: Equatable {
+struct PanelSnapshot: Equatable {
     var hasDevices: Bool
     var selectedDevicePath: String?
     var isUnlocked: Bool

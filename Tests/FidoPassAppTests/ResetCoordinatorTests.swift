@@ -9,10 +9,10 @@ import TestSupport
 @MainActor
 final class ResetCoordinatorTests: XCTestCase {
 
-    private func armedReset() async throws -> (HUDStore, MockKeyBackend, FidoDevice, ResetCoordinator) {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        HUDTestFactory.seedLabels(store, ["work"])
-        let reset = HUDTestFactory.reset(for: store)
+    private func armedReset() async throws -> (PanelStore, MockKeyBackend, FidoDevice, ResetCoordinator) {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        AppTestFactory.seedLabels(store, ["work"])
+        let reset = AppTestFactory.reset(for: store)
         try await reset.begin(device: device)
         reset.flow?.acknowledged = true
         reset.flow?.typed = "RESET"
@@ -23,10 +23,10 @@ final class ResetCoordinatorTests: XCTestCase {
     /// After the reconnect the path is different and a vendor signature only names a model.
     /// With two keys present there is no way left to tell which one came back.
     func testResetRefusesToStartWithTwoKeysConnected() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         backend.devices.append(MockKeyBackend.device(path: "/dev/two"))
         await store.devices.refresh()
-        let reset = HUDTestFactory.reset(for: store)
+        let reset = AppTestFactory.reset(for: store)
 
         do {
             try await reset.begin(device: device)
@@ -41,10 +41,10 @@ final class ResetCoordinatorTests: XCTestCase {
 
     /// The manager turns that refusal into its own message — never the panel's.
     func testTheManagerReportsTheRefusal() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
         backend.devices.append(MockKeyBackend.device(path: "/dev/two"))
         await store.devices.refresh()
-        let manager = HUDTestFactory.manager(for: store)
+        let manager = AppTestFactory.manager(for: store)
 
         await manager.beginReset()
 
@@ -55,8 +55,8 @@ final class ResetCoordinatorTests: XCTestCase {
 
     /// A local account cannot be recovered by any means, so a checkbox is not enough.
     func testAKeyHoldingALocalAccountAsksForTheWordToBeTyped() async throws {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
-        let reset = HUDTestFactory.reset(for: store)
+        let (store, _, device) = await AppTestFactory.unlockedStore()
+        let reset = AppTestFactory.reset(for: store)
         try await reset.begin(device: device)
         reset.flow?.acknowledged = true
 
@@ -145,8 +145,8 @@ final class ResetCoordinatorTests: XCTestCase {
     /// is free to go wherever the user sends it — what must not happen is the flow quietly
     /// disappearing while it is still armed.
     func testFetchingABackupKeyDoesNotAbandonAnArmedReset() async throws {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
-        let reset = HUDTestFactory.reset(for: store)
+        let (store, _, device) = await AppTestFactory.unlockedStore()
+        let reset = AppTestFactory.reset(for: store)
         try await reset.begin(device: device)
         guard let portable = reset.flow?.doomed.first(where: { $0.kind == .portable }) else {
             return XCTFail("the fixture is supposed to have a portable account")

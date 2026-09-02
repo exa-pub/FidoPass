@@ -7,10 +7,10 @@ import SwiftUI
 /// and closes itself the moment a save panel appears or the key is being touched. Owning the
 /// window is what buys those two things; `canBecomeKey` is what lets the PIN field work at
 /// all, since a non-activating panel refuses first responder by default.
-final class HUDPanel: NSPanel {
+final class PanelWindow: NSPanel {
 
     init(contentViewController: NSViewController) {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: HUDMetrics.width, height: 200),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: PanelMetrics.width, height: 200),
                    styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
                    backing: .buffered,
                    defer: false)

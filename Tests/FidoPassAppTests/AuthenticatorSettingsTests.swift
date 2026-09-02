@@ -11,12 +11,12 @@ import TestSupport
 @MainActor
 final class AuthenticatorSettingsTests: XCTestCase {
 
-    private func makeStore() -> (HUDStore, MockKeyBackend, FidoDevice) {
+    private func makeStore() -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()
         let device = MockKeyBackend.device()
         backend.devices = [device]
         backend.pins[device.path] = "1234"
-        return (HUDTestFactory.makeStore(backend: backend), backend, device)
+        return (AppTestFactory.makeStore(backend: backend), backend, device)
     }
 
     /// Every one of these needs the PIN, and the store holds it only while unlocked. A locked

@@ -8,7 +8,7 @@ import AppKit
 @MainActor
 final class AppWindows: WindowRouter {
 
-    var panel: HUDController?
+    var panel: PanelController?
     var auxiliary: AuxiliaryWindows?
     weak var container: AppContainer?
 

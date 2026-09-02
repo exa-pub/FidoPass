@@ -1,8 +1,8 @@
 import SwiftUI
 import FidoPassCore
 
-struct HUDHeaderView: View {
-    @ObservedObject var store: HUDStore
+struct PanelHeaderView: View {
+    @ObservedObject var store: PanelStore
     @ObservedObject var devices: DeviceStore
     @ObservedObject var accounts: AccountStore
 
@@ -51,7 +51,7 @@ struct HUDHeaderView: View {
             .fixedSize()
             .help("Key and application actions")
         }
-        .padding(.horizontal, HUDMetrics.padding)
+        .padding(.horizontal, PanelMetrics.padding)
         .padding(.vertical, 9)
     }
 

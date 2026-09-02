@@ -50,7 +50,7 @@ struct TouchOverlayView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
-        .padding(.horizontal, HUDMetrics.padding)
+        .padding(.horizontal, PanelMetrics.padding)
         .onAppear { pulsing = true }
         .onReceive(ticker) { _ in elapsed = Date().timeIntervalSince(prompt.startedAt) }
         .accessibilityElement(children: .combine)

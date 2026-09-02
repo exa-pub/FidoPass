@@ -9,9 +9,9 @@ import Foundation
 /// a store is a bug: that is exactly how the app once ended up looking frozen while the key
 /// silently waited for a finger.
 @MainActor
-final class HUDStore: ObservableObject {
+final class PanelStore: ObservableObject {
 
-    @Published private(set) var route: HUDRoute = .accounts
+    @Published private(set) var route: PanelRoute = .accounts
     @Published var errorText: String?
     @Published private(set) var statusText: String?
     @Published var selection: AccountRef?
@@ -61,7 +61,7 @@ final class HUDStore: ObservableObject {
     /// The label row: the label the next password derives from, and the field it is typed in.
     let labelEditor: LabelEditor
 
-    private var pendingIntent: HUDIntent?
+    private var pendingIntent: PanelIntent?
     private var subscriptions: Set<AnyCancellable> = []
     private var statusTask: Task<Void, Never>?
 
@@ -134,8 +134,8 @@ final class HUDStore: ObservableObject {
         }
     }
 
-    var snapshot: HUDSnapshot {
-        HUDSnapshot(hasDevices: !devices.devices.isEmpty,
+    var snapshot: PanelSnapshot {
+        PanelSnapshot(hasDevices: !devices.devices.isEmpty,
                     selectedDevicePath: devices.selectedPath,
                     isUnlocked: isSelectedKeyUnlocked,
                     keyHasPIN: devices.selectedState?.hasPIN,
@@ -149,7 +149,7 @@ final class HUDStore: ObservableObject {
     /// own default button, because a second, global Return handler used to fire alongside
     /// the focused field's submit and spend two PIN attempts on one keypress. This is the
     /// statement of what those buttons must add up to, checked against real store state.
-    var primaryAction: HUDPrimaryAction { HUDReducer.primaryAction(snapshot) }
+    var primaryAction: PanelPrimaryAction { PanelReducer.primaryAction(snapshot) }
 
     /// What may actually be shown, given the state of the key.
     ///
@@ -157,7 +157,7 @@ final class HUDStore: ObservableObject {
     /// every code path to keep `route` in step is what stops the panel from claiming
     /// "no accounts on this key" under a header that says the key is locked — its account
     /// list is not empty, it is unread, and the two must never look the same.
-    var effectiveRoute: HUDRoute {
+    var effectiveRoute: PanelRoute {
         // Ahead of the "is a key present" check, because no key is a *step* of this wizard:
         // it asks the user to unplug, and the key being gone is what it waits for. Falling
         // through to "No security key connected" made the wizard vanish at exactly the moment
@@ -188,7 +188,7 @@ final class HUDStore: ObservableObject {
     // MARK: - Lifecycle
 
     /// Called every time the panel is about to appear.
-    func prepareForDisplay(intent: HUDIntent? = nil) async {
+    func prepareForDisplay(intent: PanelIntent? = nil) async {
         errorText = nil
         await devices.refresh()
         if let failure = devices.refreshError { errorText = failure }
@@ -245,7 +245,7 @@ final class HUDStore: ObservableObject {
     private func restoreSelectionIfNeeded() {
         let visible = visibleAccounts
         let resolved = selection.flatMap { visible.contains(where: $0.matches) ? $0 : nil }
-            ?? HUDReducer.resolveSelection(accounts: visible,
+            ?? PanelReducer.resolveSelection(accounts: visible,
                                            devices: devices.devices,
                                            memory: preferences.lastUsed)
         // Nothing is re-resolved when the account and its history are already the ones on
@@ -277,7 +277,7 @@ final class HUDStore: ObservableObject {
 
     // MARK: - Navigation
 
-    func show(_ route: HUDRoute) {
+    func show(_ route: PanelRoute) {
         self.route = route
         if case .backupKey = route {} else { backupKey = nil }
     }
@@ -497,7 +497,7 @@ final class HUDStore: ObservableObject {
     }
 
     /// Queues what the user asked for so it survives the PIN prompt.
-    func requestIntent(_ intent: HUDIntent) {
+    func requestIntent(_ intent: PanelIntent) {
         pendingIntent = intent
     }
 

@@ -1,9 +1,9 @@
 import Foundation
 import FidoPassCore
 
-enum HUDReducer {
+enum PanelReducer {
 
-    static func primaryAction(_ snapshot: HUDSnapshot) -> HUDPrimaryAction {
+    static func primaryAction(_ snapshot: PanelSnapshot) -> PanelPrimaryAction {
         guard snapshot.hasDevices, let path = snapshot.selectedDevicePath else { return .connectKey }
         // Only a definite "no". An unasked key must not be offered a first PIN: it may
         // already have one, and the key refuses that request.

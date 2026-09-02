@@ -5,8 +5,8 @@ import FidoPassCore
 ///
 /// The sub-stores are observed explicitly: they are separate objects precisely so that a
 /// clipboard countdown ticking once a second does not redraw the whole panel.
-struct HUDRootView: View {
-    @ObservedObject var store: HUDStore
+struct PanelRootView: View {
+    @ObservedObject var store: PanelStore
     @ObservedObject private var devices: DeviceStore
     @ObservedObject private var accounts: AccountStore
     @ObservedObject private var generation: GenerationStore
@@ -14,7 +14,7 @@ struct HUDRootView: View {
     @ObservedObject private var touchGate: TouchGate
     @ObservedObject private var labelEditor: LabelEditor
 
-    init(store: HUDStore) {
+    init(store: PanelStore) {
         self.store = store
         self.touchGate = store.touchGate
         self.labelEditor = store.labelEditor
@@ -29,25 +29,25 @@ struct HUDRootView: View {
             if let touch = touchGate.panelPrompt {
                 TouchOverlayView(prompt: touch, onCancel: touchGate.abandonTouch)
             } else if touchGate.isWorking, let title = touchGate.panelBusyTitle {
-                HUDWaitingView(title: title, message: store.selectedDevice?.displayName)
+                PanelWaitingView(title: title, message: store.selectedDevice?.displayName)
             } else {
-                HUDHeaderView(store: store, devices: devices, accounts: accounts)
+                PanelHeaderView(store: store, devices: devices, accounts: accounts)
                 Divider()
                 content
                 // One strip at the bottom: what just happened, or — when nothing did — what
                 // the keyboard can do here.
                 if store.statusText != nil || store.errorText != nil {
-                    HUDFooterView(status: store.statusText, error: store.errorText)
+                    PanelFooterView(status: store.statusText, error: store.errorText)
                 } else {
-                    HUDHintsView(hints: store.keyboardHints)
+                    PanelHintsView(hints: store.keyboardHints)
                 }
             }
         }
-        .frame(width: HUDMetrics.width)
+        .frame(width: PanelMetrics.width)
         .background(VisualEffectBackground())
-        .clipShape(RoundedRectangle(cornerRadius: HUDMetrics.corner, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.corner, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: HUDMetrics.corner, style: .continuous)
+            RoundedRectangle(cornerRadius: PanelMetrics.corner, style: .continuous)
                 .stroke(Color.primary.opacity(0.12))
         }
         .background { keyboardShortcuts }
@@ -63,7 +63,7 @@ struct HUDRootView: View {
                 NoKeyView(isRefreshing: devices.isRefreshing) { Task { await store.refresh() } }
             } else {
                 ScrollView { AccountsSectionView(store: store, accounts: accounts, generation: generation, labels: labels) }
-                    .frame(maxHeight: HUDMetrics.maxContentHeight)
+                    .frame(maxHeight: PanelMetrics.maxContentHeight)
             }
         case .unlock:
             UnlockView(store: store, devices: devices)

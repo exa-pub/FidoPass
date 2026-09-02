@@ -11,8 +11,8 @@ final class ManagerStoreTests: XCTestCase {
 
     /// Opening the window is the request to read; the window merely existing is not.
     func testOpeningTheWindowReadsTheKeyOnce() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
 
         await manager.deviceDidAppear()
         XCTAssertEqual(backend.inspectCallCount, 1)
@@ -24,8 +24,8 @@ final class ManagerStoreTests: XCTestCase {
 
     /// ⌘R is a deliberate re-read and always reads.
     func testAnExplicitReadAlwaysReads() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
 
         await manager.read()
         await manager.read()
@@ -36,8 +36,8 @@ final class ManagerStoreTests: XCTestCase {
     /// A reset makes the key reappear on a new path — exactly what re-triggers the read. Reading
     /// then would seize the device in the seconds-wide window where the reset has to be issued.
     func testNothingIsReadWhileAResetIsArmed() async throws {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         try await manager.reset.begin(device: device)
         manager.reset.flow?.acknowledged = true
         manager.reset.flow?.typed = "RESET"
@@ -51,8 +51,8 @@ final class ManagerStoreTests: XCTestCase {
 
     /// Unlocking sends the user to the panel — the manager has no PIN field of its own.
     func testUnlockingGoesThroughThePanel() async {
-        let (store, _, device) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, _, device) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         let router = store.router as! RecordingWindowRouter
 
         manager.requestUnlock()
@@ -64,8 +64,8 @@ final class ManagerStoreTests: XCTestCase {
     // MARK: - Changing the PIN
 
     func testChangingThePinAdoptsTheNewOneAndClosesTheSheet() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         manager.beginChangePIN()
         XCTAssertEqual(manager.sheet, .changePIN)
         manager.pinForm.current = "1234"
@@ -86,8 +86,8 @@ final class ManagerStoreTests: XCTestCase {
 
     /// A typo in this form must not cost access that the old PIN still grants.
     func testAWrongCurrentPinLeavesTheVaultAloneAndTheSheetUp() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         manager.beginChangePIN()
         manager.pinForm.current = "9999"
         manager.pinForm.new = "567890"
@@ -107,8 +107,8 @@ final class ManagerStoreTests: XCTestCase {
     /// The point of validating locally: an attempt spent on a new PIN that was never going to
     /// be accepted is an attempt spent for nothing, and there are only eight.
     func testAnInvalidNewPinCostsNoAttempt() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         manager.pinForm.current = "1234"
         manager.pinForm.new = "12"
         manager.pinForm.confirm = "12"
@@ -119,8 +119,8 @@ final class ManagerStoreTests: XCTestCase {
     }
 
     func testChangingToTheSamePinIsRefusedBeforeTheKeySeesIt() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         manager.pinForm.current = "123456"
         manager.pinForm.new = "123456"
         manager.pinForm.confirm = "123456"
@@ -131,8 +131,8 @@ final class ManagerStoreTests: XCTestCase {
 
     /// The manager's errors are the manager's: nothing it does may write into the panel.
     func testAFailedChangeDoesNotReachThePanel() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         manager.pinForm.current = "9999"
         manager.pinForm.new = "567890"
         manager.pinForm.confirm = "567890"
@@ -148,8 +148,8 @@ final class ManagerStoreTests: XCTestCase {
     /// `alwaysUv` is a toggle, so what the switch shows afterwards has to come from the key,
     /// not from the app's guess — every change is followed by a re-read.
     func testASettingChangeReReadsTheKey() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         let before = backend.inspectCallCount
 
         await manager.toggleAlwaysUV()
@@ -161,8 +161,8 @@ final class ManagerStoreTests: XCTestCase {
     }
 
     func testASettingRefusedByTheKeyIsReportedHere() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        let manager = HUDTestFactory.manager(for: store)
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: store)
         backend.configError = FidoPassError.unsupported("no such option")
 
         await manager.forcePINChange()

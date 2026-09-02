@@ -12,7 +12,7 @@ import TestSupport
 final class PinManagementTests: XCTestCase {
 
     /// A key straight out of its packet: present, no PIN, nothing on it.
-    private func freshKeyStore() async -> (HUDStore, MockKeyBackend, FidoDevice) {
+    private func freshKeyStore() async -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()
         let device = MockKeyBackend.device()
         backend.devices = [device]
@@ -21,7 +21,7 @@ final class PinManagementTests: XCTestCase {
                                                          supportsHmacSecret: true,
                                                          remainingResidentKeys: 25,
                                                          aaguid: backend.aaguid)
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
         return (store, backend, device)
     }
@@ -125,7 +125,7 @@ final class PinManagementTests: XCTestCase {
                                                          supportsHmacSecret: true,
                                                          remainingResidentKeys: 20,
                                                          forcePINChange: true)
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
 
         // Changing the PIN lives in the manager window, so the panel's job is to say so

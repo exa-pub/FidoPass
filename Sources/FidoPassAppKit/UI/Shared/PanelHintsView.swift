@@ -5,7 +5,7 @@ import AppKit
 ///
 /// Printed rather than left to be discovered: nothing about "Return copies the password"
 /// can be guessed from looking at the panel, and an unknown shortcut is no shortcut.
-struct HUDHintsView: View {
+struct PanelHintsView: View {
     let hints: [String]
 
     var body: some View {
@@ -18,7 +18,7 @@ struct HUDHintsView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, HUDMetrics.padding)
+            .padding(.horizontal, PanelMetrics.padding)
             .padding(.vertical, 6)
             .accessibilityHidden(true)
         }

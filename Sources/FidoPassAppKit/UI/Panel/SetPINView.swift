@@ -7,10 +7,10 @@ import FidoPassCore
 /// would send the user to the PIN field, the key would answer `FIDO_ERR_PIN_NOT_SET`, and the
 /// resulting message advised setting a PIN with no way to do so.
 struct SetPINView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
     @ObservedObject private var form: PinFormModel
 
-    init(store: HUDStore) {
+    init(store: PanelStore) {
         self.store = store
         self.form = store.pinForm
     }
@@ -20,12 +20,12 @@ struct SetPINView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HUDScreenHeader(title: "Set a PIN", subtitle: store.selectedDevice?.displayName) {
+            PanelScreenHeader(title: "Set a PIN", subtitle: store.selectedDevice?.displayName) {
                 store.backToAccounts()
             }
 
             VStack(alignment: .leading, spacing: 9) {
-                HUDWarningBox(title: "This PIN belongs to the key, not to FidoPass",
+                PanelWarningBox(title: "This PIN belongs to the key, not to FidoPass",
                               message: "It is not your Mac password and it cannot be reset. Eight wrong entries in a row lock the key permanently, and every account on it goes with it. Choose something you will not have to guess at.")
 
                 SecureField("New PIN", text: $form.new)
@@ -49,7 +49,7 @@ struct SetPINView: View {
                         .disabled(!form.canSubmit)
                 }
             }
-            .padding(.horizontal, HUDMetrics.padding)
+            .padding(.horizontal, PanelMetrics.padding)
             .padding(.bottom, 12)
         }
         .tabFocusChain([Field.new, .confirm], focus: $focus)

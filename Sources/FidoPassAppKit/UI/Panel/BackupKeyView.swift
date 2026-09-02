@@ -7,16 +7,16 @@ import FidoPassCore
 /// it into a login box would be a catastrophe, and the UI must make that impossible to do
 /// by accident.
 struct BackupKeyView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
     let ref: AccountRef
     @State private var revealed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HUDScreenHeader(title: "Backup key", subtitle: ref.accountId) { store.backToAccounts() }
+            PanelScreenHeader(title: "Backup key", subtitle: ref.accountId) { store.backToAccounts() }
 
             VStack(alignment: .leading, spacing: 9) {
-                HUDWarningBox(title: "This is not a password",
+                PanelWarningBox(title: "This is not a password",
                               message: "Anyone holding this value can reproduce every password of this account without the security key. Store it offline — a safe, a printed copy — and never paste it into a website.")
 
                 Text(revealed ? (store.backupKey ?? "") : String(repeating: "•", count: 32))
@@ -43,7 +43,7 @@ struct BackupKeyView: View {
                         .controlSize(.small)
                 }
             }
-            .padding(.horizontal, HUDMetrics.padding)
+            .padding(.horizontal, PanelMetrics.padding)
             .padding(.bottom, 12)
         }
     }

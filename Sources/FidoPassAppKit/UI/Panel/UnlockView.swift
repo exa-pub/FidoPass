@@ -6,7 +6,7 @@ import FidoPassCore
 /// The field takes focus the moment the panel opens, so the whole "wake the HUD, unlock,
 /// get the password" path can be typed without touching the mouse.
 struct UnlockView: View {
-    @ObservedObject var store: HUDStore
+    @ObservedObject var store: PanelStore
     @ObservedObject var devices: DeviceStore
     @FocusState private var pinFocused: Bool
 
@@ -38,7 +38,7 @@ struct UnlockView: View {
 
             if let retries { PinAttemptsLabel(remaining: retries) }
         }
-        .padding(.horizontal, HUDMetrics.padding)
+        .padding(.horizontal, PanelMetrics.padding)
         .padding(.vertical, 12)
         .onAppear {
             pinFocused = true
@@ -49,7 +49,7 @@ struct UnlockView: View {
         }
         // Typing is asking: the first character reads the attempts left off a key nobody has
         // asked yet, so the count is on screen before an attempt is spent. See
-        // `HUDStore.pinDraftDidChange` for why the screen appearing is not enough.
+        // `PanelStore.pinDraftDidChange` for why the screen appearing is not enough.
         .onChange(of: store.pinDraft) { _ in
             Task { await store.pinDraftDidChange() }
         }

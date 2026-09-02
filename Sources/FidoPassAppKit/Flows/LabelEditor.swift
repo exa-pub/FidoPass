@@ -41,7 +41,7 @@ final class LabelEditor: ObservableObject {
     /// The draft belongs to the account it was typed for, so it does not travel with the row.
     func focus(_ target: LabelTarget?) {
         history.focus(target)
-        current = HUDReducer.resolveLabel(recent: history.recent)
+        current = PanelReducer.resolveLabel(recent: history.recent)
         draft = chips.contains(current) ? "" : current
     }
 

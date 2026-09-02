@@ -13,13 +13,13 @@ import TestSupport
 @MainActor
 final class InventoryStoreTests: XCTestCase {
 
-    private func makeStore() -> (HUDStore, MockKeyBackend, FidoDevice) {
+    private func makeStore() -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()
         let device = MockKeyBackend.device()
         backend.devices = [device]
         backend.pins[device.path] = "1234"
         backend.inventoryByPath[device.path] = MockKeyBackend.inventory(count: 2)
-        return (HUDTestFactory.makeStore(backend: backend), backend, device)
+        return (AppTestFactory.makeStore(backend: backend), backend, device)
     }
 
     // MARK: - Nothing happens by itself
@@ -251,7 +251,7 @@ final class InventoryStoreTests: XCTestCase {
         backend.inventoryByPath[first.path] = MockKeyBackend.inventory(rpId: "one.test", count: 1)
         backend.inventoryByPath[second.path] = MockKeyBackend.inventory(rpId: "two.test", count: 3)
 
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.devices.refresh()
         try await store.devices.unlock(first, pin: "1111")
         try await store.devices.unlock(second, pin: "2222")

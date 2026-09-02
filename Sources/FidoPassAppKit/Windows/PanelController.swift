@@ -5,15 +5,15 @@ import UniformTypeIdentifiers
 
 /// Owns the menu-bar item and the panel, and decides when the panel may close.
 @MainActor
-final class HUDController: NSObject, NSWindowDelegate {
+final class PanelController: NSObject, NSWindowDelegate {
 
-    private let store: HUDStore
+    private let store: PanelStore
     private let devices: DeviceStore
     private let generation: GenerationStore
     private let touchGate: TouchGate
     private var statusItem: NSStatusItem?
-    private var panel: HUDPanel?
-    private var hosting: NSHostingController<HUDRootView>?
+    private var panel: PanelWindow?
+    private var hosting: NSHostingController<PanelRootView>?
     private var resignObserver: NSObjectProtocol?
     private var iconSubscription: AnyCancellable?
 
@@ -137,7 +137,7 @@ final class HUDController: NSObject, NSWindowDelegate {
         if panel?.isVisible == true { hide() } else { show() }
     }
 
-    func show(intent: HUDIntent? = nil) {
+    func show(intent: PanelIntent? = nil) {
         let panel = ensurePanel()
         position(panel)
         // An accessory app has no windows of its own to activate, so without this the panel
@@ -156,11 +156,11 @@ final class HUDController: NSObject, NSWindowDelegate {
         store.panelDidClose()
     }
 
-    private func ensurePanel() -> HUDPanel {
+    private func ensurePanel() -> PanelWindow {
         if let panel { return panel }
-        let controller = NSHostingController(rootView: HUDRootView(store: store))
+        let controller = NSHostingController(rootView: PanelRootView(store: store))
         controller.sizingOptions = [.preferredContentSize]
-        let panel = HUDPanel(contentViewController: controller)
+        let panel = PanelWindow(contentViewController: controller)
         panel.delegate = self
         panel.onCancel = { [weak self] in
             guard let self else { return }
@@ -190,7 +190,7 @@ final class HUDController: NSObject, NSWindowDelegate {
         touchGate.panelPrompt != nil || store.isPinnedOpen || touchGate.isPanelBusy
     }
 
-    private func position(_ panel: HUDPanel) {
+    private func position(_ panel: PanelWindow) {
         guard let button = statusItem?.button,
               let buttonWindow = button.window,
               let screen = buttonWindow.screen ?? NSScreen.main else {

@@ -2,7 +2,7 @@
 import Foundation
 
 /// What the HUD is showing.
-enum HUDRoute: Equatable {
+enum PanelRoute: Equatable {
     case accounts
     case unlock
     /// The key has no PIN. Nothing else on it works until it does.

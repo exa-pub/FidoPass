@@ -6,7 +6,7 @@ import AppKit
 /// Without it the PIN screen simply stayed on screen while the key was being asked, which
 /// reads as "nothing happened, type it again" — and typing it again is how PIN attempts get
 /// spent.
-struct HUDWaitingView: View {
+struct PanelWaitingView: View {
     let title: String
     let message: String?
 
@@ -25,7 +25,7 @@ struct HUDWaitingView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 30)
-        .padding(.horizontal, HUDMetrics.padding)
+        .padding(.horizontal, PanelMetrics.padding)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
     }

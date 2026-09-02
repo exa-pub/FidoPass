@@ -12,7 +12,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let windows = AppWindows()
     private lazy var container = AppContainer(router: windows)
-    private lazy var hud = HUDController(container: container)
+    private lazy var hud = PanelController(container: container)
     private lazy var hotkey = HotkeyRegistration(preferences: container.preferences,
                                                  registrar: GlobalHotkeyService()) { [weak self] in
         Task { @MainActor in self?.hud.toggle() }

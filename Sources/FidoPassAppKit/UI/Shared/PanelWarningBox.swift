@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// A warning that has to be read, not skimmed.
-struct HUDWarningBox: View {
+struct PanelWarningBox: View {
     let title: String
     let message: String
     var tint: Color = .orange

@@ -324,7 +324,7 @@ final class RecordingWindowRouter: WindowRouter {
     func quit() { quitRequested += 1 }
 }
 
-enum HUDTestFactory {
+enum AppTestFactory {
 
     /// Containers built for tests, kept alive for the process.
     ///
@@ -359,13 +359,13 @@ enum HUDTestFactory {
     /// The panel's store on a mock key.
     @MainActor
     static func makeStore(backend: MockKeyBackend,
-                          suite: String = "HUDTests-\(UUID().uuidString)") -> HUDStore {
+                          suite: String = "HUDTests-\(UUID().uuidString)") -> PanelStore {
         makeContainer(backend: backend, suite: suite).panel
     }
 
     /// The container a panel store was built in — the way to the other windows' stores.
     @MainActor
-    static func container(for store: HUDStore) -> AppContainer {
+    static func container(for store: PanelStore) -> AppContainer {
         guard let container = retained.first(where: { $0.panel === store }) else {
             preconditionFailure("the store was not built by this factory")
         }
@@ -373,14 +373,14 @@ enum HUDTestFactory {
     }
 
     @MainActor
-    static func manager(for store: HUDStore) -> ManagerStore { container(for: store).manager }
+    static func manager(for store: PanelStore) -> ManagerStore { container(for: store).manager }
 
     @MainActor
-    static func reset(for store: HUDStore) -> ResetCoordinator { container(for: store).reset }
+    static func reset(for store: PanelStore) -> ResetCoordinator { container(for: store).reset }
 
     /// The usual starting point: one key, unlocked, with two accounts on it.
     @MainActor
-    static func unlockedStore(accounts: [Account]? = nil) async -> (HUDStore, MockKeyBackend, FidoDevice) {
+    static func unlockedStore(accounts: [Account]? = nil) async -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()
         let device = MockKeyBackend.device()
         backend.devices = [device]
@@ -401,7 +401,7 @@ enum HUDTestFactory {
     /// Labels are per account now, so a test that wants chips has to say which account they
     /// belong to — there is no global list left to write into.
     @MainActor
-    static func seedLabels(_ store: HUDStore, _ labels: [String]) {
+    static func seedLabels(_ store: PanelStore, _ labels: [String]) {
         guard let target = store.labelTarget(for: store.selection) else {
             XCTFail("no account selected, so there is no history to seed")
             return
