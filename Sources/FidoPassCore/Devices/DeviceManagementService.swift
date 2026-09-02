@@ -7,9 +7,9 @@ import CLibfido2
 /// is the handling: the PIN wiping, and the timeout on reset.
 final class DeviceManagementService: DeviceManaging, @unchecked Sendable {
 
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
 
-    init(deviceRepository: DeviceRepositoryProtocol) {
+    init(deviceRepository: DeviceAccessing) {
         self.deviceRepository = deviceRepository
     }
 

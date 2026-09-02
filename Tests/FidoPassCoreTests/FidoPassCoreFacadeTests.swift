@@ -36,9 +36,9 @@ final class FidoPassCoreFacadeTests: XCTestCase {
                                 secretDerivationService: secret,
                                 passwordGenerator: passwordGenerator)
 
-        let devices = try core.listDevices(limit: 4)
+        let devices = try core.listDevices()
         XCTAssertEqual(devices, [expectedDevice])
-        XCTAssertEqual(deviceLister.listedLimits, [4])
+        XCTAssertEqual(deviceLister.listCalls, 1)
 
         let enrolled = try core.enroll(accountId: "acct",
                                        kind: .local,

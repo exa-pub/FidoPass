@@ -2,9 +2,9 @@ import Foundation
 import CryptoKit
 
 final class SecretEncryptionService: SecretEncrypting, Sendable {
-    private let secretDerivationService: SecretDerivationServiceProtocol
+    private let secretDerivationService: SecretDeriving
 
-    init(secretDerivationService: SecretDerivationServiceProtocol) {
+    init(secretDerivationService: SecretDeriving) {
         self.secretDerivationService = secretDerivationService
     }
 

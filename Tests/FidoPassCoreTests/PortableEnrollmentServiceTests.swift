@@ -53,7 +53,7 @@ final class PortableEnrollmentServiceTests: XCTestCase {
 
         let (account, generated) = try service.enrollPortable(accountId: "acct",
                                                                requireUV: false,
-                                                               devicePath: nil,
+                                                               devicePath: "/dev/mock",
                                                                askPIN: nil,
                                                                importedKeyB64: imported,
                                                                onStep: nil)
@@ -76,7 +76,7 @@ final class PortableEnrollmentServiceTests: XCTestCase {
                                                 secretDerivationService: secret)
         XCTAssertThrowsError(try service.enrollPortable(accountId: "acct",
                                                          requireUV: true,
-                                                         devicePath: nil,
+                                                         devicePath: "/dev/mock",
                                                          askPIN: nil,
                                                          importedKeyB64: "short",
                                                                onStep: nil))

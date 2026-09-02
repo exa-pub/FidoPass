@@ -9,9 +9,9 @@ import CLibfido2
 /// `UNSUPPORTED_OPTION` for a subcommand it does not have, and "0x01" tells a user nothing.
 final class DeviceConfigurationService: DeviceConfiguring, @unchecked Sendable {
 
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
 
-    init(deviceRepository: DeviceRepositoryProtocol) {
+    init(deviceRepository: DeviceAccessing) {
         self.deviceRepository = deviceRepository
     }
 
@@ -23,13 +23,7 @@ final class DeviceConfigurationService: DeviceConfiguring, @unchecked Sendable {
 
             // The request says "flip", not "set to true", so the new state is whatever the
             // key now reports — asking is the only way to know which way it went.
-            guard let rawInfo = fido_cbor_info_new() else {
-                throw FidoPassError.invalidState("cbor_info_new")
-            }
-            var info: OpaquePointer? = rawInfo
-            defer { fido_cbor_info_free(&info) }
-            try Libfido2Context.check(fido_dev_get_cbor_info(device, rawInfo), operation: "get_cbor_info")
-            return Self.option(named: "alwaysUv", in: rawInfo) ?? false
+            return try CborInfo.with(device: device) { $0.option("alwaysUv") ?? false }
         }
     }
 
@@ -68,16 +62,5 @@ final class DeviceConfigurationService: DeviceConfiguring, @unchecked Sendable {
             throw FidoPassError.unsupported("This key cannot change ‘\(setting)’")
         }
         try Libfido2Context.check(rc, operation: "config: \(setting)")
-    }
-
-    private static func option(named name: String, in info: OpaquePointer?) -> Bool? {
-        let count = fido_cbor_info_options_len(info)
-        guard let names = fido_cbor_info_options_name_ptr(info),
-              let values = fido_cbor_info_options_value_ptr(info) else { return nil }
-        for index in 0..<Int(count) {
-            guard let raw = names.advanced(by: index).pointee else { continue }
-            if String(cString: raw) == name { return values.advanced(by: index).pointee }
-        }
-        return nil
     }
 }

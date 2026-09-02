@@ -2,9 +2,9 @@ import Foundation
 import CLibfido2
 
 final class HmacSecretService: Sendable {
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
 
-    init(deviceRepository: DeviceRepositoryProtocol) {
+    init(deviceRepository: DeviceAccessing) {
         self.deviceRepository = deviceRepository
     }
 
@@ -12,7 +12,10 @@ final class HmacSecretService: Sendable {
                  salt: Data,
                  requireUV: Bool,
                  pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
+        guard let devicePath = account.devicePath else {
+            throw FidoPassError.invalidState("The account is not attached to a connected key")
+        }
+        return try deviceRepository.withOpenedDevice(path: devicePath) { device, _ in
             try deviceRepository.ensureHmacSecretSupported(device)
             guard let assertion = fido_assert_new() else {
                 throw FidoPassError.invalidState("assert_new")

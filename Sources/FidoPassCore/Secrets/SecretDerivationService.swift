@@ -1,6 +1,6 @@
 import Foundation
 
-final class SecretDerivationService: SecretDerivationServiceProtocol, Sendable {
+final class SecretDerivationService: SecretDeriving, Sendable {
     private let hmacSecretService: HmacSecretService
 
     init(hmacSecretService: HmacSecretService) {

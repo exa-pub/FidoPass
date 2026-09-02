@@ -1,7 +1,7 @@
 import Foundation
 import CLibfido2
 
-final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
+final class EnrollmentService: Enrolling, Sendable {
     /// Marks a portable payload stored in the credential's display-name field.
     ///
     /// CTAP gives a credential two free-form strings (`name`, `displayName`) and portable
@@ -10,9 +10,9 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
     /// self-describing instead of relying on "base64 that happens to be 32 bytes".
     private static let portablePayloadPrefix = "fp-ext:v1:"
 
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
 
-    init(deviceRepository: DeviceRepositoryProtocol) {
+    init(deviceRepository: DeviceAccessing) {
         self.deviceRepository = deviceRepository
     }
 
@@ -20,7 +20,7 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
                 kind: AccountKind,
                 displayName: String,
                 requireUV: Bool,
-                devicePath: String?,
+                devicePath: String,
                 askPIN: (@Sendable () -> String?)?) throws -> Account {
         let trimmedId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty else {
@@ -32,10 +32,10 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
         // resident-key slot each. Enumeration needs no user presence, so this costs one
         // silent round-trip. It runs before the device is opened for makeCredential —
         // nesting two opens on the same device would fail.
-        if let path = devicePath, let pin = askPIN?(), !pin.isEmpty {
+        if let pin = askPIN?(), !pin.isEmpty {
             // Best-effort: a key that cannot list its credentials still deserves to be
             // enrolled, so a failure to check is not a failure to create.
-            let existing = (try? enumerateAccounts(rpId: kind.rpId, devicePath: path, pin: pin)) ?? []
+            let existing = (try? enumerateAccounts(rpId: kind.rpId, devicePath: devicePath, pin: pin)) ?? []
             if existing.contains(where: { $0.id == trimmedId }) {
                 throw FidoPassError.invalidState("An account named ‘\(trimmedId)’ already exists on this device")
             }
@@ -129,10 +129,7 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
             // An authenticator with nothing stored for this relying party reports it as an
             // error rather than an empty list.
             if rc == FIDO_ERR_NO_CREDENTIALS { return [] }
-            if rc == FIDO_ERR_INVALID_COMMAND || rc == FIDO_ERR_UNSUPPORTED_OPTION {
-                throw FidoPassError.unsupported("This key does not support credential management")
-            }
-            try Libfido2Context.check(rc, operation: "credman_get_dev_rk")
+            try Libfido2Context.checkCredman(rc, operation: "credman_get_dev_rk")
 
             let count = fido_credman_rk_count(rawList)
             var accounts: [Account] = []
@@ -168,7 +165,10 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
         guard let credId = Data(base64Encoded: account.credentialIdB64) else {
             throw FidoPassError.invalidState("Credential ID is not valid base64")
         }
-        try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
+        guard let devicePath = account.devicePath else {
+            throw FidoPassError.invalidState("The account is not attached to a connected key")
+        }
+        try deviceRepository.withOpenedDevice(path: devicePath) { device, _ in
             let rc = PinScope.withPIN(pin) { pinCString in
                 credId.withUnsafeBytes { pointer -> Int32 in
                     fido_credman_del_dev_rk(device,
@@ -177,13 +177,10 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
                                             pinCString)
                 }
             }
-            if rc == FIDO_ERR_INVALID_COMMAND {
-                throw FidoPassError.unsupported("Credential Management is not supported by the device")
-            }
             if rc == FIDO_ERR_PIN_REQUIRED {
                 throw FidoPassError.invalidState("PIN is required for deletion")
             }
-            try Libfido2Context.check(rc, operation: "credman_del")
+            try Libfido2Context.checkCredman(rc, operation: "credman_del")
         }
     }
 
@@ -193,7 +190,10 @@ final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
         guard let credentialId = Data(base64Encoded: account.credentialIdB64) else {
             throw FidoPassError.invalidState("Credential ID is not valid base64")
         }
-        try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
+        guard let devicePath = account.devicePath else {
+            throw FidoPassError.invalidState("The account is not attached to a connected key")
+        }
+        try deviceRepository.withOpenedDevice(path: devicePath) { device, _ in
             guard let residentCredential = fido_cred_new() else {
                 throw FidoPassError.invalidState("cred_new")
             }

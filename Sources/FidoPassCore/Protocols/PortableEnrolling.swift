@@ -1,9 +1,9 @@
 import Foundation
 
-public protocol PortableEnrollmentServiceProtocol: Sendable {
+public protocol PortableEnrolling: Sendable {
     func enrollPortable(accountId: String,
                         requireUV: Bool,
-                        devicePath: String?,
+                        devicePath: String,
                         askPIN: (@Sendable () -> String?)?,
                         importedKeyB64: String?,
                         onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?)

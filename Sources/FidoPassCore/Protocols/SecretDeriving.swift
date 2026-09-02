@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol SecretDerivationServiceProtocol: Sendable {
+public protocol SecretDeriving: Sendable {
     func deriveSecret(account: Account,
                       label: String,
                       requireUV: Bool,

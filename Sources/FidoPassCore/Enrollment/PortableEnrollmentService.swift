@@ -1,11 +1,11 @@
 import Foundation
 
-final class PortableEnrollmentService: PortableEnrollmentServiceProtocol, Sendable {
-    private let enrollmentService: EnrollmentServiceProtocol
-    private let secretDerivationService: SecretDerivationServiceProtocol
+final class PortableEnrollmentService: PortableEnrolling, Sendable {
+    private let enrollmentService: Enrolling
+    private let secretDerivationService: SecretDeriving
 
-    init(enrollmentService: EnrollmentServiceProtocol,
-         secretDerivationService: SecretDerivationServiceProtocol) {
+    init(enrollmentService: Enrolling,
+         secretDerivationService: SecretDeriving) {
         self.enrollmentService = enrollmentService
         self.secretDerivationService = secretDerivationService
     }
@@ -18,7 +18,7 @@ final class PortableEnrollmentService: PortableEnrollmentServiceProtocol, Sendab
     /// second prompt looks like the app hanging.
     func enrollPortable(accountId: String,
                         requireUV: Bool,
-                        devicePath: String?,
+                        devicePath: String,
                         askPIN: (@Sendable () -> String?)?,
                         importedKeyB64: String?,
                         onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {

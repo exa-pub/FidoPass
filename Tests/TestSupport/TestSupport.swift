@@ -51,27 +51,27 @@ public final class MockDeviceLister: DeviceListing, @unchecked Sendable {
 
     public var devices: [FidoDevice] = []
     public var listDevicesError: Error?
-    public private(set) var listedLimits: [Int] = []
+    public private(set) var listCalls = 0
 
-    public func listDevices(limit: Int) throws -> [FidoDevice] {
-        listedLimits.append(limit)
+    public func listDevices() throws -> [FidoDevice] {
+        listCalls += 1
         if let error = listDevicesError { throw error }
         return devices
     }
 }
 
-public final class MockEnrollmentService: EnrollmentServiceProtocol, @unchecked Sendable {
+public final class MockEnrollmentService: Enrolling, @unchecked Sendable {
     public struct EnrollCall: Equatable {
         public let accountId: String
         public let kind: AccountKind
         public let displayName: String
         public let requireUV: Bool
-        public let devicePath: String?
+        public let devicePath: String
     }
 
     public init() {}
 
-    public var enrollClosure: ((String, AccountKind, String, Bool, String?, (@Sendable () -> String?)?) throws -> Account)?
+    public var enrollClosure: ((String, AccountKind, String, Bool, String, (@Sendable () -> String?)?) throws -> Account)?
     public private(set) var enrollCalls: [EnrollCall] = []
 
     public var enumerateClosure: ((String, String, String?) throws -> [Account])?
@@ -87,7 +87,7 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol, @unchecked 
                        kind: AccountKind,
                        displayName: String,
                        requireUV: Bool,
-                       devicePath: String?,
+                       devicePath: String,
                        askPIN: (@Sendable () -> String?)?) throws -> Account {
         enrollCalls.append(EnrollCall(accountId: accountId,
                                       kind: kind,
@@ -129,19 +129,19 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol, @unchecked 
     }
 }
 
-public final class MockPortableEnrollmentService: PortableEnrollmentServiceProtocol, @unchecked Sendable {
+public final class MockPortableEnrollmentService: PortableEnrolling, @unchecked Sendable {
     public init() {}
 
-    public var enrollPortableClosure: ((String, Bool, String?, (@Sendable () -> String?)?, String?) throws -> (Account, String?))?
+    public var enrollPortableClosure: ((String, Bool, String, (@Sendable () -> String?)?, String?) throws -> (Account, String?))?
     public private(set) var reportedSteps: [PortableEnrollmentStep] = []
-    public private(set) var enrollPortableCalls: [(String, Bool, String?)] = []
+    public private(set) var enrollPortableCalls: [(String, Bool, String)] = []
 
     public var exportClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> String)?
     public private(set) var exportCalls: [(Account, Bool)] = []
 
     public func enrollPortable(accountId: String,
                                requireUV: Bool,
-                               devicePath: String?,
+                               devicePath: String,
                                askPIN: (@Sendable () -> String?)?,
                                importedKeyB64: String?,
                                onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
@@ -170,7 +170,7 @@ public final class MockPortableEnrollmentService: PortableEnrollmentServiceProto
     }
 }
 
-public final class MockSecretDerivationService: SecretDerivationServiceProtocol, @unchecked Sendable {
+public final class MockSecretDerivationService: SecretDeriving, @unchecked Sendable {
     public init() {}
 
     public var deriveSecretClosure: ((Account, String, Bool, (@Sendable () -> String?)?) throws -> Data)?

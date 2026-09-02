@@ -2,7 +2,7 @@ import Foundation
 
 /// Operations that change the authenticator itself rather than what is stored on it.
 ///
-/// Separate from `EnrollmentServiceProtocol` because the blast radius is different: enrolling
+/// Separate from `Enrolling` because the blast radius is different: enrolling
 /// adds a credential, these three change or destroy the key's own state. Behind a protocol
 /// so the app layer can be tested on a machine with no authenticator — and so no test ever
 /// needs real hardware to reach this code, which is the code that could brick a key.

@@ -2,7 +2,7 @@ import Foundation
 
 /// Wide, read-only interrogation of an authenticator.
 ///
-/// Separate from `DeviceRepositoryProtocol`, which is device *access* — open, list, read the
+/// Separate from `DeviceAccessing`, which is device *access* — open, list, read the
 /// small status the HUD routes on. This is the reading done because a person asked to look,
 /// and it is behind a protocol for the usual reason: CI has no authenticator.
 ///

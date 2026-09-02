@@ -3,28 +3,51 @@ import Foundation
 public final class FidoPassCore: Sendable {
     public static let shared = FidoPassCore()
 
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
     private let deviceLister: DeviceListing
-    private let enrollmentService: EnrollmentServiceProtocol
-    private let portableEnrollmentService: PortableEnrollmentServiceProtocol
+    private let enrollmentService: Enrolling
+    private let portableEnrollmentService: PortableEnrolling
     private let passwordGenerator: PasswordGenerating
     private let secretEncryption: SecretEncrypting
     private let deviceManagement: DeviceManaging
     private let inspection: AuthenticatorInspecting
     private let configuration: DeviceConfiguring
 
-    public init(deviceLister: DeviceListing? = nil,
-                enrollmentService: EnrollmentServiceProtocol? = nil,
-                portableEnrollmentService: PortableEnrollmentServiceProtocol? = nil,
-                secretDerivationService: SecretDerivationServiceProtocol? = nil,
-                passwordGenerator: PasswordGenerating? = nil,
-                secretEncryption: SecretEncrypting? = nil,
-                deviceManagement: DeviceManaging? = nil,
-                inspection: AuthenticatorInspecting? = nil,
-                configuration: DeviceConfiguring? = nil) {
+    public convenience init(deviceLister: DeviceListing? = nil,
+                            enrollmentService: Enrolling? = nil,
+                            portableEnrollmentService: PortableEnrolling? = nil,
+                            secretDerivationService: SecretDeriving? = nil,
+                            passwordGenerator: PasswordGenerating? = nil,
+                            secretEncryption: SecretEncrypting? = nil,
+                            deviceManagement: DeviceManaging? = nil,
+                            inspection: AuthenticatorInspecting? = nil,
+                            configuration: DeviceConfiguring? = nil) {
+        self.init(deviceRepository: DeviceRepository(),
+                  deviceLister: deviceLister,
+                  enrollmentService: enrollmentService,
+                  portableEnrollmentService: portableEnrollmentService,
+                  secretDerivationService: secretDerivationService,
+                  passwordGenerator: passwordGenerator,
+                  secretEncryption: secretEncryption,
+                  deviceManagement: deviceManagement,
+                  inspection: inspection,
+                  configuration: configuration)
+    }
+
+    /// The designated initialiser, with the device repository itself substitutable. Internal:
+    /// the repository hands out raw libfido2 handles, which never cross the module boundary.
+    init(deviceRepository resolvedDeviceRepository: DeviceAccessing,
+         deviceLister: DeviceListing? = nil,
+         enrollmentService: Enrolling? = nil,
+         portableEnrollmentService: PortableEnrolling? = nil,
+         secretDerivationService: SecretDeriving? = nil,
+         passwordGenerator: PasswordGenerating? = nil,
+         secretEncryption: SecretEncrypting? = nil,
+         deviceManagement: DeviceManaging? = nil,
+         inspection: AuthenticatorInspecting? = nil,
+         configuration: DeviceConfiguring? = nil) {
         Libfido2Context.initialize()
 
-        let resolvedDeviceRepository = DeviceRepository()
         self.deviceRepository = resolvedDeviceRepository
         self.deviceLister = deviceLister ?? resolvedDeviceRepository
 
@@ -47,8 +70,8 @@ public final class FidoPassCore: Sendable {
         self.configuration = configuration ?? DeviceConfigurationService(deviceRepository: resolvedDeviceRepository)
     }
 
-    public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
-        try deviceLister.listDevices(limit: limit)
+    public func listDevices() throws -> [FidoDevice] {
+        try deviceLister.listDevices()
     }
 
     /// Reads authenticator state that needs no user interaction: PIN attempts left,
@@ -99,7 +122,7 @@ public final class FidoPassCore: Sendable {
                        kind: AccountKind = .local,
                        displayName: String = "",
                        requireUV: Bool = true,
-                       devicePath: String? = nil,
+                       devicePath: String,
                        askPIN: (@Sendable () -> String?)? = nil) throws -> Account {
         try enrollmentService.enroll(accountId: accountId,
                                      kind: kind,
@@ -111,7 +134,7 @@ public final class FidoPassCore: Sendable {
 
     public func enrollPortable(accountId: String,
                                requireUV: Bool = true,
-                               devicePath: String? = nil,
+                               devicePath: String,
                                askPIN: (@Sendable () -> String?)? = nil,
                                importedKeyB64: String?,
                                onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (Account, String?) {

@@ -1,11 +1,11 @@
 import Foundation
 
-public protocol EnrollmentServiceProtocol: Sendable {
+public protocol Enrolling: Sendable {
     func enroll(accountId: String,
                 kind: AccountKind,
                 displayName: String,
                 requireUV: Bool,
-                devicePath: String?,
+                devicePath: String,
                 askPIN: (@Sendable () -> String?)?) throws -> Account
 
     func enumerateAccounts(rpId: String,

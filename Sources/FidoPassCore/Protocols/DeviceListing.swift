@@ -7,5 +7,5 @@ import CLibfido2
 /// appear in any public signature. Everything that needs an open device sits behind the
 /// higher-level service protocols instead.
 public protocol DeviceListing: Sendable {
-    func listDevices(limit: Int) throws -> [FidoDevice]
+    func listDevices() throws -> [FidoDevice]
 }
