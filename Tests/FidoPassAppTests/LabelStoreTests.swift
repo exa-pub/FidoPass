@@ -311,7 +311,7 @@ final class PreferencesTests: XCTestCase {
 
         // Same key, new session handle: the memory has to still apply.
         let reconnected = MockKeyBackend.device(path: "/dev/whatever-else")
-        XCTAssertEqual(preferences.lastUsed?.deviceSignature, Preferences.signature(for: reconnected))
+        XCTAssertEqual(preferences.lastUsed?.deviceSignature, reconnected.modelSignature)
     }
 
     /// The account id is the only piece of account data that reaches the disk, and it is

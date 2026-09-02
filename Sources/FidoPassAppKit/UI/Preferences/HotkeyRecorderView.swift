@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 
 /// Records a key combination by watching the next key press.
 ///
@@ -58,10 +59,10 @@ struct HotkeyRecorderView: View {
     static func combo(from event: NSEvent) -> HotkeyCombo? {
         var carbon: UInt32 = 0
         var display = ""
-        if event.modifierFlags.contains(.control) { carbon |= 0x1000; display += "⌃" }
-        if event.modifierFlags.contains(.option)  { carbon |= 0x0800; display += "⌥" }
-        if event.modifierFlags.contains(.shift)   { carbon |= 0x0200; display += "⇧" }
-        if event.modifierFlags.contains(.command) { carbon |= 0x0100; display += "⌘" }
+        if event.modifierFlags.contains(.control) { carbon |= UInt32(controlKey); display += "⌃" }
+        if event.modifierFlags.contains(.option)  { carbon |= UInt32(optionKey); display += "⌥" }
+        if event.modifierFlags.contains(.shift)   { carbon |= UInt32(shiftKey); display += "⇧" }
+        if event.modifierFlags.contains(.command) { carbon |= UInt32(cmdKey); display += "⌘" }
         // Without a modifier the shortcut would fire while typing in any other application.
         guard carbon != 0 else { return nil }
         let character = (event.charactersIgnoringModifiers ?? "").uppercased()

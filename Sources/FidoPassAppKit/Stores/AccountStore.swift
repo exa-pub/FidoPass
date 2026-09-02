@@ -90,7 +90,7 @@ final class AccountStore: ObservableObject {
                 devicePath: String,
                 importedKeyB64: String?,
                 onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) async throws -> (Account, String?) {
-        guard let provider = pinProviderFor(devicePath) else { throw AccountStoreError.keyLocked }
+        guard let provider = pinProviderFor(devicePath) else { throw KeyLockedError() }
 
         let result: (Account, String?)
         switch kind {
@@ -115,8 +115,8 @@ final class AccountStore: ObservableObject {
     }
 
     func delete(_ account: Account) async throws {
-        guard let path = account.devicePath else { throw AccountStoreError.keyLocked }
-        guard let pin = pinFor(path) else { throw AccountStoreError.keyLocked }
+        guard let path = account.devicePath else { throw KeyLockedError() }
+        guard let pin = pinFor(path) else { throw KeyLockedError() }
         try await worker.run { try $0.deleteAccount(account, pin: pin) }
         accounts.removeAll { $0.id == account.id && $0.devicePath == path }
     }
@@ -125,25 +125,15 @@ final class AccountStore: ObservableObject {
 
     func exportBackupKey(for account: Account) async throws -> String {
         guard let path = account.devicePath, let provider = pinProviderFor(path) else {
-            throw AccountStoreError.keyLocked
+            throw KeyLockedError()
         }
         return try await worker.run { try $0.exportImportedKey(account, pinProvider: provider) }
     }
 
     func deriveEncryptionKey(for account: Account, label: String) async throws -> EncryptionKey {
         guard let path = account.devicePath, let provider = pinProviderFor(path) else {
-            throw AccountStoreError.keyLocked
+            throw KeyLockedError()
         }
         return try await worker.run { try $0.deriveEncryptionKey(account: account, label: label, pinProvider: provider) }
-    }
-}
-
-enum AccountStoreError: LocalizedError {
-    case keyLocked
-
-    var errorDescription: String? {
-        switch self {
-        case .keyLocked: return "The security key is locked. Enter its PIN and try again."
-        }
     }
 }

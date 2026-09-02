@@ -1,8 +1,6 @@
 import SwiftUI
 import FidoPassCore
 
-// MARK: - Shared pieces
-
 struct AuthenticatorOverviewView: View {
     let info: AuthenticatorInfo
     let inventory: CredentialInventory?
@@ -137,4 +135,3 @@ struct AuthenticatorOverviewView: View {
     }
 }
 
-// MARK: - Credentials

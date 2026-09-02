@@ -57,11 +57,6 @@ public final class FidoPassCore {
         try deviceRepository.status(devicePath: devicePath)
     }
 
-    /// Convenience for the most safety-critical field. `nil` means the authenticator did
-    /// not report it — never treat that as "plenty left".
-    public func pinRetriesRemaining(devicePath: String) throws -> Int? {
-        try status(devicePath: devicePath).pinRetriesRemaining
-    }
 
     // MARK: - Inspection
 

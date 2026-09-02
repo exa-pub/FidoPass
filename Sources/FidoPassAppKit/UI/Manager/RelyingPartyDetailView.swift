@@ -1,8 +1,6 @@
 import SwiftUI
 import FidoPassCore
 
-// MARK: - Shared pieces
-
 struct RelyingPartyDetailView: View {
     let party: CredentialInventory.RelyingParty
     let unreadableReason: String?

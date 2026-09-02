@@ -36,7 +36,6 @@ enum FidoPassErrorPresenter {
         var title: String
         var recovery: String?
         var details: String?
-        var isRetryable: Bool
 
         func fullText(retriesRemaining: Int? = nil, includeDetails: Bool = true) -> String {
             var parts = [title]
@@ -71,8 +70,7 @@ enum FidoPassErrorPresenter {
         return Message(kind: .other,
                        title: error.localizedDescription,
                        recovery: nil,
-                       details: nil,
-                       isRetryable: false)
+                       details: nil)
     }
 
     private static func message(for error: FidoPassError) -> Message {
@@ -81,22 +79,19 @@ enum FidoPassErrorPresenter {
             return Message(kind: .noDevices,
                            title: "No security key found",
                            recovery: "Connect your key and try again.",
-                           details: error.errorDescription,
-                           isRetryable: true)
+                           details: error.errorDescription)
 
         case .unsupported(let feature):
             return Message(kind: .unsupported,
                            title: "This key cannot be used",
                            recovery: feature,
-                           details: error.errorDescription,
-                           isRetryable: false)
+                           details: error.errorDescription)
 
         case .invalidState(let reason):
             return Message(kind: .other,
                            title: reason,
                            recovery: nil,
-                           details: nil,
-                           isRetryable: false)
+                           details: nil)
 
         case .libfido2(_, let status, _):
             return message(for: status, details: error.errorDescription)
@@ -112,106 +107,91 @@ enum FidoPassErrorPresenter {
             return Message(kind: .pinInvalid,
                            title: "Incorrect PIN",
                            recovery: nil,
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .pinAuthBlocked:
             return Message(kind: .pinAuthBlocked,
                            title: "Too many PIN attempts in a row",
                            recovery: "Unplug the key and plug it back in, then try again. One more wrong PIN after that may lock it for good.",
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .pinBlocked:
             return Message(kind: .pinBlocked,
                            title: "This key is locked",
                            recovery: "The PIN has been entered incorrectly too many times. Only a full FIDO reset will make the key usable again, and that erases every account on it — including the keys derived from them.",
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .pinRequired, .pinNotSet:
             return Message(kind: .pinRequired,
                            title: "This key has no PIN yet",
                            recovery: "Set a PIN on the key before enrolling accounts.",
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .pinPolicyViolation:
             return Message(kind: .pinRejectedByKey,
                            title: "The key will not accept that PIN",
                            recovery: "Choose a different one — longer, and not a run of repeated or consecutive digits. No PIN attempt was used.",
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .notAllowed:
             return Message(kind: .notAllowed,
                            title: "The key refused the request",
                            recovery: "It allows this only in a particular state, and it is not in that state now.",
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .noCredentials:
             return Message(kind: .noCredentials,
                            title: "No accounts on this key",
                            recovery: nil,
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .userActionTimeout:
             return Message(kind: .touchTimeout,
                            title: "The key was not touched in time",
                            recovery: "The key was waiting for a finger and gave up. Try again and touch it as soon as it starts blinking.",
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .actionTimeout:
             return Message(kind: .touchTimeout,
                            title: "The key was not touched in time",
                            recovery: "Try again and touch the key when it starts blinking.",
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .userPresenceRequired:
             return Message(kind: .touchRequired,
                            title: "The key needs to be touched",
                            recovery: "Try again and touch the key when it starts blinking.",
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .keyStoreFull:
             return Message(kind: .storageFull,
                            title: "No free slots left on this key",
                            recovery: "Delete an account you no longer need, or use another key.",
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .unsupportedOption, .unsupportedExtension, .invalidCommand:
             return Message(kind: .unsupported,
                            title: "This key does not support the operation",
                            recovery: "FidoPass needs a CTAP2 key with the hmac-secret extension.",
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .operationDenied:
             return Message(kind: .operationDenied,
                            title: "The key refused the request",
                            recovery: "Touch the key — or place your finger on it — when it starts blinking, then try again.",
-                           details: details,
-                           isRetryable: true)
+                           details: details)
 
         case .invalidLength:
             return Message(kind: .malformedRequest,
                            title: "The request was rejected before it reached the key",
                            recovery: "This is a bug in FidoPass rather than a problem with your key. The details below identify it.",
-                           details: details,
-                           isRetryable: false)
+                           details: details)
 
         case .other:
             return Message(kind: .other,
                            title: "The security key reported an error",
                            recovery: nil,
-                           details: details,
-                           isRetryable: true)
+                           details: details)
         }
     }
 }

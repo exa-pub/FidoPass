@@ -91,14 +91,14 @@ extension CredentialUserFieldsTests {
     /// "Portable userName must contain base64 External (32 bytes)".
     func testPortablePayloadIsWrittenWhereEveryVersionLooksForIt() {
         let payload = PortablePayload(external: Data(repeating: 0x5A, count: 32))!
-        let name = EnrollmentService.credentialNameForTesting(kind: .portable,
+        let name = EnrollmentService.credentialName(kind: .portable,
                                                               accountId: "vault",
                                                               portable: payload)
         XCTAssertEqual(name, payload.base64, "the payload belongs in the name field")
         XCTAssertEqual(Data(base64Encoded: name)?.count, 32,
                        "older versions require exactly 32 base64-decoded bytes here")
 
-        let display = EnrollmentService.credentialDisplayNameForTesting(kind: .portable,
+        let display = EnrollmentService.credentialDisplayName(kind: .portable,
                                                                         accountId: "vault",
                                                                         displayName: "",
                                                                         portable: payload)
@@ -106,7 +106,7 @@ extension CredentialUserFieldsTests {
     }
 
     func testLocalAccountKeepsTheAccountIdInName() {
-        XCTAssertEqual(EnrollmentService.credentialNameForTesting(kind: .local,
+        XCTAssertEqual(EnrollmentService.credentialName(kind: .local,
                                                                   accountId: "vault",
                                                                   portable: nil),
                        "vault")
@@ -115,7 +115,7 @@ extension CredentialUserFieldsTests {
     /// Before the payload exists — during `makeCredential`, ahead of the second touch —
     /// there is nothing to write, and the fields must still be valid.
     func testPortableWithoutPayloadYetFallsBackToTheAccountId() {
-        XCTAssertEqual(EnrollmentService.credentialNameForTesting(kind: .portable,
+        XCTAssertEqual(EnrollmentService.credentialName(kind: .portable,
                                                                   accountId: "vault",
                                                                   portable: nil),
                        "vault")
@@ -124,8 +124,8 @@ extension CredentialUserFieldsTests {
     /// Round trip through the layout that is actually written.
     func testWrittenLayoutReadsBack() {
         let payload = PortablePayload(external: Data(repeating: 0x37, count: 32))!
-        let name = EnrollmentService.credentialNameForTesting(kind: .portable, accountId: "vault", portable: payload)
-        let display = EnrollmentService.credentialDisplayNameForTesting(kind: .portable,
+        let name = EnrollmentService.credentialName(kind: .portable, accountId: "vault", portable: payload)
+        let display = EnrollmentService.credentialDisplayName(kind: .portable,
                                                                         accountId: "vault",
                                                                         displayName: "",
                                                                         portable: payload)
@@ -136,7 +136,7 @@ extension CredentialUserFieldsTests {
     func testDisplayNameIsNeverEmpty() {
         for kind in AccountKind.allCases {
             for payload in [nil, PortablePayload(external: Data(repeating: 0x11, count: 32))] {
-                let value = EnrollmentService.credentialDisplayNameForTesting(kind: kind,
+                let value = EnrollmentService.credentialDisplayName(kind: kind,
                                                                               accountId: "vault",
                                                                               displayName: "",
                                                                               portable: payload)
@@ -146,7 +146,7 @@ extension CredentialUserFieldsTests {
     }
 
     func testExplicitDisplayNameWins() {
-        let value = EnrollmentService.credentialDisplayNameForTesting(kind: .local,
+        let value = EnrollmentService.credentialDisplayName(kind: .local,
                                                                       accountId: "vault",
                                                                       displayName: "Work vault",
                                                                       portable: nil)

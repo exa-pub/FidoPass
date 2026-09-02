@@ -182,9 +182,6 @@ public struct AuthenticatorInfo: Sendable, Hashable, Codable {
         self.uvModalities = uvModalities
     }
 
-    /// Whether the key can list its own credentials at all. A `false` here is the difference
-    /// between "this key holds nothing" and "this key cannot be asked".
-    public var canEnumerateCredentials: Bool { supportsCredentialManagement }
 
     /// The firmware version as the three bytes the key packs into one integer.
     public var firmwareVersionString: String {
@@ -222,11 +219,6 @@ public struct AuthenticatorInfo: Sendable, Hashable, Codable {
     public var canEnableEnterpriseAttestation: Bool { supportsConfiguration && option("ep") != nil }
     public var enterpriseAttestationEnabled: Bool { option("ep") == true }
 
-    /// Whether anything on this key is configurable. Used to hide the section rather than
-    /// show one full of disabled controls.
-    public var hasConfigurableSettings: Bool {
-        canToggleAlwaysUV || canSetMinimumPINLength || canForcePINChange || canEnableEnterpriseAttestation
-    }
 
     // MARK: - Formatting
 

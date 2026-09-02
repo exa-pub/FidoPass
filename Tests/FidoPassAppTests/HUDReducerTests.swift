@@ -119,7 +119,7 @@ final class HUDSelectionResolutionTests: XCTestCase {
     }
 
     func testRemembersTheAccountUsedLast() {
-        let memory = Preferences.LastUsed(deviceSignature: Preferences.signature(for: device),
+        let memory = Preferences.LastUsed(deviceSignature: device.modelSignature,
                                           accountId: "vault",
                                           label: "work")
         let ref = HUDReducer.resolveSelection(accounts: accounts, devices: [device], memory: memory)

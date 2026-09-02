@@ -81,13 +81,10 @@ final class Preferences: ObservableObject {
 
     // MARK: - Last used
 
-    nonisolated static func signature(for device: FidoDevice) -> String {
-        String(format: "%04X:%04X", device.vendorId, device.productId)
-    }
 
     func remember(accountId: String, label: String, device: FidoDevice) {
         guard rememberLastUsed else { return }
-        let value = LastUsed(deviceSignature: Self.signature(for: device), accountId: accountId, label: label)
+        let value = LastUsed(deviceSignature: device.modelSignature, accountId: accountId, label: label)
         lastUsed = value
         store(value, forKey: Key.lastUsed)
     }

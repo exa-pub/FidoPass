@@ -1,6 +1,5 @@
+import Carbon.HIToolbox
 import Foundation
-import FidoPassCore
-import ServiceManagement
 
 /// A key combination registered system-wide.
 struct HotkeyCombo: Codable, Equatable, Sendable {
@@ -13,5 +12,7 @@ struct HotkeyCombo: Codable, Equatable, Sendable {
     var display: String
 
     /// ⌘⌥P — "password", and unlikely to be taken by anything else.
-    static let `default` = HotkeyCombo(keyCode: 35, modifiers: 0x0100 | 0x0800, display: "⌘⌥P")
+    static let `default` = HotkeyCombo(keyCode: UInt32(kVK_ANSI_P),
+                                       modifiers: UInt32(cmdKey | optionKey),
+                                       display: "⌘⌥P")
 }

@@ -42,9 +42,9 @@ final class GenerationStore: ObservableObject {
 
     func generate(account: Account, label: String) async throws -> String {
         guard let path = account.devicePath, let provider = pinProviderFor(path) else {
-            throw AccountStoreError.keyLocked
+            throw KeyLockedError()
         }
-        guard let ref = AccountRef(account) else { throw AccountStoreError.keyLocked }
+        guard let ref = AccountRef(account) else { throw KeyLockedError() }
 
         busyRef = ref
         defer { busyRef = nil }

@@ -38,11 +38,11 @@ final class AuthenticatorInfoFormattingTests: XCTestCase {
         XCTAssertEqual(info.firmwareVersionString, "5.7.4")
     }
 
-    /// `canEnumerateCredentials` is the difference between "this key holds nothing" and
+    /// `supportsCredentialManagement` is the difference between "this key holds nothing" and
     /// "this key cannot be asked", which the UI must never render the same way.
-    func testCanEnumerateFollowsCredentialManagementSupport() {
-        XCTAssertFalse(Self.info(supportsCredMan: false).canEnumerateCredentials)
-        XCTAssertTrue(Self.info(supportsCredMan: true).canEnumerateCredentials)
+    func testCredentialManagementSupportIsReported() {
+        XCTAssertFalse(Self.info(supportsCredMan: false).supportsCredentialManagement)
+        XCTAssertTrue(Self.info(supportsCredMan: true).supportsCredentialManagement)
     }
 
     func testCredentialProtectionSummaries() {

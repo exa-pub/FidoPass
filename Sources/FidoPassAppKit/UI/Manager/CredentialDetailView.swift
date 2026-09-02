@@ -1,8 +1,6 @@
 import SwiftUI
 import FidoPassCore
 
-// MARK: - Shared pieces
-
 struct CredentialDetailView: View {
     let credential: ResidentCredential
     @State private var showsPublicKey = false

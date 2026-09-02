@@ -244,7 +244,7 @@ final class EnrollmentService: EnrollmentServiceProtocol {
     /// released version of FidoPass looks for it. Moving it elsewhere made accounts created
     /// by this build unreadable by earlier ones, which failed with
     /// "Portable userName must contain base64 External (32 bytes)".
-    private static func credentialName(kind: AccountKind,
+    static func credentialName(kind: AccountKind,
                                        accountId: String,
                                        portable: PortablePayload?) -> String {
         if kind == .portable, let portable {
@@ -253,24 +253,6 @@ final class EnrollmentService: EnrollmentServiceProtocol {
         return String(accountId.prefix(32))
     }
 
-    /// Never returns an empty string.
-    ///
-    /// An empty display name makes `fido_dev_make_cred` fail with
-    /// `FIDO_ERR_INVALID_LENGTH` before the request even reaches the authenticator, so
-    /// enrolment dies instantly with an error that names no cause. Accounts are routinely
-    /// created without a display name, so the account id is the fallback.
-    static func credentialDisplayNameForTesting(kind: AccountKind,
-                                                accountId: String,
-                                                displayName: String,
-                                                portable: PortablePayload?) -> String {
-        credentialDisplayName(kind: kind, accountId: accountId, displayName: displayName, portable: portable)
-    }
-
-    static func credentialNameForTesting(kind: AccountKind,
-                                         accountId: String,
-                                         portable: PortablePayload?) -> String {
-        credentialName(kind: kind, accountId: accountId, portable: portable)
-    }
 
     /// Value written to the credential's `displayName` field. Never empty.
     ///
@@ -282,7 +264,7 @@ final class EnrollmentService: EnrollmentServiceProtocol {
     /// A portable account has no room for a human-readable name: its `name` field is taken
     /// by the key material, so the account id goes here — the layout earlier versions write
     /// and expect.
-    private static func credentialDisplayName(kind: AccountKind,
+    static func credentialDisplayName(kind: AccountKind,
                                               accountId: String,
                                               displayName: String,
                                               portable: PortablePayload?) -> String {

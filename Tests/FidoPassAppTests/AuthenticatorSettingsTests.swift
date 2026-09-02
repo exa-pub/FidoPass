@@ -36,7 +36,7 @@ final class AuthenticatorSettingsTests: XCTestCase {
                 try await operation()
                 XCTFail("a locked key must refuse before the backend is reached")
             } catch {
-                XCTAssertTrue(error is DeviceStoreError)
+                XCTAssertTrue(error is KeyLockedError)
             }
         }
         XCTAssertTrue(backend.configCalls.isEmpty, "nothing may reach the key")
@@ -107,14 +107,12 @@ final class AuthenticatorSettingsTests: XCTestCase {
         XCTAssertFalse(full.alwaysUV)
         XCTAssertTrue(full.canSetMinimumPINLength)
         XCTAssertFalse(full.canEnableEnterpriseAttestation, "never mentioned — not implemented")
-        XCTAssertTrue(full.hasConfigurableSettings)
 
         let bare = MockKeyBackend.info(options: [.init(name: "clientPin", value: true)])
         XCTAssertFalse(bare.supportsConfiguration)
         XCTAssertFalse(bare.canToggleAlwaysUV)
         XCTAssertFalse(bare.canSetMinimumPINLength)
         XCTAssertFalse(bare.canForcePINChange)
-        XCTAssertFalse(bare.hasConfigurableSettings, "the whole section should be hidden")
     }
 
     func testOptionDistinguishesAbsentFromFalse() {

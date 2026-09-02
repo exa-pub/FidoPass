@@ -1,8 +1,6 @@
 import SwiftUI
 import FidoPassCore
 
-// MARK: - Shared pieces
-
 /// One label/value line. Values are selectable: half the point of this window is being able
 /// to take an id out of it and paste it somewhere else.
 struct ManagerRow: View {

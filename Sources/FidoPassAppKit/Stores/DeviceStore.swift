@@ -282,13 +282,13 @@ final class DeviceStore: ObservableObject {
     @discardableResult
     func toggleAlwaysUV(for device: FidoDevice) async throws -> Bool {
         let path = device.path
-        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        guard let pin = pin(for: path) else { throw KeyLockedError() }
         return try await worker.run { try $0.toggleAlwaysUV(devicePath: path, pin: pin) }
     }
 
     func setMinimumPINLength(for device: FidoDevice, length: Int) async throws {
         let path = device.path
-        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        guard let pin = pin(for: path) else { throw KeyLockedError() }
         try await worker.run { try $0.setMinimumPINLength(devicePath: path, length: length, pin: pin) }
         // The key may now consider the PIN in use too short, and it will refuse everything
         // else until that is dealt with. Re-read rather than assume.
@@ -297,7 +297,7 @@ final class DeviceStore: ObservableObject {
 
     func forcePINChange(for device: FidoDevice) async throws {
         let path = device.path
-        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        guard let pin = pin(for: path) else { throw KeyLockedError() }
         try await worker.run { try $0.forcePINChange(devicePath: path, pin: pin) }
         // The key now refuses every other operation, and the HUD routes on exactly this flag.
         await refreshStatus(for: device)
@@ -305,7 +305,7 @@ final class DeviceStore: ObservableObject {
 
     func enableEnterpriseAttestation(for device: FidoDevice) async throws {
         let path = device.path
-        guard let pin = pin(for: path) else { throw DeviceStoreError.keyLocked }
+        guard let pin = pin(for: path) else { throw KeyLockedError() }
         try await worker.run { try $0.enableEnterpriseAttestation(devicePath: path, pin: pin) }
     }
 
@@ -457,20 +457,5 @@ final class DeviceStore: ObservableObject {
         state.forcePINChange = status.forcePINChange
         state.aaguid = status.aaguid
         states[path] = state
-    }
-
-    func status(for device: FidoDevice) async -> DeviceStatus? {
-        let path = device.path
-        return try? await worker.run { try $0.status(devicePath: path) }
-    }
-}
-
-enum DeviceStoreError: LocalizedError {
-    case keyLocked
-
-    var errorDescription: String? {
-        switch self {
-        case .keyLocked: return "The security key is locked. Enter its PIN and try again."
-        }
     }
 }

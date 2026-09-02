@@ -1,8 +1,6 @@
 import SwiftUI
 import FidoPassCore
 
-// MARK: - Shared pieces
-
 struct ManagerSectionHeader: View {
     let title: String
     var note: String?
@@ -21,4 +19,3 @@ struct ManagerSectionHeader: View {
     }
 }
 
-// MARK: - Authenticator

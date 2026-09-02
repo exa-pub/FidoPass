@@ -362,7 +362,7 @@ final class HUDStore: ObservableObject {
               let state = devices.state(for: ref.devicePath) else { return nil }
         return LabelTarget(scope: LabelScope(credentialId: account.credentialIdB64),
                            accountId: account.id,
-                           deviceSignature: Preferences.signature(for: state.device),
+                           deviceSignature: state.device.modelSignature,
                            deviceName: state.device.displayName)
     }
 

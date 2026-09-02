@@ -31,7 +31,7 @@ enum HUDReducer {
                 guard account.id == memory.accountId,
                       let path = account.devicePath,
                       let device = devices.first(where: { $0.path == path }) else { return false }
-                return Preferences.signature(for: device) == memory.deviceSignature
+                return device.modelSignature == memory.deviceSignature
             }
             if let matching, let ref = AccountRef(matching) { return ref }
         }

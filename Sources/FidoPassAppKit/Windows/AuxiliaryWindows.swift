@@ -99,9 +99,9 @@ final class AuxiliaryWindows {
             return
         }
         let window = makeWindow(title: "Welcome to FidoPass",
-                                content: AnyView(OnboardingView(preferences: store.preferences, onFinish: {
+                                content: AnyView(OnboardingView(preferences: store.preferences, onFinish: { [weak self] in
                                     onFinish()
-                                    AuxiliaryWindows.shared.closeOnboarding()
+                                    self?.closeOnboarding()
                                 })),
                                 size: nil,
                                 resizable: false)
