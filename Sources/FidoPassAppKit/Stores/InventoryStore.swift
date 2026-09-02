@@ -1,4 +1,4 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// What the manager window has read from each key.
@@ -57,7 +57,7 @@ final class InventoryStore: ObservableObject {
         readings[path] = reading
 
         do {
-            reading.info = try await worker.run { try $0.inspect(devicePath: path) }
+            reading.info = try await worker.device { try $0.inspect(devicePath: path) }
         } catch {
             reading.infoError = PresentedError(error)
         }
@@ -65,7 +65,7 @@ final class InventoryStore: ObservableObject {
         if let pin = pinFor(path) {
             reading.needsUnlock = false
             do {
-                reading.inventory = try await worker.run { try $0.inventory(devicePath: path, pin: pin) }
+                reading.inventory = try await worker.device { try $0.inventory(devicePath: path, pin: pin) }
             } catch {
                 reading.inventoryError = PresentedError(error)
             }
@@ -100,7 +100,7 @@ final class InventoryStore: ObservableObject {
         readings[path] = reading
 
         do {
-            reading.inventory = try await worker.run { try $0.inventory(devicePath: path, pin: pin) }
+            reading.inventory = try await worker.device { try $0.inventory(devicePath: path, pin: pin) }
         } catch {
             reading.inventoryError = PresentedError(error)
         }
@@ -128,7 +128,7 @@ final class InventoryStore: ObservableObject {
         reading.isReading = true
         readings[path] = reading
         do {
-            reading.info = try await worker.run { try $0.inspect(devicePath: path) }
+            reading.info = try await worker.device { try $0.inspect(devicePath: path) }
             reading.infoError = nil
         } catch {
             reading.infoError = PresentedError(error)

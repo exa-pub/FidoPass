@@ -199,7 +199,7 @@ final class SecretEncryptionTests: XCTestCase {
 
     func testWipedKeyCannotBeUsed() throws {
         let service = makeService()
-        let key = makeKey()
+        var key = makeKey()
         let sealed = try service.seal("before", with: key)
 
         key.wipe()

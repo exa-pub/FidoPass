@@ -1,12 +1,12 @@
 import Foundation
 
-public protocol SecretDerivationServiceProtocol {
+public protocol SecretDerivationServiceProtocol: Sendable {
     func deriveSecret(account: Account,
                       label: String,
                       requireUV: Bool,
-                      pinProvider: (() -> String?)?) throws -> Data
+                      pinProvider: (@Sendable () -> String?)?) throws -> Data
 
     func deriveFixedComponent(account: Account,
                               requireUV: Bool,
-                              pinProvider: (() -> String?)?) throws -> Data
+                              pinProvider: (@Sendable () -> String?)?) throws -> Data
 }

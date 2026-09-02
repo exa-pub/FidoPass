@@ -1,4 +1,4 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// The one thread on which the authenticator is spoken to.

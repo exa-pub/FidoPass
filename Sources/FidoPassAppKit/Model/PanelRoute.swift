@@ -1,4 +1,4 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// What the HUD is showing.

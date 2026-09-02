@@ -19,7 +19,7 @@ final class CryptoEditorSessionTests: XCTestCase {
                                 secretDerivationService: derivation)
         let account = Account.fixture(id: "vault", kind: kind)
         let key = try core.deriveEncryptionKey(account: account, label: label, requireUV: true, pinProvider: nil)
-        return CryptoEditorSession(account: account, label: label, key: key, core: core)
+        return CryptoEditorSession(account: account, label: label, key: key, cipher: core.cipher)
     }
 
     /// Waits past the debounce so the session has recomputed.

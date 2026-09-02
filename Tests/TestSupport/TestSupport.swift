@@ -46,7 +46,7 @@ public final class InMemoryUbiquitousStore: NSUbiquitousKeyValueStore {
     }
 }
 
-public final class MockDeviceLister: DeviceListing {
+public final class MockDeviceLister: DeviceListing, @unchecked Sendable {
     public init() {}
 
     public var devices: [FidoDevice] = []
@@ -60,7 +60,7 @@ public final class MockDeviceLister: DeviceListing {
     }
 }
 
-public final class MockEnrollmentService: EnrollmentServiceProtocol {
+public final class MockEnrollmentService: EnrollmentServiceProtocol, @unchecked Sendable {
     public struct EnrollCall: Equatable {
         public let accountId: String
         public let kind: AccountKind
@@ -71,7 +71,7 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol {
 
     public init() {}
 
-    public var enrollClosure: ((String, AccountKind, String, Bool, String?, (() -> String?)?) throws -> Account)?
+    public var enrollClosure: ((String, AccountKind, String, Bool, String?, (@Sendable () -> String?)?) throws -> Account)?
     public private(set) var enrollCalls: [EnrollCall] = []
 
     public var enumerateClosure: ((String, String, String?) throws -> [Account])?
@@ -80,7 +80,7 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol {
     public var deleteClosure: ((Account, String?) throws -> Void)?
     public private(set) var deleteCalls: [(Account, String?)] = []
 
-    public var updateClosure: ((Account, Bool, (() -> String?)?) throws -> Void)?
+    public var updateClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> Void)?
     public private(set) var updateCalls: [(Account, Bool)] = []
 
     public func enroll(accountId: String,
@@ -88,7 +88,7 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol {
                        displayName: String,
                        requireUV: Bool,
                        devicePath: String?,
-                       askPIN: (() -> String?)?) throws -> Account {
+                       askPIN: (@Sendable () -> String?)?) throws -> Account {
         enrollCalls.append(EnrollCall(accountId: accountId,
                                       kind: kind,
                                       displayName: displayName,
@@ -123,28 +123,28 @@ public final class MockEnrollmentService: EnrollmentServiceProtocol {
 
     public func updateCredentialUserInfo(account: Account,
                                          requireUV: Bool,
-                                         pinProvider: (() -> String?)?) throws {
+                                         pinProvider: (@Sendable () -> String?)?) throws {
         updateCalls.append((account, requireUV))
         try updateClosure?(account, requireUV, pinProvider)
     }
 }
 
-public final class MockPortableEnrollmentService: PortableEnrollmentServiceProtocol {
+public final class MockPortableEnrollmentService: PortableEnrollmentServiceProtocol, @unchecked Sendable {
     public init() {}
 
-    public var enrollPortableClosure: ((String, Bool, String?, (() -> String?)?, String?) throws -> (Account, String?))?
+    public var enrollPortableClosure: ((String, Bool, String?, (@Sendable () -> String?)?, String?) throws -> (Account, String?))?
     public private(set) var reportedSteps: [PortableEnrollmentStep] = []
     public private(set) var enrollPortableCalls: [(String, Bool, String?)] = []
 
-    public var exportClosure: ((Account, Bool, (() -> String?)?) throws -> String)?
+    public var exportClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> String)?
     public private(set) var exportCalls: [(Account, Bool)] = []
 
     public func enrollPortable(accountId: String,
                                requireUV: Bool,
                                devicePath: String?,
-                               askPIN: (() -> String?)?,
+                               askPIN: (@Sendable () -> String?)?,
                                importedKeyB64: String?,
-                               onStep: ((PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
         enrollPortableCalls.append((accountId, requireUV, devicePath))
         onStep.map { report in [PortableEnrollmentStep.creatingCredential].forEach(report) }
         if let closure = enrollPortableClosure {
@@ -161,7 +161,7 @@ public final class MockPortableEnrollmentService: PortableEnrollmentServiceProto
 
     public func exportImportedKey(_ account: Account,
                                   requireUV: Bool,
-                                  pinProvider: (() -> String?)?) throws -> String {
+                                  pinProvider: (@Sendable () -> String?)?) throws -> String {
         exportCalls.append((account, requireUV))
         if let closure = exportClosure {
             return try closure(account, requireUV, pinProvider)
@@ -170,19 +170,19 @@ public final class MockPortableEnrollmentService: PortableEnrollmentServiceProto
     }
 }
 
-public final class MockSecretDerivationService: SecretDerivationServiceProtocol {
+public final class MockSecretDerivationService: SecretDerivationServiceProtocol, @unchecked Sendable {
     public init() {}
 
-    public var deriveSecretClosure: ((Account, String, Bool, (() -> String?)?) throws -> Data)?
+    public var deriveSecretClosure: ((Account, String, Bool, (@Sendable () -> String?)?) throws -> Data)?
     public private(set) var deriveSecretCalls: [(Account, String, Bool)] = []
 
-    public var deriveFixedClosure: ((Account, Bool, (() -> String?)?) throws -> Data)?
+    public var deriveFixedClosure: ((Account, Bool, (@Sendable () -> String?)?) throws -> Data)?
     public private(set) var deriveFixedCalls: [(Account, Bool)] = []
 
     public func deriveSecret(account: Account,
                              label: String,
                              requireUV: Bool,
-                             pinProvider: (() -> String?)?) throws -> Data {
+                             pinProvider: (@Sendable () -> String?)?) throws -> Data {
         deriveSecretCalls.append((account, label, requireUV))
         if let closure = deriveSecretClosure {
             return try closure(account, label, requireUV, pinProvider)
@@ -192,7 +192,7 @@ public final class MockSecretDerivationService: SecretDerivationServiceProtocol 
 
     public func deriveFixedComponent(account: Account,
                                      requireUV: Bool,
-                                     pinProvider: (() -> String?)?) throws -> Data {
+                                     pinProvider: (@Sendable () -> String?)?) throws -> Data {
         deriveFixedCalls.append((account, requireUV))
         if let closure = deriveFixedClosure {
             return try closure(account, requireUV, pinProvider)
@@ -201,17 +201,17 @@ public final class MockSecretDerivationService: SecretDerivationServiceProtocol 
     }
 }
 
-public final class MockPasswordGenerator: PasswordGenerating {
+public final class MockPasswordGenerator: PasswordGenerating, @unchecked Sendable {
     public init() {}
 
-    public var generateClosure: ((Account, String, PasswordPolicy?, Bool, (() -> String?)?) throws -> String)?
+    public var generateClosure: ((Account, String, PasswordPolicy?, Bool, (@Sendable () -> String?)?) throws -> String)?
     public private(set) var generateCalls: [(Account, String, PasswordPolicy?, Bool)] = []
 
     public func generatePassword(account: Account,
                                  label: String,
                                  policy override: PasswordPolicy?,
                                  requireUV: Bool,
-                                 pinProvider: (() -> String?)?) throws -> String {
+                                 pinProvider: (@Sendable () -> String?)?) throws -> String {
         generateCalls.append((account, label, override, requireUV))
         if let closure = generateClosure {
             return try closure(account, label, override, requireUV, pinProvider)

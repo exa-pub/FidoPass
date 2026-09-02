@@ -37,8 +37,8 @@ final class CryptoEditorSession: ObservableObject {
     let label: String
     let isPortable: Bool
 
-    private let key: EncryptionKey
-    private let core: FidoPassCore
+    private var key: EncryptionKey
+    private let cipher: SecretCipher
     private var pendingWork: Task<Void, Never>?
 
     /// Which side the user is editing.
@@ -48,12 +48,12 @@ final class CryptoEditorSession: ObservableObject {
     private enum Side { case plaintext, ciphertext }
     private var applyingProgrammaticEdit = false
 
-    init(account: Account, label: String, key: EncryptionKey, core: FidoPassCore) {
+    init(account: Account, label: String, key: EncryptionKey, cipher: SecretCipher) {
         self.accountId = account.id
         self.label = label
         self.isPortable = account.kind == .portable
         self.key = key
-        self.core = core
+        self.cipher = cipher
     }
 
     private func edited(_ side: Side, from oldValue: String, to newValue: String) {
@@ -91,7 +91,7 @@ final class CryptoEditorSession: ObservableObject {
         switch side {
         case .plaintext:
             do {
-                ciphertext = try core.seal(plaintext, with: key)
+                ciphertext = try cipher.seal(plaintext, with: key)
                 status = .sealed
             } catch let error as SecretCryptoError {
                 status = Self.status(for: error)
@@ -100,7 +100,7 @@ final class CryptoEditorSession: ObservableObject {
             }
         case .ciphertext:
             do {
-                plaintext = try core.open(ciphertext, with: key)
+                plaintext = try cipher.open(ciphertext, with: key)
                 status = .decrypted
             } catch let error as SecretCryptoError {
                 // The plaintext pane keeps its previous content: blanking it on every

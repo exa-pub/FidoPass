@@ -1,6 +1,6 @@
 import Foundation
 
-final class PortableEnrollmentService: PortableEnrollmentServiceProtocol {
+final class PortableEnrollmentService: PortableEnrollmentServiceProtocol, Sendable {
     private let enrollmentService: EnrollmentServiceProtocol
     private let secretDerivationService: SecretDerivationServiceProtocol
 
@@ -19,9 +19,9 @@ final class PortableEnrollmentService: PortableEnrollmentServiceProtocol {
     func enrollPortable(accountId: String,
                         requireUV: Bool,
                         devicePath: String?,
-                        askPIN: (() -> String?)?,
+                        askPIN: (@Sendable () -> String?)?,
                         importedKeyB64: String?,
-                        onStep: ((PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
+                        onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
         onStep?(.creatingCredential)
         var account = try enrollmentService.enroll(accountId: accountId,
                                                    kind: .portable,
@@ -64,7 +64,7 @@ final class PortableEnrollmentService: PortableEnrollmentServiceProtocol {
 
     func exportImportedKey(_ account: Account,
                            requireUV: Bool,
-                           pinProvider: (() -> String?)?) throws -> String {
+                           pinProvider: (@Sendable () -> String?)?) throws -> String {
         guard account.kind == .portable else {
             throw FidoPassError.invalidState("Account is not portable")
         }

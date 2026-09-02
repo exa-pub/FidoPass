@@ -1,4 +1,4 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// Why the HUD was opened. Survives the PIN prompt so that unlocking continues the thing the

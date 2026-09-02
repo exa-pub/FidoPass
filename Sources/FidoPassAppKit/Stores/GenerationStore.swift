@@ -1,4 +1,4 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// Password generation and the life of the result.
@@ -24,10 +24,10 @@ final class GenerationStore: ObservableObject {
 
     private let worker: KeyWorker
     private let clipboard: ClipboardService
-    private let pinProviderFor: (String) -> (() -> String?)?
+    private let pinProviderFor: (String) -> (@Sendable () -> String?)?
     private var countdown: Task<Void, Never>?
 
-    init(worker: KeyWorker, clipboard: ClipboardService, pinProvider: @escaping (String) -> (() -> String?)?) {
+    init(worker: KeyWorker, clipboard: ClipboardService, pinProvider: @escaping (String) -> (@Sendable () -> String?)?) {
         self.worker = worker
         self.clipboard = clipboard
         self.pinProviderFor = pinProvider
@@ -48,7 +48,7 @@ final class GenerationStore: ObservableObject {
         busyRef = ref
         defer { busyRef = nil }
 
-        let password = try await worker.run {
+        let password = try await worker.accounts {
             try $0.generatePassword(account: account, label: label, pinProvider: provider)
         }
         result = Result(ref: ref, label: label, password: password, revealed: false)

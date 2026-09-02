@@ -1,5 +1,5 @@
 import Combine
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// The single object the HUD views talk to.
@@ -697,7 +697,7 @@ final class PanelStore: ObservableObject {
                 try await self.accounts.deriveEncryptionKey(for: account, label: label)
             }
             if let target = labelTarget(for: ref) { labels.use(label, in: target) }
-            let session = CryptoEditorSession(account: account, label: label, key: key, core: .shared)
+            let session = CryptoEditorSession(account: account, label: label, key: key, cipher: accounts.cipher)
             editor.open(session, boundTo: ref.devicePath)
             router.closePanel()
         } catch {

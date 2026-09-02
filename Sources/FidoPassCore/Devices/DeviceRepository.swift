@@ -1,7 +1,7 @@
 import Foundation
 import CLibfido2
 
-final class DeviceRepository: DeviceRepositoryProtocol {
+final class DeviceRepository: DeviceRepositoryProtocol, Sendable {
     func listDevices(limit: Int) throws -> [FidoDevice] {
         guard let rawList = fido_dev_info_new(limit) else {
             throw FidoPassError.noDevices

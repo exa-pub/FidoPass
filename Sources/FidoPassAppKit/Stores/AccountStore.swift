@@ -1,4 +1,4 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// Accounts read from the keys that are currently unlocked.
@@ -17,15 +17,18 @@ final class AccountStore: ObservableObject {
 
     private let worker: KeyWorker
     private let pinFor: (String) -> String?
-    private let pinProviderFor: (String) -> (() -> String?)?
+    private let pinProviderFor: (String) -> (@Sendable () -> String?)?
 
     init(worker: KeyWorker,
          pin: @escaping (String) -> String?,
-         pinProvider: @escaping (String) -> (() -> String?)?) {
+         pinProvider: @escaping (String) -> (@Sendable () -> String?)?) {
         self.worker = worker
         self.pinFor = pin
         self.pinProviderFor = pinProvider
     }
+
+    /// Seals and opens text under a derived key — what the editor needs, and nothing else.
+    var cipher: SecretCipher { worker.backend.cipher }
 
     func accounts(onDevice path: String) -> [Account] {
         accounts.filter { $0.devicePath == path }
@@ -53,7 +56,7 @@ final class AccountStore: ObservableObject {
             guard let pin = pinFor(path) else { continue }
             for kind in AccountKind.allCases {
                 do {
-                    collected += try await worker.run { try $0.enumerateAccounts(kind: kind, devicePath: path, pin: pin) }
+                    collected += try await worker.accounts { try $0.enumerateAccounts(kind: kind, devicePath: path, pin: pin) }
                 } catch {
                     // Keep the first failure per key: later kinds usually fail for the same
                     // underlying reason and would only overwrite it.
@@ -95,7 +98,7 @@ final class AccountStore: ObservableObject {
         let result: (Account, String?)
         switch kind {
         case .portable:
-            result = try await worker.run {
+            result = try await worker.accounts {
                 try $0.enrollPortable(accountId: accountId,
                                       devicePath: devicePath,
                                       askPIN: provider,
@@ -103,7 +106,7 @@ final class AccountStore: ObservableObject {
                                       onStep: onStep)
             }
         case .local:
-            let account = try await worker.run {
+            let account = try await worker.accounts {
                 try $0.enroll(accountId: accountId, kind: .local, devicePath: devicePath, askPIN: provider)
             }
             result = (account, nil)
@@ -117,7 +120,7 @@ final class AccountStore: ObservableObject {
     func delete(_ account: Account) async throws {
         guard let path = account.devicePath else { throw KeyLockedError() }
         guard let pin = pinFor(path) else { throw KeyLockedError() }
-        try await worker.run { try $0.deleteAccount(account, pin: pin) }
+        try await worker.accounts { try $0.deleteAccount(account, pin: pin) }
         accounts.removeAll { $0.id == account.id && $0.devicePath == path }
     }
 
@@ -127,13 +130,13 @@ final class AccountStore: ObservableObject {
         guard let path = account.devicePath, let provider = pinProviderFor(path) else {
             throw KeyLockedError()
         }
-        return try await worker.run { try $0.exportImportedKey(account, pinProvider: provider) }
+        return try await worker.accounts { try $0.exportImportedKey(account, pinProvider: provider) }
     }
 
     func deriveEncryptionKey(for account: Account, label: String) async throws -> EncryptionKey {
         guard let path = account.devicePath, let provider = pinProviderFor(path) else {
             throw KeyLockedError()
         }
-        return try await worker.run { try $0.deriveEncryptionKey(account: account, label: label, pinProvider: provider) }
+        return try await worker.accounts { try $0.deriveEncryptionKey(account: account, label: label, pinProvider: provider) }
     }
 }

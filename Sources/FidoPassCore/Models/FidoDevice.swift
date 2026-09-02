@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FidoDevice: Identifiable, Hashable, Codable {
+public struct FidoDevice: Identifiable, Hashable, Codable, Sendable {
     public var id: String { path }
     public let path: String
     public let product: String

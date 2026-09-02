@@ -1,7 +1,7 @@
 import Foundation
 import CLibfido2
 
-final class HmacSecretService {
+final class HmacSecretService: Sendable {
     private let deviceRepository: DeviceRepositoryProtocol
 
     init(deviceRepository: DeviceRepositoryProtocol) {
@@ -11,7 +11,7 @@ final class HmacSecretService {
     func perform(account: Account,
                  salt: Data,
                  requireUV: Bool,
-                 pinProvider: (() -> String?)?) throws -> Data {
+                 pinProvider: (@Sendable () -> String?)?) throws -> Data {
         try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
             try deviceRepository.ensureHmacSecretSupported(device)
             guard let assertion = fido_assert_new() else {

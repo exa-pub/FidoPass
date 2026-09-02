@@ -1,12 +1,12 @@
 import Foundation
 
-public protocol EnrollmentServiceProtocol {
+public protocol EnrollmentServiceProtocol: Sendable {
     func enroll(accountId: String,
                 kind: AccountKind,
                 displayName: String,
                 requireUV: Bool,
                 devicePath: String?,
-                askPIN: (() -> String?)?) throws -> Account
+                askPIN: (@Sendable () -> String?)?) throws -> Account
 
     func enumerateAccounts(rpId: String,
                            devicePath: String,
@@ -16,5 +16,5 @@ public protocol EnrollmentServiceProtocol {
 
     func updateCredentialUserInfo(account: Account,
                                   requireUV: Bool,
-                                  pinProvider: (() -> String?)?) throws
+                                  pinProvider: (@Sendable () -> String?)?) throws
 }

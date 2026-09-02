@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Account: Codable, Hashable, Identifiable {
+public struct Account: Codable, Hashable, Identifiable, Sendable {
     /// User-chosen identifier, unique per authenticator. Feeds salt derivation.
     public var id: String
     public var kind: AccountKind

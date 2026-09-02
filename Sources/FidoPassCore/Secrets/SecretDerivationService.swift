@@ -1,6 +1,6 @@
 import Foundation
 
-final class SecretDerivationService: SecretDerivationServiceProtocol {
+final class SecretDerivationService: SecretDerivationServiceProtocol, Sendable {
     private let hmacSecretService: HmacSecretService
 
     init(hmacSecretService: HmacSecretService) {
@@ -10,7 +10,7 @@ final class SecretDerivationService: SecretDerivationServiceProtocol {
     func deriveSecret(account: Account,
                       label: String,
                       requireUV: Bool,
-                      pinProvider: (() -> String?)?) throws -> Data {
+                      pinProvider: (@Sendable () -> String?)?) throws -> Data {
         let salt = SaltFactory.residentSalt(label: label,
                                             rpId: account.rpId,
                                             accountId: account.id,
@@ -23,7 +23,7 @@ final class SecretDerivationService: SecretDerivationServiceProtocol {
 
     func deriveFixedComponent(account: Account,
                               requireUV: Bool,
-                              pinProvider: (() -> String?)?) throws -> Data {
+                              pinProvider: (@Sendable () -> String?)?) throws -> Data {
         let salt = SaltFactory.fixedComponentSalt()
         return try hmacSecretService.perform(account: account,
                                              salt: salt,

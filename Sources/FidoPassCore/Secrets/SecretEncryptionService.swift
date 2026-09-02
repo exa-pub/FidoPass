@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-final class SecretEncryptionService: SecretEncrypting {
+final class SecretEncryptionService: SecretEncrypting, Sendable {
     private let secretDerivationService: SecretDerivationServiceProtocol
 
     init(secretDerivationService: SecretDerivationServiceProtocol) {
@@ -11,7 +11,7 @@ final class SecretEncryptionService: SecretEncrypting {
     func deriveEncryptionKey(account: Account,
                              label: String,
                              requireUV: Bool,
-                             pinProvider: (() -> String?)?) throws -> EncryptionKey {
+                             pinProvider: (@Sendable () -> String?)?) throws -> EncryptionKey {
         let secret = try secretDerivationService.deriveSecret(account: account,
                                                               label: label,
                                                               requireUV: requireUV,

@@ -1,6 +1,6 @@
 import Foundation
 
-public final class FidoPassCore {
+public final class FidoPassCore: Sendable {
     public static let shared = FidoPassCore()
 
     private let deviceRepository: DeviceRepositoryProtocol
@@ -100,7 +100,7 @@ public final class FidoPassCore {
                        displayName: String = "",
                        requireUV: Bool = true,
                        devicePath: String? = nil,
-                       askPIN: (() -> String?)? = nil) throws -> Account {
+                       askPIN: (@Sendable () -> String?)? = nil) throws -> Account {
         try enrollmentService.enroll(accountId: accountId,
                                      kind: kind,
                                      displayName: displayName,
@@ -112,9 +112,9 @@ public final class FidoPassCore {
     public func enrollPortable(accountId: String,
                                requireUV: Bool = true,
                                devicePath: String? = nil,
-                               askPIN: (() -> String?)? = nil,
+                               askPIN: (@Sendable () -> String?)? = nil,
                                importedKeyB64: String?,
-                               onStep: ((PortableEnrollmentStep) -> Void)? = nil) throws -> (Account, String?) {
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (Account, String?) {
         try portableEnrollmentService.enrollPortable(accountId: accountId,
                                                      requireUV: requireUV,
                                                      devicePath: devicePath,
@@ -127,7 +127,7 @@ public final class FidoPassCore {
                                  label: String,
                                  policy override: PasswordPolicy? = nil,
                                  requireUV: Bool = true,
-                                 pinProvider: (() -> String?)? = nil) throws -> String {
+                                 pinProvider: (@Sendable () -> String?)? = nil) throws -> String {
         try passwordGenerator.generatePassword(account: account,
                                                label: label,
                                                policy: override,
@@ -145,7 +145,7 @@ public final class FidoPassCore {
 
     public func exportImportedKey(_ account: Account,
                                   requireUV: Bool = true,
-                                  pinProvider: (() -> String?)? = nil) throws -> String {
+                                  pinProvider: (@Sendable () -> String?)? = nil) throws -> String {
         try portableEnrollmentService.exportImportedKey(account,
                                                         requireUV: requireUV,
                                                         pinProvider: pinProvider)
@@ -155,12 +155,15 @@ public final class FidoPassCore {
     public func deriveEncryptionKey(account: Account,
                                     label: String,
                                     requireUV: Bool = true,
-                                    pinProvider: (() -> String?)? = nil) throws -> EncryptionKey {
+                                    pinProvider: (@Sendable () -> String?)? = nil) throws -> EncryptionKey {
         try secretEncryption.deriveEncryptionKey(account: account,
                                                  label: label,
                                                  requireUV: requireUV,
                                                  pinProvider: pinProvider)
     }
+
+    /// Seals and opens text under a derived key, without the rest of the facade.
+    public var cipher: SecretCipher { secretEncryption }
 
     public func seal(_ plaintext: String, with key: EncryptionKey) throws -> String {
         try secretEncryption.seal(plaintext, with: key)

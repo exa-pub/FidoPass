@@ -4,12 +4,12 @@ import CryptoKit
 /// An AES key derived from the authenticator, held only in memory.
 ///
 /// Deriving it costs a touch of the security key, so it is kept alive for as long as an
-/// editing session lasts rather than recomputed per keystroke. It is a reference type on
-/// purpose: the holder decides when it dies, and `wipe()` makes that explicit instead of
-/// leaving the material to be collected whenever.
+/// editing session lasts rather than recomputed per keystroke. A value type: the holder
+/// owns the only copy, and `wipe()` makes the end of its life explicit instead of leaving
+/// the material to be collected whenever.
 ///
 /// The raw bytes are never exposed. Anything that needs them lives inside this module.
-public final class EncryptionKey {
+public struct EncryptionKey: Sendable {
     private var material: SymmetricKey?
 
     init(material: SymmetricKey) {
@@ -21,7 +21,7 @@ public final class EncryptionKey {
 
     /// Drops the key material. Call when an editing session ends, the device locks, or the
     /// PIN expires.
-    public func wipe() {
+    public mutating func wipe() {
         material = nil
     }
 

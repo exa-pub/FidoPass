@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-final class PasswordGenerator: PasswordGenerating {
+final class PasswordGenerator: PasswordGenerating, Sendable {
     private let secretDerivationService: SecretDerivationServiceProtocol
 
     init(secretDerivationService: SecretDerivationServiceProtocol) {
@@ -12,7 +12,7 @@ final class PasswordGenerator: PasswordGenerating {
                           label: String,
                           policy override: PasswordPolicy?,
                           requireUV: Bool,
-                          pinProvider: (() -> String?)?) throws -> String {
+                          pinProvider: (@Sendable () -> String?)?) throws -> String {
         let policy = override ?? account.policy
         let secret: Data
         if account.kind == .portable {
@@ -34,7 +34,7 @@ final class PasswordGenerator: PasswordGenerating {
     private func portableSecret(account: Account,
                                  label: String,
                                  requireUV: Bool,
-                                 pinProvider: (() -> String?)?) throws -> Data {
+                                 pinProvider: (@Sendable () -> String?)?) throws -> Data {
         guard let payload = account.portable else {
             throw FidoPassError.invalidState("Portable account is missing its key material")
         }

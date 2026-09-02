@@ -219,7 +219,7 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         return (accountsByPath[devicePath] ?? []).filter { $0.kind == kind }
     }
 
-    func enroll(accountId: String, kind: AccountKind, devicePath: String, askPIN: @escaping () -> String?) throws -> Account {
+    func enroll(accountId: String, kind: AccountKind, devicePath: String, askPIN: @escaping @Sendable () -> String?) throws -> Account {
         enrollCalls.append((accountId, kind, nil))
         let account = Account.fixture(id: accountId, kind: kind, devicePath: devicePath)
         accountsByPath[devicePath, default: []].append(account)
@@ -228,9 +228,9 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
 
     func enrollPortable(accountId: String,
                         devicePath: String,
-                        askPIN: @escaping () -> String?,
+                        askPIN: @escaping @Sendable () -> String?,
                         importedKeyB64: String?,
-                        onStep: @escaping (PortableEnrollmentStep) -> Void) throws -> (Account, String?) {
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (Account, String?) {
         enrollCalls.append((accountId, .portable, importedKeyB64))
         onStep(.creatingCredential)
         onStep(.derivingBackupKey)
@@ -239,26 +239,32 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         return (account, importedKeyB64 == nil ? backupKeyValue : nil)
     }
 
-    func generatePassword(account: Account, label: String, pinProvider: @escaping () -> String?) throws -> String {
+    func generatePassword(account: Account, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
         generateCalls.append((account.id, label))
         return generatedPassword
     }
 
-    func exportImportedKey(_ account: Account, pinProvider: @escaping () -> String?) throws -> String {
+    func exportImportedKey(_ account: Account, pinProvider: @escaping @Sendable () -> String?) throws -> String {
         exportCalls.append(account.id)
         return backupKeyValue
     }
 
     /// `EncryptionKey` is only constructible inside the core, so the mock borrows a core
-    /// wired to a stub derivation service rather than faking the type.
-    func deriveEncryptionKey(account: Account, label: String, pinProvider: @escaping () -> String?) throws -> EncryptionKey {
+    /// wired to a stub derivation service rather than faking the type — and the same core's
+    /// cipher, so what it seals can be opened.
+    private static let cryptoCore: FidoPassCore = {
         let derivation = MockSecretDerivationService()
         derivation.deriveSecretClosure = { _, _, _, _ in Data(repeating: 0x11, count: 32) }
-        let core = FidoPassCore(deviceLister: MockDeviceLister(),
-                                enrollmentService: MockEnrollmentService(),
-                                portableEnrollmentService: MockPortableEnrollmentService(),
-                                secretDerivationService: derivation)
-        return try core.deriveEncryptionKey(account: account, label: label, requireUV: true, pinProvider: nil)
+        return FidoPassCore(deviceLister: MockDeviceLister(),
+                            enrollmentService: MockEnrollmentService(),
+                            portableEnrollmentService: MockPortableEnrollmentService(),
+                            secretDerivationService: derivation)
+    }()
+
+    var cipher: SecretCipher { Self.cryptoCore.cipher }
+
+    func deriveEncryptionKey(account: Account, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
+        try Self.cryptoCore.deriveEncryptionKey(account: account, label: label, requireUV: true, pinProvider: nil)
     }
 
     func deleteAccount(_ account: Account, pin: String) throws {

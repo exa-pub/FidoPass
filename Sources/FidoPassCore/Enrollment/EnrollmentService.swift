@@ -1,7 +1,7 @@
 import Foundation
 import CLibfido2
 
-final class EnrollmentService: EnrollmentServiceProtocol {
+final class EnrollmentService: EnrollmentServiceProtocol, Sendable {
     /// Marks a portable payload stored in the credential's display-name field.
     ///
     /// CTAP gives a credential two free-form strings (`name`, `displayName`) and portable
@@ -21,7 +21,7 @@ final class EnrollmentService: EnrollmentServiceProtocol {
                 displayName: String,
                 requireUV: Bool,
                 devicePath: String?,
-                askPIN: (() -> String?)?) throws -> Account {
+                askPIN: (@Sendable () -> String?)?) throws -> Account {
         let trimmedId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty else {
             throw FidoPassError.invalidState("Account ID must not be empty")
@@ -189,7 +189,7 @@ final class EnrollmentService: EnrollmentServiceProtocol {
 
     func updateCredentialUserInfo(account: Account,
                                   requireUV: Bool,
-                                  pinProvider: (() -> String?)?) throws {
+                                  pinProvider: (@Sendable () -> String?)?) throws {
         guard let credentialId = Data(base64Encoded: account.credentialIdB64) else {
             throw FidoPassError.invalidState("Credential ID is not valid base64")
         }

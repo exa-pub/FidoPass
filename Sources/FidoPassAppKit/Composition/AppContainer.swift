@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-@preconcurrency import FidoPassCore
+import FidoPassCore
 
 /// The application's object graph, built once.
 ///

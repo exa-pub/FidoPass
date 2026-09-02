@@ -1,10 +1,12 @@
-@preconcurrency import FidoPassCore
+import FidoPassCore
 import Foundation
 
 /// The real thing. Every method here blocks on the authenticator, so nothing may call it
 /// from the main actor — `KeyWorker` is the only permitted caller.
-struct LiveKeyBackend: KeyBackend, @unchecked Sendable {
+struct LiveKeyBackend: KeyBackend {
     let core: FidoPassCore
+
+    var cipher: SecretCipher { core.cipher }
 
     init(core: FidoPassCore = .shared) {
         self.core = core
@@ -33,7 +35,7 @@ struct LiveKeyBackend: KeyBackend, @unchecked Sendable {
     func enroll(accountId: String,
                 kind: AccountKind,
                 devicePath: String,
-                askPIN: @escaping () -> String?) throws -> Account {
+                askPIN: @escaping @Sendable () -> String?) throws -> Account {
         try core.enroll(accountId: accountId,
                         kind: kind,
                         requireUV: true,
@@ -43,9 +45,9 @@ struct LiveKeyBackend: KeyBackend, @unchecked Sendable {
 
     func enrollPortable(accountId: String,
                         devicePath: String,
-                        askPIN: @escaping () -> String?,
+                        askPIN: @escaping @Sendable () -> String?,
                         importedKeyB64: String?,
-                        onStep: @escaping (PortableEnrollmentStep) -> Void) throws -> (Account, String?) {
+                        onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (Account, String?) {
         try core.enrollPortable(accountId: accountId,
                                 requireUV: true,
                                 devicePath: devicePath,
@@ -56,7 +58,7 @@ struct LiveKeyBackend: KeyBackend, @unchecked Sendable {
 
     func generatePassword(account: Account,
                           label: String,
-                          pinProvider: @escaping () -> String?) throws -> String {
+                          pinProvider: @escaping @Sendable () -> String?) throws -> String {
         try core.generatePassword(account: account,
                                   label: label,
                                   requireUV: true,
@@ -64,13 +66,13 @@ struct LiveKeyBackend: KeyBackend, @unchecked Sendable {
     }
 
     func exportImportedKey(_ account: Account,
-                           pinProvider: @escaping () -> String?) throws -> String {
+                           pinProvider: @escaping @Sendable () -> String?) throws -> String {
         try core.exportImportedKey(account, requireUV: true, pinProvider: pinProvider)
     }
 
     func deriveEncryptionKey(account: Account,
                              label: String,
-                             pinProvider: @escaping () -> String?) throws -> EncryptionKey {
+                             pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
         try core.deriveEncryptionKey(account: account,
                                      label: label,
                                      requireUV: true,
