@@ -119,45 +119,43 @@ struct AccountRowView: View {
         .accessibilityLabel("\(account.id), \(account.kind == .portable ? "portable" : "local") credential\(needsMigration ? ", needs migration" : "")")
     }
 
-    /// The name line, and under it the identity as a strip. The hex lives in the tooltip on
-    /// both — the list is for telling accounts apart at a glance, not for reading them out.
+    /// The name line, with the identity as a small swatch beside the tag. The hex lives in
+    /// the tooltip on both — the list is for telling accounts apart at a glance, not for
+    /// reading them out, and a strip across the row made every row a banner.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 7) {
-                Image(systemName: "key.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(tint)
-                Text(account.id)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(needsMigration ? Color.secondary : Color.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(identityTooltip)
-                KindTag(kind: account.kind, needsMigration: needsMigration)
-                Spacer(minLength: 0)
-
-                if isHovering || isSelected {
-                    Menu {
-                        AccountActionsMenu(store: store, account: account, ref: ref)
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 11, weight: .semibold))
-                            .frame(width: 18, height: 16)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("More actions for this account")
-                } else if !isOnlyAccount {
-                    Text("⌘\(index + 1)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
+        HStack(spacing: 7) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(tint)
+            Text(account.id)
+                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(needsMigration ? Color.secondary : Color.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(identityTooltip)
+            KindTag(kind: account.kind, needsMigration: needsMigration)
             if let identity = account.account.identity {
-                IdentityFingerprintView(identity: identity, showsHex: false, height: 3)
+                IdentityFingerprintView(identity: identity, style: .swatch)
+            }
+            Spacer(minLength: 0)
+
+            if isHovering || isSelected {
+                Menu {
+                    AccountActionsMenu(store: store, account: account, ref: ref)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 18, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions for this account")
+            } else if !isOnlyAccount {
+                Text("⌘\(index + 1)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
     }

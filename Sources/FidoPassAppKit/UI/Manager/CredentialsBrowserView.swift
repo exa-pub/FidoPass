@@ -84,12 +84,11 @@ struct CredentialsBrowserView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                // The same strip the panel shows, so a row here and a row there can be
-                // matched by eye.
-                if let identity = credential.accountIdentity {
-                    IdentityFingerprintView(identity: identity, showsHex: false, height: 3)
-                        .padding(.top, 2)
-                }
+            }
+            // The same swatch the panel shows, so a row here and a row there can be matched
+            // by eye.
+            if let identity = credential.accountIdentity {
+                IdentityFingerprintView(identity: identity, style: .swatch)
             }
             Spacer(minLength: 0)
             if credential.credentialProtection == .uvRequired {
