@@ -29,6 +29,8 @@ final class PanelStore: ObservableObject {
         }
     }
     @Published private(set) var enrollStep: String?
+    /// The identity about to be written by the migration screen. Reset each time it opens.
+    @Published var migrationDraft = MigrationDraft()
     /// Set while a system panel of our own is up — a save dialog takes key status away, and
     /// the HUD must not vanish behind it.
     @Published private(set) var isShowingSystemPanel = false
@@ -131,6 +133,7 @@ final class PanelStore: ObservableObject {
                     isUnlocked: isSelectedKeyUnlocked,
                     keyHasPIN: devices.selectedState?.hasPIN,
                     accountRefs: visibleAccounts.map(AccountRef.init),
+                    legacyRefs: Set(visibleAccounts.filter { $0.account.needsMigration }.map(AccountRef.init)),
                     selection: selection)
     }
 
@@ -290,7 +293,7 @@ final class PanelStore: ObservableObject {
             return !pinForm.isEmpty
         case .pinChangeRequired:
             return false
-        case .enroll, .backupKey, .confirmDelete:
+        case .enroll, .backupKey, .confirmDelete, .migrate:
             return true
         }
     }
@@ -353,7 +356,7 @@ final class PanelStore: ObservableObject {
         case .pinChangeRequired:
             // Nowhere to go back to: the key refuses everything until the PIN is changed.
             return true
-        case .enroll, .backupKey, .confirmDelete:
+        case .enroll, .backupKey, .confirmDelete, .migrate:
             backToAccounts()
             return true
         }
@@ -377,6 +380,8 @@ final class PanelStore: ObservableObject {
             return ["esc back"]
         case .confirmDelete:
             return ["esc cancel"]
+        case .migrate:
+            return ["⏎ migrate", "esc cancel"]
         case .accounts:
             guard !devices.devices.isEmpty else { return [] }
             guard !visibleAccounts.isEmpty else { return ["⌘N new account"] }
@@ -510,6 +515,14 @@ final class PanelStore: ObservableObject {
             route = .unlock
             return
         }
+        // An account from before identities would derive exactly what it always did — the
+        // identity is not an input — but it is refused until it has one, so that every
+        // account on screen can be told from its namesake on another key. The screen it
+        // lands on explains that and does the one thing there is to do.
+        if account.account.needsMigration {
+            beginMigration(ref)
+            return
+        }
         let usedLabel = (label ?? labelEditor.current).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !usedLabel.isEmpty else {
             error = .plain("Enter a label first — it is part of the derivation.")
@@ -636,8 +649,50 @@ final class PanelStore: ObservableObject {
         }
     }
 
+    // MARK: - Migration
+
+    /// Opens the migration screen for an account from before identities, with a fresh random
+    /// identity to accept or replace.
+    func beginMigration(_ ref: AccountRef) {
+        guard let account = accounts.account(ref), account.account.needsMigration else { return }
+        migrationDraft = MigrationDraft()
+        selection = ref
+        show(.migrate(ref))
+    }
+
+    /// Writes the chosen identity to the key. PIN only, no touch — the material, and so every
+    /// password, stays exactly as it is.
+    func migrate() async {
+        guard !isWorking else { return }
+        guard case .migrate(let ref) = route,
+              let account = accounts.account(ref),
+              account.account.needsMigration,
+              let identity = migrationDraft.identity else { return }
+        do {
+            try await touchGate.withBusy("Migrating “\(ref.accountId)”…") {
+                _ = try await accounts.assignIdentity(account, identity: identity)
+            }
+            select(ref)
+            show(.accounts)
+            setStatus("Account migrated — passwords are unchanged")
+        } catch {
+            present(error)
+        }
+    }
+
+    /// The identity is not a secret: no timeout, no receipt, but the same concealed path as
+    /// everything else the app puts on the clipboard.
+    func copyIdentity(for ref: AccountRef) {
+        guard let identity = accounts.account(ref)?.account.identity else { return }
+        generation.copyIdentity(identity)
+        setStatus("Identity copied")
+    }
+
     // MARK: - Backup key and recovery
 
+    /// Works for an account from before identities too: it exports what it always did, the
+    /// master key alone, and the screen says so. Export must not wait for migration — a
+    /// backup is the last thing that should be gated.
     func showBackupKey(for ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref), account.kind == .portable else { return }
@@ -686,6 +741,12 @@ final class PanelStore: ObservableObject {
     func openEncryptEditor(for ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref) else { return }
+        // Same rule as generating: nothing is derived from an account until it has an
+        // identity. The backup key is the one exception — see `showBackupKey`.
+        if account.account.needsMigration {
+            beginMigration(ref)
+            return
+        }
         let label = labelEditor.current.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty else {
             error = .plain("Enter a label first — the key is derived from it.")
@@ -744,6 +805,10 @@ final class PanelStore: ObservableObject {
         // outlive it, and there is nothing to come back to.
         if case .backupKey = route {
             backup = nil
+            route = .accounts
+        }
+        // Likewise a migration: the account it was for is gone with the key.
+        if case .migrate = route {
             route = .accounts
         }
     }

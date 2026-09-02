@@ -14,4 +14,7 @@ enum PanelPrimaryAction: Equatable {
     /// to notice, since every password looks equally plausible.
     case chooseAccount
     case generateAndCopy(AccountRef)
+    /// The account would generate, but it predates identities: the one thing to do with it
+    /// first is give it one.
+    case migrate(AccountRef)
 }

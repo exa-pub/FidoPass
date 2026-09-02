@@ -81,17 +81,25 @@ struct AccountRowView: View {
 
     private var isBusy: Bool { generation.busyRef == ref }
 
+    /// Written before identities existed. Drawn grey, and offered the migration in place of
+    /// the generator — it derives nothing until it has an identity.
+    private var needsMigration: Bool { account.account.needsMigration }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
             if isSelected {
-                labelRow
-                actionRow
-                if let result {
-                    ResultView(result: result,
-                               generation: generation,
-                               onToggleReveal: store.toggleReveal,
-                               onCopy: store.copyCurrentResult)
+                if needsMigration {
+                    migrationRow
+                } else {
+                    labelRow
+                    actionRow
+                    if let result {
+                        ResultView(result: result,
+                                   generation: generation,
+                                   onToggleReveal: store.toggleReveal,
+                                   onCopy: store.copyCurrentResult)
+                    }
                 }
             }
         }
@@ -108,39 +116,86 @@ struct AccountRowView: View {
         // permanent space in a 340 pt panel.
         .contextMenu { AccountActionsMenu(store: store, account: account, ref: ref) }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(account.id), \(account.kind == .portable ? "portable" : "local") credential")
+        .accessibilityLabel("\(account.id), \(account.kind == .portable ? "portable" : "local") credential\(needsMigration ? ", needs migration" : "")")
     }
 
+    /// The name line, and under it the identity as a strip. The hex lives in the tooltip on
+    /// both — the list is for telling accounts apart at a glance, not for reading them out.
     private var header: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "key.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(account.kind == .portable ? Color.orange : Color.accentColor)
-            Text(account.id)
-                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            KindTag(kind: account.kind)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(tint)
+                Text(account.id)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(needsMigration ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(identityTooltip)
+                KindTag(kind: account.kind, needsMigration: needsMigration)
+                Spacer(minLength: 0)
 
-            if isHovering || isSelected {
-                Menu {
-                    AccountActionsMenu(store: store, account: account, ref: ref)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 18, height: 16)
-                        .contentShape(Rectangle())
+                if isHovering || isSelected {
+                    Menu {
+                        AccountActionsMenu(store: store, account: account, ref: ref)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 18, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("More actions for this account")
+                } else if !isOnlyAccount {
+                    Text("⌘\(index + 1)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("More actions for this account")
-            } else if !isOnlyAccount {
-                Text("⌘\(index + 1)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
+
+            if let identity = account.account.identity {
+                IdentityFingerprintView(identity: identity, showsHex: false, height: 3)
+            }
+        }
+    }
+
+    private var tint: Color {
+        if needsMigration { return .secondary }
+        return account.kind == .portable ? .orange : .accentColor
+    }
+
+    private var identityTooltip: String {
+        if let identity = account.account.identity { return "Identity \(identity.groupedHex)" }
+        return "Created by an earlier version — migrate to use"
+    }
+
+    /// What a legacy account offers instead of the generator: the one thing to do with it.
+    private var migrationRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Created by an earlier version — migrate to use. Passwords do not change.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                store.beginMigration(ref)
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.circle").font(.system(size: 10))
+                    Text("Migrate")
+                    Text("⏎")
+                        .font(.system(size: 10))
+                        .opacity(0.7)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .keyboardShortcut(isSelected ? .defaultAction : nil)
+            .help("Give this account an identity (⏎)")
         }
     }
 
@@ -217,15 +272,21 @@ struct AccountRowView: View {
 
 struct KindTag: View {
     let kind: AccountKind
+    /// Written before identities existed: grey, and says what to do about it.
+    var needsMigration = false
 
     var body: some View {
-        Text(kind == .portable ? "portable" : "local")
+        Text(needsMigration ? "needs migration" : (kind == .portable ? "portable" : "local"))
             .font(.system(size: 9, weight: .semibold))
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .background((kind == .portable ? Color.orange : Color.accentColor).opacity(0.16),
-                        in: Capsule())
-            .foregroundStyle(kind == .portable ? Color.orange : Color.accentColor)
+            .background(tint.opacity(0.16), in: Capsule())
+            .foregroundStyle(tint)
+    }
+
+    private var tint: Color {
+        if needsMigration { return .secondary }
+        return kind == .portable ? .orange : .accentColor
     }
 }
 
@@ -324,15 +385,27 @@ struct AccountActionsMenu: View {
     let ref: AccountRef
 
     var body: some View {
-        Button("Copy password") { Task { await store.copyPassword(for: ref) } }
-        Button("Reveal password") { Task { await store.revealPassword(for: ref) } }
-        Divider()
-        Button("Encrypt text…") { Task { await store.openEncryptEditor(for: ref) } }
-        Button("Save recovery sheet…") { store.saveRecoverySheet(for: ref) }
-        if account.kind == .portable {
+        if account.account.needsMigration {
+            // Nothing is derived from an account without an identity — except its backup,
+            // which is the one thing that must never wait.
+            Button("Migrate…") { store.beginMigration(ref) }
+            Divider()
             Button("Backup key…") { Task { await store.showBackupKey(for: ref) } }
+            Button("Save recovery sheet…") { store.saveRecoverySheet(for: ref) }
+            Divider()
+            Button("Delete account…") { store.show(.confirmDelete(ref)) }
+        } else {
+            Button("Copy password") { Task { await store.copyPassword(for: ref) } }
+            Button("Reveal password") { Task { await store.revealPassword(for: ref) } }
+            Divider()
+            Button("Encrypt text…") { Task { await store.openEncryptEditor(for: ref) } }
+            Button("Save recovery sheet…") { store.saveRecoverySheet(for: ref) }
+            if account.kind == .portable {
+                Button("Backup key…") { Task { await store.showBackupKey(for: ref) } }
+            }
+            Button("Copy identity") { store.copyIdentity(for: ref) }
+            Divider()
+            Button("Delete account…") { store.show(.confirmDelete(ref)) }
         }
-        Divider()
-        Button("Delete account…") { store.show(.confirmDelete(ref)) }
     }
 }

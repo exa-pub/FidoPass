@@ -13,4 +13,7 @@ enum PanelRoute: Equatable {
     case enroll
     case backupKey(AccountRef)
     case confirmDelete(AccountRef)
+    /// A portable account from before identities is being given one. Where generating for
+    /// such an account lands, until it has been migrated.
+    case migrate(AccountRef)
 }

@@ -79,6 +79,8 @@ struct PanelRootView: View {
             BackupKeyView(store: store, ref: ref)
         case .confirmDelete(let ref):
             ConfirmDeleteView(store: store, ref: ref)
+        case .migrate(let ref):
+            MigrateAccountView(store: store, ref: ref)
         }
     }
 

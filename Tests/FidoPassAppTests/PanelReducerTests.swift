@@ -107,6 +107,40 @@ final class PanelReducerTests: XCTestCase {
                                    selection: vault)
         XCTAssertEqual(PanelReducer.primaryAction(snapshot), .chooseAccount)
     }
+
+    /// An account from before identities is refused a password until it has one, so `⏎` on
+    /// it opens the migration rather than deriving — a screen that explains itself instead
+    /// of an error.
+    func testALegacySelectionMigratesInsteadOfGenerating() {
+        let snapshot = PanelSnapshot(hasDevices: true,
+                                   selectedDevicePath: "/dev/one",
+                                   isUnlocked: true,
+                                   accountRefs: [vault, disk],
+                                   legacyRefs: [vault],
+                                   selection: vault)
+        XCTAssertEqual(PanelReducer.primaryAction(snapshot), .migrate(vault))
+    }
+
+    func testTheOnlyAccountBeingLegacyMigrates() {
+        let snapshot = PanelSnapshot(hasDevices: true,
+                                   selectedDevicePath: "/dev/one",
+                                   isUnlocked: true,
+                                   accountRefs: [vault],
+                                   legacyRefs: [vault],
+                                   selection: nil)
+        XCTAssertEqual(PanelReducer.primaryAction(snapshot), .migrate(vault))
+    }
+
+    /// A neighbour needing migration changes nothing for the account that does not.
+    func testALegacyNeighbourDoesNotChangeTheSelectedAccountsAction() {
+        let snapshot = PanelSnapshot(hasDevices: true,
+                                   selectedDevicePath: "/dev/one",
+                                   isUnlocked: true,
+                                   accountRefs: [vault, disk],
+                                   legacyRefs: [vault],
+                                   selection: disk)
+        XCTAssertEqual(PanelReducer.primaryAction(snapshot), .generateAndCopy(disk))
+    }
 }
 
 /// Preselection: what the HUD opens on, and with which label.

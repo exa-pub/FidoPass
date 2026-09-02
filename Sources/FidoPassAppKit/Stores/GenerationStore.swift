@@ -95,6 +95,13 @@ final class GenerationStore: ObservableObject {
         startCountdown()
     }
 
+    /// Puts an identity on the clipboard. Not a secret, so no timeout and no receipt — it
+    /// exists to be pasted — but the same concealed path as everything else, so it is not
+    /// synced to other devices either.
+    func copyIdentity(_ identity: AccountIdentity) {
+        clipboard.copySecret(identity.groupedHex, clearAfter: 0)
+    }
+
     /// Wipes our own secret from the clipboard right now, if it is still ours.
     func clearClipboard() {
         clipboard.clearIfOwned()

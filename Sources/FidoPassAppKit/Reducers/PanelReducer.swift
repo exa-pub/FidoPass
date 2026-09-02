@@ -10,12 +10,19 @@ enum PanelReducer {
         if snapshot.keyHasPIN == false { return .setPIN(devicePath: path) }
         guard snapshot.isUnlocked else { return .unlock(devicePath: path) }
         if let selection = snapshot.selection, snapshot.accountRefs.contains(selection) {
-            return .generateAndCopy(selection)
+            return generateOrMigrate(selection, snapshot)
         }
         if let only = snapshot.accountRefs.first, snapshot.accountRefs.count == 1 {
-            return .generateAndCopy(only)
+            return generateOrMigrate(only, snapshot)
         }
         return snapshot.accountRefs.isEmpty ? .createAccount : .chooseAccount
+    }
+
+    /// The daily action — unless the account is one from before identities, for which the
+    /// daily action is refused until it has been given one. Migration is where `⏎` goes
+    /// instead, so that the refusal is a screen that explains itself rather than an error.
+    private static func generateOrMigrate(_ ref: AccountRef, _ snapshot: PanelSnapshot) -> PanelPrimaryAction {
+        snapshot.legacyRefs.contains(ref) ? .migrate(ref) : .generateAndCopy(ref)
     }
 
     /// Picks the account the HUD should open on.

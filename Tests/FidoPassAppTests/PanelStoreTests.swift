@@ -318,6 +318,156 @@ final class PanelStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - Migration
+
+    /// A key holding one account from before identities and one local account.
+    private static func legacyStore() async -> (PanelStore, MockKeyBackend, FidoDevice, AccountRef) {
+        let (store, backend, device) = await AppTestFactory.unlockedStore(accounts: [
+            Account.portableFixture(id: "old", legacy: true),
+            Account.fixture(id: "disk", kind: .local)
+        ])
+        return (store, backend, device, AccountRef(accountId: "old", devicePath: device.path))
+    }
+
+    /// Nothing is derived from an account until it has an identity: asking for a password
+    /// lands on the migration screen, and the key is not touched.
+    func testALegacyAccountRoutesToMigrationInsteadOfGenerating() async {
+        let (store, backend, _, old) = await Self.legacyStore()
+        await store.copyPassword(for: old, label: "vault")
+
+        XCTAssertEqual(store.route, .migrate(old))
+        XCTAssertEqual(store.selection, old)
+        XCTAssertTrue(backend.generateCalls.isEmpty, "nothing is derived before the identity exists")
+        XCTAssertNil(store.generation.result)
+        XCTAssertNotNil(store.migrationDraft.identity, "a random identity is offered")
+    }
+
+    func testEncryptingWithALegacyAccountRoutesToMigration() async {
+        let (store, _, _, old) = await Self.legacyStore()
+        store.setLabel("notes")
+        await store.openEncryptEditor(for: old)
+
+        XCTAssertEqual(store.route, .migrate(old))
+        let router = AppTestFactory.container(for: store).router as? RecordingWindowRouter
+        XCTAssertEqual(router?.openedEditors.count, 0, "no editor opens on an account without an identity")
+    }
+
+    /// Rule 7 on real store state: with a legacy account selected, `⏎` migrates; with the
+    /// local one selected, it generates as ever.
+    func testPrimaryActionForALegacySelectionIsMigrate() async {
+        let (store, _, _, old) = await Self.legacyStore()
+        store.select(old)
+        XCTAssertEqual(store.primaryAction, .migrate(old))
+
+        let disk = AccountRef(accountId: "disk", devicePath: old.devicePath)
+        store.select(disk)
+        XCTAssertEqual(store.primaryAction, .generateAndCopy(disk))
+    }
+
+    func testMigrationRewritesTheAccountAndUnlocksGeneration() async {
+        let (store, backend, _, old) = await Self.legacyStore()
+        store.beginMigration(old)
+        XCTAssertEqual(store.route, .migrate(old))
+
+        let chosen = AccountIdentity(hex: "0102030405060708090a0b0c")!
+        store.migrationDraft.identityHex = chosen.groupedHex
+        await store.migrate()
+
+        XCTAssertEqual(backend.assignIdentityCalls.count, 1)
+        XCTAssertEqual(backend.assignIdentityCalls.first?.identity, chosen)
+        XCTAssertEqual(store.route, .accounts)
+        XCTAssertNotNil(store.statusText)
+
+        let migrated = store.accounts.account(old)
+        XCTAssertEqual(migrated?.account.identity, chosen)
+        XCTAssertEqual(migrated?.account.needsMigration, false)
+        XCTAssertEqual(store.primaryAction, .generateAndCopy(old), "once migrated, ⏎ generates again")
+
+        await store.copyPassword(for: old, label: "vault")
+        XCTAssertEqual(backend.generateCalls.map { $0.accountId }, ["old"])
+        XCTAssertEqual(store.route, .accounts)
+        XCTAssertNotNil(store.generation.result)
+    }
+
+    func testMigrationDraftValidatesHex() {
+        var draft = MigrationDraft()
+        XCTAssertNotNil(draft.identity, "opens with a random identity")
+        XCTAssertNil(draft.error)
+
+        draft.identityHex = "zz"
+        XCTAssertNil(draft.identity)
+        XCTAssertNotNil(draft.error)
+
+        draft.identityHex = ""
+        XCTAssertNil(draft.identity)
+        XCTAssertNil(draft.error, "an empty field is not an error, just incomplete")
+
+        draft.identityHex = "0102-0304-0506-0708-090A-0B0C"
+        XCTAssertEqual(draft.identity, AccountIdentity(hex: "0102030405060708090a0b0c"))
+
+        let before = draft.identityHex
+        draft.randomise()
+        XCTAssertNotEqual(draft.identityHex, before)
+        XCTAssertNotNil(draft.identity)
+    }
+
+    func testMigrateWithAnInvalidIdentityDoesNothing() async {
+        let (store, backend, _, old) = await Self.legacyStore()
+        store.beginMigration(old)
+        store.migrationDraft.identityHex = "not hex"
+        await store.migrate()
+
+        XCTAssertTrue(backend.assignIdentityCalls.isEmpty)
+        XCTAssertEqual(store.route, .migrate(old))
+    }
+
+    func testARefusedMigrationStaysOnTheScreenWithTheError() async {
+        let (store, backend, _, old) = await Self.legacyStore()
+        backend.assignIdentityError = TestError.generic("refused")
+        store.beginMigration(old)
+        await store.migrate()
+
+        XCTAssertEqual(store.route, .migrate(old))
+        XCTAssertNotNil(store.error)
+        XCTAssertEqual(store.accounts.account(old)?.account.needsMigration, true)
+    }
+
+    /// Export is the one thing that does not wait for migration: a legacy account hands out
+    /// its backup in the format earlier versions printed, and the screen says so.
+    func testBackupKeyOfALegacyAccountIsTheLegacyFormat() async {
+        let (store, backend, _, old) = await Self.legacyStore()
+        await store.showBackupKey(for: old)
+
+        XCTAssertEqual(backend.exportCalls, ["old"])
+        XCTAssertEqual(store.route, .backupKey(old), "not the migration screen")
+        XCTAssertEqual(store.backup?.isLegacy, true)
+        XCTAssertEqual(store.backup?.base64.count, 44)
+    }
+
+    func testMigrationScreenHoldsThePanelAndEscapesToTheList() async {
+        let (store, _, _, old) = await Self.legacyStore()
+        store.beginMigration(old)
+        XCTAssertTrue(store.isPinnedOpen)
+        XCTAssertEqual(store.keyboardHints, ["⏎ migrate", "esc cancel"])
+        XCTAssertTrue(store.handleEscape())
+        XCTAssertEqual(store.route, .accounts)
+    }
+
+    func testBeginMigrationIgnoresAccountsThatDoNotNeedIt() async {
+        let (store, _, device) = await AppTestFactory.unlockedStore()
+        store.beginMigration(AccountRef(accountId: "vault", devicePath: device.path))
+        XCTAssertEqual(store.route, .accounts)
+    }
+
+    /// The identity goes on the clipboard through the concealed path, without a receipt: it
+    /// is not a secret, and a countdown for it would be noise.
+    func testCopyingTheIdentityLeavesNoReceipt() async {
+        let (store, _, device) = await AppTestFactory.unlockedStore()
+        store.copyIdentity(for: AccountRef(accountId: "vault", devicePath: device.path))
+        XCTAssertNil(store.generation.receipt)
+        XCTAssertEqual(store.statusText, "Identity copied")
+    }
+
     func testDeletingRemovesTheAccountFromTheList() async {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
         await store.deleteAccount(AccountRef(accountId: "disk", devicePath: device.path))
