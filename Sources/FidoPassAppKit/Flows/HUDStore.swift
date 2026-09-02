@@ -11,7 +11,6 @@ import Foundation
 final class HUDStore: ObservableObject {
 
     @Published private(set) var route: HUDRoute = .accounts
-    @Published private(set) var touch: TouchPrompt?
     @Published var errorText: String?
     @Published private(set) var statusText: String?
     @Published var selection: AccountRef?
@@ -19,10 +18,6 @@ final class HUDStore: ObservableObject {
     /// Fields of the set/change PIN screens. Separate from `pinDraft`, which is the unlock
     /// field: a half-typed new PIN must never be submitted as an unlock attempt.
     @Published var pinForm = PinForm()
-    @Published private(set) var isWorking = false
-    /// What the app is doing while it makes the user wait, when no key touch is involved.
-    /// A touch has its own prompt; this covers the silent waits, above all PIN verification.
-    @Published private(set) var busyTitle: String?
     /// Value being shown on the backup-key screen. Never persisted, dropped on leaving.
     @Published private(set) var backupKey: String?
     @Published var enrollDraft = EnrollDraft()
@@ -140,6 +135,8 @@ final class HUDStore: ObservableObject {
     let inventory: InventoryStore
     let labels: LabelStore
     let preferences: Preferences
+    /// The one door to the key. Shared with the manager; the panel draws only its own waits.
+    let touchGate: TouchGate
     let editor: EditorCoordinator
     /// The windows. A window, not a route, for anything that has to survive the panel closing
     /// behind it — the manager, the editor — and for the panel itself.
@@ -156,6 +153,7 @@ final class HUDStore: ObservableObject {
          inventory: InventoryStore,
          labels: LabelStore,
          preferences: Preferences,
+         touchGate: TouchGate,
          editor: EditorCoordinator,
          router: WindowRouter) {
         self.devices = devices
@@ -164,6 +162,7 @@ final class HUDStore: ObservableObject {
         self.inventory = inventory
         self.labels = labels
         self.preferences = preferences
+        self.touchGate = touchGate
         self.editor = editor
         self.router = router
     }
@@ -171,6 +170,11 @@ final class HUDStore: ObservableObject {
     // MARK: - Derived state
 
     var selectedDevice: FidoDevice? { devices.selectedState?.device }
+    /// The touch prompt the panel draws, if the current wait is the panel's.
+    var touch: TouchPrompt? { touchGate.panelPrompt }
+    /// A key operation is in flight — the panel's or another window's.
+    var isWorking: Bool { touchGate.isWorking }
+    var busyTitle: String? { touchGate.panelBusyTitle }
     var isSelectedKeyUnlocked: Bool { devices.selectedState?.unlocked == true }
 
     var visibleAccounts: [Account] {
@@ -240,7 +244,7 @@ final class HUDStore: ObservableObject {
 
     /// State the menu-bar icon renders.
     var iconState: StatusItemIcon.State {
-        if touch != nil { return .waitingForTouch }
+        if touchGate.prompt != nil { return .waitingForTouch }
         if devices.devices.isEmpty { return .noKey }
         if generation.receipt?.clearsAt != nil { return .clipboardHot }
         return isSelectedKeyUnlocked ? .unlocked : .locked
@@ -504,24 +508,21 @@ final class HUDStore: ObservableObject {
         guard !isWorking else { return }
         guard let device = selectedDevice, !pinDraft.isEmpty else { return }
         let pin = pinDraft
-        isWorking = true
-        busyTitle = "Checking the PIN…"
-        defer { busyTitle = nil }
         do {
-            try await devices.unlock(device, pin: pin)
-            pinDraft = ""
-            errorText = nil
-            await reloadAccountsIfNeeded()
-            restoreSelectionIfNeeded()
-            // Only the PIN screen is replaced: a screen requested while the key was locked
-            // (⌘N, say) is still what the user is waiting for.
-            if route == .unlock { route = .accounts }
-            // Released before the queued action runs: that action is an operation in its own
-            // right, and it has to pass the same guard as if the user had asked for it now.
-            isWorking = false
+            try await touchGate.withBusy("Checking the PIN…") {
+                try await devices.unlock(device, pin: pin)
+                pinDraft = ""
+                errorText = nil
+                await reloadAccountsIfNeeded()
+                restoreSelectionIfNeeded()
+                // Only the PIN screen is replaced: a screen requested while the key was locked
+                // (⌘N, say) is still what the user is waiting for.
+                if route == .unlock { route = .accounts }
+            }
+            // Outside the busy scope: the queued action is an operation in its own right, and
+            // it has to pass the same guard as if the user had asked for it now.
             await runPendingIntentIfPossible()
         } catch {
-            isWorking = false
             pinDraft = ""
             let presented = FidoPassErrorPresenter.message(for: error)
             errorText = presented.fullText(retriesRemaining: devices.selectedState?.pinRetriesRemaining)
@@ -562,21 +563,18 @@ final class HUDStore: ObservableObject {
         // Return reaches here from the field and from the default button both.
         guard !isWorking, let device = selectedDevice, canSubmitPinForm(forChange: false) else { return }
         let newPIN = pinForm.new
-        isWorking = true
-        busyTitle = "Setting the PIN…"
-        defer { busyTitle = nil }
         do {
-            try await devices.setInitialPIN(for: device, newPIN: newPIN)
-            pinForm.clear()
-            errorText = nil
-            await reloadAccountsIfNeeded()
-            restoreSelectionIfNeeded()
-            route = .accounts
-            isWorking = false
+            try await touchGate.withBusy("Setting the PIN…") {
+                try await devices.setInitialPIN(for: device, newPIN: newPIN)
+                pinForm.clear()
+                errorText = nil
+                await reloadAccountsIfNeeded()
+                restoreSelectionIfNeeded()
+                route = .accounts
+            }
             setStatus("PIN set — this key is ready to use")
             await runPendingIntentIfPossible()
         } catch {
-            isWorking = false
             present(error, whenRefused: "This key already has a PIN. Use “Change PIN…” instead.")
         }
     }
@@ -591,21 +589,18 @@ final class HUDStore: ObservableObject {
         guard !isWorking, let device = selectedDevice, canSubmitPinForm(forChange: true) else { return }
         let current = pinForm.current
         let newPIN = pinForm.new
-        isWorking = true
-        busyTitle = "Changing the PIN…"
-        defer { busyTitle = nil }
         do {
-            try await devices.changePIN(for: device, oldPIN: current, newPIN: newPIN)
-            pinForm.clear()
-            errorText = nil
-            await reloadAccountsIfNeeded()
-            restoreSelectionIfNeeded()
-            route = .accounts
-            isWorking = false
+            try await touchGate.withBusy("Changing the PIN…") {
+                try await devices.changePIN(for: device, oldPIN: current, newPIN: newPIN)
+                pinForm.clear()
+                errorText = nil
+                await reloadAccountsIfNeeded()
+                restoreSelectionIfNeeded()
+                route = .accounts
+            }
             setStatus("PIN changed — your passwords are unaffected")
             await runPendingIntentIfPossible()
         } catch {
-            isWorking = false
             // Only the current PIN is cleared: retyping a new PIN that was fine is busywork,
             // and the failure was about the old one.
             pinForm.current = ""
@@ -765,11 +760,10 @@ final class HUDStore: ObservableObject {
         // Read before the account goes: the scope is its credential, which the account
         // carries and the store no longer has once it is deleted.
         let scope = labelTarget(for: ref)?.scope
-        isWorking = true
-        busyTitle = "Deleting “\(ref.accountId)”…"
-        defer { isWorking = false; busyTitle = nil }
         do {
-            try await accounts.delete(account)
+            try await touchGate.withBusy("Deleting “\(ref.accountId)”…") {
+                try await accounts.delete(account)
+            }
             if let scope { labels.forget(scope) }
             generation.clearResult()
             if selection == ref { selection = nil }
@@ -834,9 +828,11 @@ final class HUDStore: ObservableObject {
         let scopes = flow.scopes
 
         do {
-            try await withTouchPrompt(TouchPrompt(title: "Touch the key to confirm the reset",
-                                                  message: "This erases everything on it. The key gives you about 30 seconds.",
-                                                  deviceName: device.displayName)) {
+            // The wizard is a sheet in the manager window, so that is where the prompt goes.
+            try await touchGate.withTouchPrompt(TouchPrompt(title: "Touch the key to confirm the reset",
+                                                            message: "This erases everything on it. The key gives you about 30 seconds.",
+                                                            deviceName: device.displayName),
+                                                surface: .manager) {
                 try await self.devices.resetKey(device, expectedAAGUID: flow.expectedAAGUID)
             }
             // The credential ids these histories are keyed by will never exist again, so the
@@ -927,28 +923,13 @@ final class HUDStore: ObservableObject {
 
     // MARK: - Touch prompt
 
-    /// The one door to the key.
-    ///
-    /// Every operation that makes the authenticator wait for a finger goes through here, so
-    /// the prompt cannot be forgotten by a caller that is in a hurry.
-    func withTouchPrompt<T>(_ prompt: TouchPrompt, _ body: @escaping () async throws -> T) async rethrows -> T {
-        touch = prompt
-        isWorking = true
-        defer {
-            touch = nil
-            isWorking = false
-        }
-        return try await body()
+    /// The panel's door to the key — `TouchGate`, with the prompt drawn here.
+    func withTouchPrompt<T>(_ prompt: TouchPrompt, _ body: () async throws -> T) async rethrows -> T {
+        try await touchGate.withTouchPrompt(prompt, surface: .panel, body)
     }
 
-    /// Hides the prompt and abandons the result.
-    ///
-    /// libfido2 exposes `fido_dev_cancel`, but the repository does not surface the handle,
-    /// so the operation itself finishes in the background — its result is simply discarded
-    /// and never reaches the clipboard.
     func abandonTouch() {
-        touch = nil
-        isWorking = false
+        touchGate.abandonTouch()
     }
 
     // MARK: - Housekeeping

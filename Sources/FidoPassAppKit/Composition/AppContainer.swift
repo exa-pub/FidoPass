@@ -19,6 +19,7 @@ final class AppContainer {
     let inventory: InventoryStore
     let labels: LabelStore
     let clipboard: ClipboardService
+    let touchGate: TouchGate
     let editor: EditorCoordinator
     let router: WindowRouter
     /// The menu-bar panel's store.
@@ -52,6 +53,7 @@ final class AppContainer {
         let inventoryStore = InventoryStore(worker: worker,
                                             pin: { [weak deviceStore] path in deviceStore?.pin(for: path) })
         let labelStore = labels ?? LabelStore()
+        let touchGate = TouchGate()
         let editor = EditorCoordinator(router: router)
 
         self.preferences = settings
@@ -61,6 +63,7 @@ final class AppContainer {
         self.inventory = inventoryStore
         self.labels = labelStore
         self.clipboard = clipboard
+        self.touchGate = touchGate
         self.editor = editor
         self.router = router
         self.panel = HUDStore(devices: deviceStore,
@@ -69,6 +72,7 @@ final class AppContainer {
                               inventory: inventoryStore,
                               labels: labelStore,
                               preferences: settings,
+                              touchGate: touchGate,
                               editor: editor,
                               router: router)
 

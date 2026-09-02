@@ -11,9 +11,11 @@ struct HUDRootView: View {
     @ObservedObject private var accounts: AccountStore
     @ObservedObject private var generation: GenerationStore
     @ObservedObject private var labels: LabelStore
+    @ObservedObject private var touchGate: TouchGate
 
     init(store: HUDStore) {
         self.store = store
+        self.touchGate = store.touchGate
         self.devices = store.devices
         self.accounts = store.accounts
         self.generation = store.generation
@@ -22,9 +24,9 @@ struct HUDRootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let touch = store.touch {
-                TouchOverlayView(prompt: touch, onCancel: store.abandonTouch)
-            } else if store.isWorking, let title = store.busyTitle {
+            if let touch = touchGate.panelPrompt {
+                TouchOverlayView(prompt: touch, onCancel: touchGate.abandonTouch)
+            } else if touchGate.isWorking, let title = touchGate.panelBusyTitle {
                 HUDWaitingView(title: title, message: store.selectedDevice?.displayName)
             } else {
                 HUDHeaderView(store: store, devices: devices, accounts: accounts)

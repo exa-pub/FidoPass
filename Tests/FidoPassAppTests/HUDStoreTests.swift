@@ -140,7 +140,7 @@ final class HUDStoreTests: XCTestCase {
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
 
         var sawPrompt = false
-        let watching = store.$touch.sink { if $0 != nil { sawPrompt = true } }
+        let watching = store.touchGate.$prompt.sink { if $0 != nil { sawPrompt = true } }
         await store.copyPassword(for: ref, label: "work")
         watching.cancel()
 

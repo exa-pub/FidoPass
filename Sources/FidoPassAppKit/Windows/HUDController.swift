@@ -10,6 +10,7 @@ final class HUDController: NSObject, NSWindowDelegate {
     private let store: HUDStore
     private let devices: DeviceStore
     private let generation: GenerationStore
+    private let touchGate: TouchGate
     private var statusItem: NSStatusItem?
     private var panel: HUDPanel?
     private var hosting: NSHostingController<HUDRootView>?
@@ -20,14 +21,16 @@ final class HUDController: NSObject, NSWindowDelegate {
         self.store = container.panel
         self.devices = container.devices
         self.generation = container.generation
+        self.touchGate = container.touchGate
         super.init()
 
         // The icon is a function of store state, so it follows the stores instead of being
         // told. `objectWillChange` fires before the change lands, hence the hop to the next
         // run-loop turn before the state is read.
-        iconSubscription = Publishers.Merge3(store.objectWillChange,
+        iconSubscription = Publishers.Merge4(store.objectWillChange,
                                              devices.objectWillChange,
-                                             generation.objectWillChange)
+                                             generation.objectWillChange,
+                                             touchGate.objectWillChange)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateIcon() }
     }
@@ -184,7 +187,7 @@ final class HUDController: NSObject, NSWindowDelegate {
     }
 
     private var isSticky: Bool {
-        store.touch != nil || store.isPinnedOpen || store.isWorking
+        touchGate.panelPrompt != nil || store.isPinnedOpen || touchGate.isPanelBusy
     }
 
     private func position(_ panel: HUDPanel) {
