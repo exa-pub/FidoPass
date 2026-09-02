@@ -142,24 +142,32 @@ struct AccountRowView: View {
                 IdentityFingerprintView(identity: identity, style: .swatch)
             }
 
-            if isHovering || isSelected {
-                Menu {
-                    AccountActionsMenu(store: store, account: account, ref: ref)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 18, height: 16)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("More actions for this account")
-            } else if !isOnlyAccount {
-                Text("⌘\(index + 1)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            // A slot of one width for whatever sits at the edge — the menu, the ⌘n hint or
+            // nothing — otherwise the swatch moves with it and the column is lost.
+            trailingControl
+                .frame(width: 26, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControl: some View {
+        if isHovering || isSelected {
+            Menu {
+                AccountActionsMenu(store: store, account: account, ref: ref)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 18, height: 16)
+                    .contentShape(Rectangle())
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More actions for this account")
+        } else if !isOnlyAccount {
+            Text("⌘\(index + 1)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
     }
 
