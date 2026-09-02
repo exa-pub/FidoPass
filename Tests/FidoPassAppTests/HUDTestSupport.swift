@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// Lets a test hold a backend call open, so mid-flight UI state can be observed.
 ///

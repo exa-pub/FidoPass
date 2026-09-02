@@ -1,7 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// A security key is exclusive: opening it seizes the device, so two operations that overlap
 /// mean one fails for a reason unrelated to anything the user did.

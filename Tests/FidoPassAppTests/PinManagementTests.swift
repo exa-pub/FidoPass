@@ -1,7 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// Giving a key its first PIN, changing it, and erasing the key.
 ///

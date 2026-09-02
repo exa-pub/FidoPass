@@ -1,7 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// The manager's store.
 ///

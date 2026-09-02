@@ -1,6 +1,6 @@
 import XCTest
 import SwiftUI
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 import FidoPassCore
 #if canImport(AppKit)
 import AppKit

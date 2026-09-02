@@ -1,7 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// What one window may and may not do to another.
 ///

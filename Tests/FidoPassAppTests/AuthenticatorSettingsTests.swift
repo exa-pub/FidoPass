@@ -1,7 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// The four settings a key lets you change about itself, and the rules around them.
 ///

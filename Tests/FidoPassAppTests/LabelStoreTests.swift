@@ -1,6 +1,6 @@
 import XCTest
 import FidoPassCore
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 import TestSupport
 
 /// Labels are not secret, but forgetting one makes its password unreproducible — so the

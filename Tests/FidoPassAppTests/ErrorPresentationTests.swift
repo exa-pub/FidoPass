@@ -1,5 +1,5 @@
 import XCTest
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 import FidoPassCore
 
 final class ErrorPresentationTests: XCTestCase {

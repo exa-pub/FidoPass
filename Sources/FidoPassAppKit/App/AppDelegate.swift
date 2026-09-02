@@ -1,28 +1,22 @@
-#if canImport(AppKit)
 import AppKit
 
-/// Entry point.
+/// The application, assembled.
 ///
 /// Plain AppKit rather than a SwiftUI `App`: the whole application is a status item and a
 /// panel, and `MenuBarExtra` cannot be opened from a global shortcut, kept open across a
 /// save panel, or given focus for a PIN field — the three things this app needs most.
-@main
-enum FidoPassMain {
-    static func main() {
-        let application = NSApplication.shared
-        let delegate = AppDelegate()
-        application.delegate = delegate
-        application.run()
-    }
-}
-
+/// The executable target does nothing but hand an instance of this to `NSApplication`.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let store = HUDStore()
     private lazy var hud = HUDController(store: store)
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public override init() {
+        super.init()
+    }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(store.preferences.showInDock ? .regular : .accessory)
         installMainMenu()
         hud.installStatusItem()
@@ -48,14 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {
         // Quitting is not a reason to leave a derived password behind on the clipboard.
         store.generation.clearClipboard()
         GlobalHotkeyService.shared.unregister()
     }
 
     private func applyHotkey() {
-#if canImport(Carbon)
         GlobalHotkeyService.shared.unregister()
         // Nothing is registered while the user is typing a replacement.
         guard !store.preferences.isRecordingHotkey else { return }
@@ -70,7 +63,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !registered {
             store.errorText = "The shortcut \(store.preferences.hotkey.display) is already taken by another application."
         }
-#endif
     }
 
     /// A minimal main menu.
@@ -120,4 +112,3 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AuxiliaryWindows.shared.showPreferences(store: store)
     }
 }
-#endif

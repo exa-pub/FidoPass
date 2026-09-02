@@ -8,10 +8,7 @@ let package = Package(
     ],
     products: [
         .library(name: "FidoPassCore", targets: ["FidoPassCore"]),
-    .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
-    ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0")
+        .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
     ],
     targets: [
         .systemLibrary(
@@ -22,39 +19,39 @@ let package = Package(
             ]
         ),
         .target(
+            name: "FidoPassCore",
+            dependencies: ["CLibfido2"],
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+                .linkedFramework("CoreFoundation")
+            ]
+        ),
+        // Everything the application is: stores, windows, views. A library so it can be
+        // imported by tests as one module and assembled from one entry point.
+        .target(
+            name: "FidoPassAppKit",
+            dependencies: ["FidoPassCore"]
+        ),
+        // The entry point and nothing else. The app icon lives here for `build_app.sh`,
+        // which copies it into the bundle itself; SwiftPM must not turn it into a resource
+        // bundle the app would never read.
+        .executableTarget(
+            name: "FidoPassApp",
+            dependencies: ["FidoPassAppKit"],
+            exclude: ["Resources"]
+        ),
+        .target(
             name: "TestSupport",
             dependencies: ["FidoPassCore"],
             path: "Tests/TestSupport"
         ),
-        .target(
-            name: "FidoPassCore",
-            dependencies: ["CLibfido2"],
-            swiftSettings: [.define("SWIFT_PACKAGE")],
-            linkerSettings: [
-                .linkedFramework("IOKit", .when(platforms: [.macOS])),
-                .linkedFramework("CoreFoundation", .when(platforms: [.macOS]))
-            ]
-        ),
-        .executableTarget(
-            name: "FidoPassApp",
-            dependencies: [
-                "FidoPassCore"
-            ],
-            path: "Sources/FidoPassApp",
-            resources: [
-                // Copy the app icon (.icns); final .app bundling will happen via helper script
-                .copy("Resources/AppIcon.icns")
-            ]
-        ),
         .testTarget(
             name: "FidoPassCoreTests",
-            dependencies: ["FidoPassCore", "TestSupport"],
-            path: "Tests/FidoPassCoreTests"
+            dependencies: ["FidoPassCore", "TestSupport"]
         ),
         .testTarget(
             name: "FidoPassAppTests",
-            dependencies: ["FidoPassApp", "FidoPassCore", "TestSupport"],
-            path: "Tests/FidoPassAppTests"
+            dependencies: ["FidoPassAppKit", "FidoPassCore", "TestSupport"]
         )
     ]
 )

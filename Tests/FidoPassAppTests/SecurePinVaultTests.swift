@@ -1,5 +1,5 @@
 import XCTest
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 final class SecurePinVaultTests: XCTestCase {
     func testPinStorageAndExpiration() {
