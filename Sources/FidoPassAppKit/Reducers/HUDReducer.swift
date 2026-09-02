@@ -1,36 +1,6 @@
 import Foundation
 import FidoPassCore
 
-/// What `⏎` — and the big button — do in the current state.
-enum HUDPrimaryAction: Equatable {
-    case connectKey
-    /// The key has no PIN at all. Until it gets one, nothing else on it can be done — so this
-    /// outranks unlocking, which would only offer a field no PIN can satisfy.
-    case setPIN(devicePath: String)
-    case unlock(devicePath: String)
-    case createAccount
-    /// Several accounts and no valid selection: point at the list rather than derive from
-    /// an arbitrary one. Deriving the wrong account's password is cheap to do and confusing
-    /// to notice, since every password looks equally plausible.
-    case chooseAccount
-    case generateAndCopy(AccountRef)
-}
-
-/// The inputs the primary action depends on, flattened so it can be decided without the
-/// stores. The click budget in `ai.tmp/HUD-PLAN.md` is enforced here rather than described:
-/// with a key unlocked and an account preselected the answer must be `generateAndCopy`, not
-/// "select an account first".
-struct HUDSnapshot: Equatable {
-    var hasDevices: Bool
-    var selectedDevicePath: String?
-    var isUnlocked: Bool
-    /// Whether the selected key has a PIN. `nil` means it has not been asked — which is not
-    /// "no PIN", and must not route anywhere destructive or misleading.
-    var keyHasPIN: Bool?
-    var accountRefs: [AccountRef]
-    var selection: AccountRef?
-}
-
 enum HUDReducer {
 
     static func primaryAction(_ snapshot: HUDSnapshot) -> HUDPrimaryAction {

@@ -1,36 +1,6 @@
 @preconcurrency import FidoPassCore
 import Foundation
 
-/// What the HUD is showing.
-enum HUDRoute: Equatable {
-    case accounts
-    case unlock
-    /// The key has no PIN. Nothing else on it works until it does.
-    case setPIN
-    /// The key refuses everything until its PIN is changed, and changing it now lives in the
-    /// manager window. A signpost, not a screen that does the work.
-    case pinChangeRequired
-    case enroll
-    case backupKey(AccountRef)
-    case confirmDelete(AccountRef)
-}
-
-/// The key is waiting to be touched.
-struct TouchPrompt: Equatable {
-    var title: String
-    var message: String
-    var deviceName: String
-    var startedAt: Date = Date()
-}
-
-/// Why the HUD was opened. Survives the PIN prompt so that unlocking continues the thing the
-/// user actually asked for instead of dropping them on a list.
-enum HUDIntent: Equatable {
-    case copyPassword(AccountRef, label: String)
-    case revealPassword(AccountRef, label: String)
-    case enroll
-}
-
 /// The single object the HUD views talk to.
 ///
 /// It owns navigation, and it is the only place allowed to start an operation on the key —
@@ -1139,5 +1109,3 @@ final class HUDStore: ObservableObject {
     }
 
 }
-
-
