@@ -81,17 +81,30 @@ struct AccountRowView: View {
 
     private var isBusy: Bool { generation.busyRef == ref }
 
-    /// Written before identities existed. Drawn grey, and offered the migration in place of
-    /// the generator — it derives nothing until it has an identity.
-    private var needsMigration: Bool { account.account.needsMigration }
+    /// How the row is drawn and what it offers. Four cases besides the ordinary one, and
+    /// every one of them replaces the generator with the one thing there is to do.
+    private var state: AccountRowState { AccountRowState(account, store: store) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
             if isSelected {
-                if needsMigration {
+                switch state {
+                case .ready:
+                    labelRow
+                    actionRow
+                    if let result {
+                        ResultView(result: result,
+                                   generation: generation,
+                                   onToggleReveal: store.toggleReveal,
+                                   onCopy: store.copyCurrentResult)
+                    }
+                case .needsMigration, .unfinishedMigration:
                     migrationRow
-                } else {
+                case .incomplete:
+                    incompleteRow
+                case .notMigratable:
+                    notMigratableNote
                     labelRow
                     actionRow
                     if let result {
@@ -116,7 +129,7 @@ struct AccountRowView: View {
         // permanent space in a 340 pt panel.
         .contextMenu { AccountActionsMenu(store: store, account: account, ref: ref) }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(account.id), \(account.kind == .portable ? "portable" : "local") credential\(needsMigration ? ", needs migration" : "")")
+        .accessibilityLabel("\(account.id), \(account.kind == .portable ? "portable" : "local") credential\(state.accessibilitySuffix)")
     }
 
     /// The name line, with the identity as a small swatch beside the tag. The hex lives in
@@ -129,11 +142,14 @@ struct AccountRowView: View {
                 .foregroundStyle(tint)
             Text(account.id)
                 .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(needsMigration ? Color.secondary : Color.primary)
+                .foregroundStyle(state.isDimmed ? Color.secondary : Color.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(identityTooltip)
-            KindTag(kind: account.kind, needsMigration: needsMigration)
+            KindTag(kind: account.kind, state: state)
+            if account.account.format == .v1, state == .ready {
+                FormatTag()
+            }
             Spacer(minLength: 0)
 
             // At the trailing edge, so that the swatches of several rows line up under each
@@ -172,19 +188,22 @@ struct AccountRowView: View {
     }
 
     private var tint: Color {
-        if needsMigration { return .secondary }
+        if state.isDimmed { return .secondary }
         return account.kind == .portable ? .orange : .accentColor
     }
 
     private var identityTooltip: String {
         if let identity = account.account.identity { return "Identity \(identity.groupedHex)" }
-        return "Created by an earlier version — migrate to use"
+        return "Created by an earlier version — migrate to give it an identity"
     }
 
-    /// What a legacy account offers instead of the generator: the one thing to do with it.
+    /// What a v1 portable account offers instead of the generator: the one thing to do
+    /// with it — or, when a copy is already on the key, finishing that.
     private var migrationRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Created by an earlier version — migrate to use. Passwords do not change.")
+            Text(state == .unfinishedMigration
+                 ? "An earlier migration left a copy on the key — finish it, or discard the copy."
+                 : "Created by an earlier version — migrate to use. The same passwords, in the current layout; four touches.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -194,7 +213,7 @@ struct AccountRowView: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up.circle").font(.system(size: 10))
-                    Text("Migrate")
+                    Text(state == .unfinishedMigration ? "Finish migration" : "Migrate")
                     Text("⏎")
                         .font(.system(size: 10))
                         .opacity(0.7)
@@ -204,8 +223,29 @@ struct AccountRowView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
             .keyboardShortcut(isSelected ? .defaultAction : nil)
-            .help("Give this account an identity (⏎)")
+            .help("Recreate this account in the current layout (⏎)")
         }
+    }
+
+    /// A credential without a usable record: not an account, and only deletable.
+    private var incompleteRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(account.account.integrity.problem ?? "This account cannot be used.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Delete…") { store.show(.confirmDelete(ref)) }
+                .controlSize(.small)
+        }
+    }
+
+    /// A v1 portable account on a key that cannot take the copy: it derives as it always
+    /// did, and says why nothing more is offered.
+    private var notMigratableNote: some View {
+        Text("Created by an earlier version. This key cannot hold the current layout, so the account stays as it is — passwords work, encryption keys do not.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Chips and the field for anything else, on one line: the recent labels and "something
@@ -279,13 +319,56 @@ struct AccountRowView: View {
     }
 }
 
+/// What a row is, beyond its kind — and what it may offer.
+enum AccountRowState: Equatable {
+    /// Derives; the ordinary case.
+    case ready
+    /// A v1 portable account on a key that can take the v2 copy: migrate first.
+    case needsMigration
+    /// A v1 portable account whose copy is already on the key: finish or discard.
+    case unfinishedMigration
+    /// A v1 portable account on a key without a large-blob store: derives as before, and
+    /// that is all it will ever do.
+    case notMigratable
+    /// A credential without a usable record: delete.
+    case incomplete
+
+    @MainActor
+    init(_ handle: AccountHandle, store: PanelStore) {
+        if !handle.account.canDerive {
+            self = .incomplete
+        } else if handle.account.needsMigration {
+            if !store.isMigratable(handle) {
+                self = .notMigratable
+            } else if store.accounts.migrationCopy(for: AccountRef(handle)) != nil {
+                self = .unfinishedMigration
+            } else {
+                self = .needsMigration
+            }
+        } else {
+            self = .ready
+        }
+    }
+
+    var isDimmed: Bool { self == .needsMigration || self == .unfinishedMigration || self == .incomplete }
+
+    var accessibilitySuffix: String {
+        switch self {
+        case .ready: return ""
+        case .needsMigration: return ", needs migration"
+        case .unfinishedMigration: return ", unfinished migration"
+        case .notMigratable: return ", earlier version"
+        case .incomplete: return ", incomplete"
+        }
+    }
+}
+
 struct KindTag: View {
     let kind: AccountKind
-    /// Written before identities existed: grey, and says what to do about it.
-    var needsMigration = false
+    var state: AccountRowState = .ready
 
     var body: some View {
-        Text(needsMigration ? "needs migration" : (kind == .portable ? "portable" : "local"))
+        Text(text)
             .font(.system(size: 9, weight: .semibold))
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
@@ -293,9 +376,32 @@ struct KindTag: View {
             .foregroundStyle(tint)
     }
 
+    private var text: String {
+        switch state {
+        case .ready, .notMigratable: return kind == .portable ? "portable" : "local"
+        case .needsMigration: return "needs migration"
+        case .unfinishedMigration: return "unfinished migration"
+        case .incomplete: return "incomplete"
+        }
+    }
+
     private var tint: Color {
-        if needsMigration { return .secondary }
+        if state.isDimmed { return .secondary }
         return kind == .portable ? .orange : .accentColor
+    }
+}
+
+/// Marks an account still in the v1 layout that works as it is: a local one, which cannot
+/// move, or a portable one on a key that cannot take the move.
+struct FormatTag: View {
+    var body: some View {
+        Text("v1")
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.16), in: Capsule())
+            .foregroundStyle(.secondary)
+            .help("Created by an earlier version. Works as before; not available in the browser.")
     }
 }
 
@@ -394,10 +500,13 @@ struct AccountActionsMenu: View {
     let ref: AccountRef
 
     var body: some View {
-        if account.account.needsMigration {
-            // Nothing is derived from an account without an identity — except its backup,
-            // which is the one thing that must never wait.
-            Button("Migrate…") { store.beginMigration(ref) }
+        let state = AccountRowState(account, store: store)
+        if state == .incomplete {
+            Button("Delete account…") { store.show(.confirmDelete(ref)) }
+        } else if state == .needsMigration || state == .unfinishedMigration {
+            // Nothing is derived from a v1 portable account until it has been migrated —
+            // except its backup, which is the one thing that must never wait.
+            Button(state == .unfinishedMigration ? "Finish migration…" : "Migrate…") { store.beginMigration(ref) }
             Divider()
             Button("Backup key…") { Task { await store.showBackupKey(for: ref) } }
             Button("Save recovery sheet…") { store.saveRecoverySheet(for: ref) }
@@ -412,7 +521,9 @@ struct AccountActionsMenu: View {
             if account.kind == .portable {
                 Button("Backup key…") { Task { await store.showBackupKey(for: ref) } }
             }
-            Button("Copy identity") { store.copyIdentity(for: ref) }
+            if account.account.identity != nil {
+                Button("Copy identity") { store.copyIdentity(for: ref) }
+            }
             Divider()
             Button("Delete account…") { store.show(.confirmDelete(ref)) }
         }

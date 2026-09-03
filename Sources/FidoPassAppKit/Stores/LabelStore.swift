@@ -149,6 +149,28 @@ final class LabelStore: ObservableObject {
         save()
     }
 
+    /// Re-keys one account's history onto another credential — what a migration does, since
+    /// the migrated account is a new credential and the labels are the one thing about the
+    /// old one that cannot be derived again. A history already under the new scope is
+    /// merged in rather than lost.
+    func move(from old: LabelScope, to new: LabelScope) {
+        guard old != new, let index = entries.firstIndex(where: { $0.credentialId == old.credentialId }) else { return }
+        var entry = entries.remove(at: index)
+        entry.credentialId = new.credentialId
+        if let existing = entries.firstIndex(where: { $0.credentialId == new.credentialId }) {
+            let other = entries.remove(at: existing)
+            for label in other.labels where !entry.labels.contains(label) { entry.labels.append(label) }
+            entry.labels = Array(entry.labels.prefix(Self.limit))
+            entry.usedAt = max(entry.usedAt, other.usedAt)
+        }
+        entries.insert(entry, at: 0)
+        if scope == old {
+            scope = new
+            recent = entry.labels
+        }
+        save()
+    }
+
     /// Drops one account's history — called when the account itself is deleted.
     func forget(_ scope: LabelScope) {
         guard entries.contains(where: { $0.credentialId == scope.credentialId }) else { return }

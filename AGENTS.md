@@ -235,43 +235,72 @@ fidopass://blobv1?nonce=<32 B>&idfp=<16 B>&content=<enc 32 B ‖ ciphertext ‖ 
   **the sending window does not close on a session lock** — it holds no key material, the
   lock screen hides it, and closing it would throw away what was being written. A decision,
   not an omission; `WindowIsolationTests` pins the first half.
-- An account from before identities has no locator and cannot issue or receive: the same
-  `needsMigration` gate as passwords, in the core (`MessageCryptoError.accountNeedsMigration`)
-  and in the panel.
+- A portable v1 account has no identity, so no locator, and cannot issue or receive: the
+  same `needsMigration` gate as passwords, in the core (`MessageCryptoError.accountNeedsMigration`)
+  and in the panel. A migrated account keeps its master key, so a key link issued before
+  the migration keeps opening messages after it (`V2DerivationVectorsTests`).
 
-### Account identity
+### Account layout on the key, and the identity
 
-Every account shows a 12-byte identity (`AccountIdentity`): hex in groups of four and a
-twelve-cell colour strip (`IdentityFingerprintView`, `IdentityPalette`). It exists so that a
-person can tell "the same vault on a second key" from "another account named vault" by eye.
-**It is not an input to derivation** — `DerivationContractTests.testIdentityDoesNotAffectDerivation`
-pins that, and the golden vectors do not know the type exists. It is not a secret either: it
-goes on the recovery sheet, into the manager's JSON export and onto the clipboard without a
-countdown.
+Two layouts (`AccountFormat`); only **v2** is written, **v1** — what released versions wrote
+— is read for good. `ai.tmp/INFO.md` has the field-by-field table.
 
-- A local account derives it from its credential id and stores nothing.
-- A portable account stores it on the key after its key material: `user.name` is
-  base64(external ‖ identity), 44 bytes, 60 characters. **CTAP lets an authenticator keep 64
-  bytes of `user.name`**, which is why the identity is 12 bytes and not 16 — 48 bytes would
-  encode to exactly 64. `CredentialUserFieldsTests` pins the margin. Nothing reads the field
-  back after writing to check for truncation; that is a decision, not an oversight, and the
-  hardware checklist in `ai.tmp/ID-PLAN.md` covers it once per key model.
-- The backup (`PortableBackup`) is base64(masterKey ‖ identity), 60 characters, and importing
-  it gives the new account the same identity. Backups printed by earlier versions are 44
-  characters and still import; the form asks for an identity then. `PortableBackup` is
-  deliberately not `Codable` and has no description — it must not be able to reach a log or
-  an export by accident.
-- **Compatibility runs one way.** This version reads every layout ever written; earlier
-  versions cannot read a payload with an identity. A portable account written before
-  identities (`Account.needsMigration`) is drawn grey and refused a password or an encryption
-  key until migrated: `PanelStore` gates both, `PanelReducer` turns ⏎ into `.migrate`, and
-  `PanelStoreTests` pins the gate — and pins that **the backup key is not gated**, because
-  export must never wait. Migration is `assignIdentity`: one `credman_set_dev_rk` under the
-  PIN, no touch, the material untouched, so no password changes. The manager shows
-  identities and never migrates — writing accounts is the panel's job.
-- Import is not a third `AccountKind`: rp ids enter the salt and are frozen. `EnrollDraft.Mode`
-  is the form's three-way choice, `AccountStore.EnrollRequest` is what the store runs, and
-  both collapse to `.portable` on the key.
+- **v2: one relying party, `fidopass.org`, for both kinds.** `user.id` is the identity,
+  `user.name`/`displayName` are the name and nothing else, and what the account *is* lives
+  in a record in the key's large-blob store (`AccountRecord`, `LargeBlobStore`): version
+  byte, kind byte, and for a portable account the 32-byte mask. Every v2 account has a
+  record, a local one included — without that, "no record" would read as "local" and a
+  portable account that lost its record would derive the wrong passwords silently. A
+  credential without a usable record is `AccountIntegrity.recordMissing/.recordCorrupt`:
+  the core derives nothing from it (`canDerive` guards in `PasswordGenerator`,
+  `MessageKeyService`, `exportBackup`) and the panel offers only Delete. The layout, the
+  relying party and the record bytes are frozen like `policy.version == 1`: they enter every
+  credential, and `fidopass.org` is the domain a web page has to be served from to reach
+  these credentials through WebAuthn. Created with `credProtect = 3`: without the PIN the
+  credential answers nothing.
+- **v2 salts go through `SaltFactory.prfSalt` and nothing else** —
+  `SHA256("WebAuthn PRF" ‖ 0x00 ‖ input)`, the wrapping the browser `prf` extension applies.
+  It is the one place the app and a browser page could disagree silently; `SaltFactoryTests`
+  pins the vector. The name is not in the v2 salt (the credential is unique by itself, and
+  the name can then be a name); the portable tail — HMAC under the master key, HKDF,
+  `PasswordEngine` — is the same in both formats, which is what makes migration keep every
+  password. UV is required on both sides: `hmac-secret` answers with a different CredRandom
+  without it.
+- **The identity is 16 bytes** (`AccountIdentity`): hex in eight groups of four, a
+  sixteen-cell strip (`IdentityFingerprintView`, `IdentityPalette`). Chosen in the form when
+  the account is created — random, `↻`, or typed, the one the same account already shows on
+  another key — and written as `user.id`, which is the one `user` field WebAuthn hands a page
+  (`userHandle`). It is not an input to derivation
+  (`DerivationContractTests.testIdentityDoesNotAffectDerivation`) and not a secret: it goes
+  on the recovery sheet, into the manager's JSON export and onto the clipboard without a
+  countdown. A v1 local account derives it from its credential id; a v1 portable account has
+  none until migrated.
+- **The backup** (`PortableBackup`) is base64(masterKey ‖ identity), 64 characters; the
+  44-character backup of released versions still imports, with the identity the form offers.
+  Deliberately not `Codable` and without a description — it must not reach a log or an
+  export by accident. The 60-character backup and the 44-byte `user.name` of an unreleased
+  build are **not** read: nothing shipped with them.
+- **Migration is recreation, and only for portable v1** (`AccountMigrationService`,
+  `Migrating`): read the old master key (touch), `makeCredential` the copy under the
+  account's own name (touch), derive its fixed component (touch), write the record (PIN),
+  read the copy back through `enumerateAccounts` and recover the master key through it
+  (touch), and only then delete the original (PIN). **The original is deleted after the copy
+  is verified, never before** — `AccountMigrationServiceTests` pins the order and that every
+  earlier failure removes the copy instead. A local v1 account cannot migrate: its secrets
+  are the credential's own, so it stays v1 for good, derives as it always did, and shows a
+  `v1` tag. `PanelStore` gates passwords and encryption keys on `isMigratable`, `PanelReducer`
+  turns ⏎ into `.migrate`; **export is never gated**; a key without `largeBlobs` has nothing
+  to migrate into, so there the gate is off and the account derives as before.
+- **A namesake pair is an unfinished migration.** The copy carries no marker — the name is
+  a name — so ordinary creation refuses a name taken under *any* of the three relying parties
+  (`NamesakePolicy.refuse`), and only migration may create the one namesake
+  (`.allowLegacyTwin`). `AccountStore.split` keeps such a copy out of the list, so an
+  `AccountRef` still names one row; the v1 row offers Finish (verify and delete the old, or
+  discard and redo when the copy has no record) and Discard. Label history moves to the new
+  credential (`LabelStore.move`).
+- Import is not a third `AccountKind`: `EnrollDraft.Mode` is the form's three-way choice,
+  `AccountStore.EnrollRequest` is what the store runs, and both collapse to `.portable` on
+  the key.
 
 ### Known, deliberate gaps
 
@@ -292,14 +321,16 @@ countdown.
 Sources/FidoPassCore/
   Public/       facade
   Models/       Account (what the key holds), AccountHandle (account + connected key),
-                AccountIdentity, PortablePayload, PortableBackup, DerivationParameters,
+                AccountFormat, AccountRecord, AccountIntegrity, AccountIdentity,
+                PortablePayload (v1 codec), PortableBackup, MigrationStep, NamesakePolicy,
+                DerivationParameters,
                 PasswordPolicy, PinPolicy, FidoDevice, AuthenticatorInfo, CredentialInventory,
                 ResidentCredential, EncryptionKeyURL, SealedMessageURL, AccountLocator,
                 MessageKeyFingerprint, EmojiAlphabet
   Protocols/    DI seams used by tests — one gerund per protocol: Enrolling, SecretDeriving, …
   Devices/      libfido2 device access, capability probing, PIN set/change and reset,
-                wide inspection, authenticator configuration
-  Enrollment/   credential creation, enumeration, deletion
+                wide inspection, authenticator configuration, the large-blob store
+  Enrollment/   credential creation, enumeration, deletion, migration
   Secrets/      hmac-secret, HKDF, password mapping, message keys (MessageKeyService,
                 MessageKey, PortableMasterKey) and HPKE sealing (MessageSealer)
   Support/      salts, crypto helpers, libfido2 context, CborInfo, PinScope, Argon2,
@@ -398,9 +429,13 @@ second must not redraw the whole panel. Keep new state in the store that owns it
   must not happen is a read triggered by anything else: a key being plugged in, a refresh, a
   window merely existing. `InventoryStore` never reads on its own, and `InventoryStoreTests`
   pins that the way `DeviceAccessTests` pins it for the panel.
-- **Credential management never needs a touch, only the PIN** — listing, renaming, deleting
-  and migrating a credential (`assignIdentity` is a rename of `user.name`) all come back
-  without one. Only `makeCredential`, `getAssertion` and `reset` make the key wait for a
+- **Credential management never needs a touch, only the PIN** — listing and deleting a
+  credential come back without one, and so do the large-blob writes that carry an account's
+  record; reading the large-blob store needs neither PIN nor touch. `enumerateAccounts`
+  reads all three relying parties in **one open**, record included, and the large-blob key
+  it uses is never kept in a model — deletion re-reads it through credman to remove the
+  record ahead of the credential. libfido2 frames blobs as raw DEFLATE, the same as a
+  browser, so a record written here reads there. Only `makeCredential`, `getAssertion` and `reset` make the key wait for a
   finger, so only they go through `withTouchPrompt`. Deriving a message key is a
   `getAssertion` (`hmac-secret`), so it is a touch: once to issue a key, once per nonce to
   open messages.

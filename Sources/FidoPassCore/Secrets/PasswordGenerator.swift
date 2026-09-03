@@ -12,6 +12,10 @@ final class PasswordGenerator: PasswordGenerating, Sendable {
                           label: String,
                           parameters: DerivationParameters,
                           pinProvider: (@Sendable () -> String?)?) throws -> String {
+        // A credential without a usable record is not an account; nothing is derived from it.
+        if let problem = handle.account.integrity.problem {
+            throw FidoPassError.invalidState(problem)
+        }
         let secret: Data
         if handle.account.kind == .portable {
             secret = try portableSecret(handle, label: label, pinProvider: pinProvider)

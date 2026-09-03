@@ -66,7 +66,7 @@ final class AuthenticatorInfoFormattingTests: XCTestCase {
 
         // Nothing readable at all: the credential id is the only handle left, and a withheld
         // name must not become the label either.
-        let opaque = Self.credential(display: nil, name: .portableKeyMaterialWithheld(identity: nil), utf8: nil)
+        let opaque = Self.credential(display: nil, name: .portableKeyMaterialWithheld, utf8: nil)
         XCTAssertEqual(opaque.listLabel, String("Y3JlZC1pZC1iNjQ".prefix(12)))
     }
 
@@ -86,6 +86,7 @@ final class AuthenticatorInfoFormattingTests: XCTestCase {
     func testFidoPassCredentialsAreRecognisedButNotByName() {
         XCTAssertTrue(Self.credential(rpId: AccountKind.local.rpId).isFidoPassCredential)
         XCTAssertTrue(Self.credential(rpId: AccountKind.portable.rpId).isFidoPassCredential)
+        XCTAssertTrue(Self.credential(rpId: AccountFormat.v2RelyingPartyId).isFidoPassCredential)
         XCTAssertFalse(Self.credential(rpId: "github.com").isFidoPassCredential)
     }
 

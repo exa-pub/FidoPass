@@ -8,5 +8,6 @@ import Foundation
 public enum PortableEnrollmentStep: Sendable {
     case creatingCredential
     case derivingBackupKey
-    case savingPayload
+    /// Writing the account's record — kind and mask — to the key's large-blob store. PIN only.
+    case savingRecord
 }

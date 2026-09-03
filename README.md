@@ -24,8 +24,9 @@ leaves out characters that are easy to confuse: `i l o I L O 0 1`.
 ## What you need
 
 - macOS 14 Sonoma or newer.
-- A FIDO2 security key with `hmac-secret` support and a PIN set — YubiKey 5, Nitrokey 3,
-  SoloKey 2 and most modern keys qualify.
+- A FIDO2 security key with `hmac-secret` support, a large-blob store (`largeBlobs` in its
+  CTAP info — YubiKey 5 firmware 5.7 and other CTAP 2.1 keys) and a PIN set. A key without a
+  large-blob store keeps serving the accounts already on it, but cannot take new ones.
 
 ## Install
 
@@ -44,9 +45,10 @@ macOS prompt, not an error.
    written anywhere; locking the Mac or unplugging the key clears it at once.
 4. Press **⌘N** to create an account — `vault`, say. Leave it **portable**: such an account
    shows a backup key once, and that backup key imported on a second security key reproduces
-   the same passwords. Write it down. The backup key is 60 characters and carries the
-   account's *identity* — the coloured strip under its name — so the copy on the second key
-   shows the same one.
+   the same passwords. Write it down. The backup key is 64 characters and carries the
+   account's *identity* — the coloured strip beside its name — so the copy on the second key
+   shows the same one. The form offers a random identity; keep it, or type the one the same
+   account already shows elsewhere.
 5. Type a label and press **Copy password**. Touch the key when it blinks.
 
 The same account plus the same label always produce the same password, so keep labels
@@ -101,8 +103,8 @@ There is no reset, so plan for it in advance:
 
 - **Keep the backup key** of a portable account. Imported on another FIDO2 key (⌘N →
   Import), it makes that key produce the same passwords and show the same identity. Backup
-  keys written down by earlier versions — 44 characters — still import; the form asks for an
-  identity then.
+  keys written down by earlier versions — 44 characters — still import; the identity the
+  form offers is used then.
 - **Print the recovery sheet** (right-click an account). It holds everything needed to
   reproduce that account's passwords and contains no secrets, so it is safe to file with
   your documents — and useless without the key or the backup key.
@@ -110,7 +112,10 @@ There is no reset, so plan for it in advance:
 ## What is stored
 
 Never written to disk: passwords, PINs, backup keys, anything derived from your security
-key. Account metadata lives on the key itself, as resident credentials.
+key. Account metadata lives on the key itself: one resident credential per account under
+the relying party `fidopass.org`, its identity as the credential's user id, its name as the
+user name, and a small record in the key's large-blob store saying whether it is local or
+portable — and, for a portable one, the masked master key.
 
 The app keeps only two things locally, both clearable in Preferences: the labels you have
 used, per account, so it can suggest them; and the account and label used last, so the HUD
@@ -119,16 +124,21 @@ can offer the right action before the key is unlocked.
 ## How it works
 
 Enrollment creates a resident credential with the `hmac-secret` extension. Generating a
-password asks the key for an assertion with a salt derived from `label + rpId + accountId`;
-the key answers with 32 bytes that never leave it in any other form, which are stretched
-with HKDF and mapped into a password. Portable accounts XOR an imported master key with the
-key-derived secret, which is what lets a second authenticator reproduce the same passwords.
+password asks the key for an assertion under a salt derived from the label; the key answers
+with 32 bytes that never leave it in any other form, which are stretched with HKDF and mapped
+into a password. Portable accounts XOR an imported master key with the key-derived secret,
+which is what lets a second authenticator reproduce the same passwords.
 
-Every account also shows an identity: twelve bytes, drawn as hex and as a strip of twelve
+The salts are wrapped the way the WebAuthn `prf` extension wraps them, so a web page served
+from `fidopass.org` could ask the same key the same question through a browser and get the
+same answer — the layout on the key is one a browser can read in a single assertion. The
+page itself is not part of this release.
+
+Every account also shows an identity: sixteen bytes, drawn as hex and as a strip of sixteen
 colours. It takes no part in any derivation and is not a secret — it exists so that the same
 account on two keys can be recognised by eye, and told from another account with the same
-name. Local accounts derive it from their credential id; portable accounts keep it on the key
-after the key material and carry it in the backup key.
+name. It is chosen when the account is created and stored on the key as the credential's
+user id; the backup key carries it too.
 
 An encryption key is derived from the account and a random nonce carried in the link: the
 `hmac-secret` answer for that nonce (for a portable account, an HMAC under the master key)
@@ -139,11 +149,16 @@ fingerprint is argon2id over the link text, deliberately slow, so that six emoji
 
 ## Accounts from earlier versions
 
-A portable account created before identities existed shows grey, marked *needs migration*.
-Its passwords are unchanged and it still exports its backup key; generating and encrypting
-wait for the migration, which writes an identity to the key under the PIN, without a touch.
-If the same account was already migrated on another key, enter the identity that key shows so
-that both agree about what is the same account.
+Accounts created by earlier versions are in an older layout on the key. Local ones keep
+working exactly as before, marked *v1* in the list; nothing about them can be moved to the
+new layout, because their secrets never leave the credential. Portable ones show grey,
+marked *needs migration*: they still export their backup key, but generating and encrypting
+wait for the migration. It recreates the account in the current layout with the same master
+key — so the same passwords — verifies the new record by reading it back from the key, and
+only then deletes the old one. Four touches. If the same account was already migrated on
+another key, enter the identity that key shows so that both agree about what is the same
+account; if a migration is interrupted, the account offers to finish or discard the copy it
+left.
 
 Derivation for policy version 1 is a frozen contract: the output will never change. Golden
 vectors pin the salts, the character mapping and the generator, so an accidental change

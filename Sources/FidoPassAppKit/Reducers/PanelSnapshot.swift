@@ -13,8 +13,12 @@ struct PanelSnapshot: Equatable {
     /// "no PIN", and must not route anywhere destructive or misleading.
     var keyHasPIN: Bool?
     var accountRefs: [AccountRef]
-    /// Accounts written before identities existed. Generating for one is refused until it
-    /// has been migrated, so the primary action for it is the migration, not a password.
+    /// Portable accounts in the v1 layout, on a key that can hold the v2 one. Generating for
+    /// one is refused until it has been migrated, so the primary action for it is the
+    /// migration, not a password.
     var legacyRefs: Set<AccountRef> = []
+    /// Credentials without a usable record: nothing is derived from them, and the only thing
+    /// to do with one is delete it. `⏎` must not pretend otherwise.
+    var incompleteRefs: Set<AccountRef> = []
     var selection: AccountRef?
 }

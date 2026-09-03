@@ -126,5 +126,5 @@ final class MessageSealerTests: XCTestCase {
         XCTAssertEqual(String(decoding: MessageSealer.domain, as: UTF8.self), "fidopass|ecies|blob|v1")
     }
 
-    static let frozenMessage = "fidopass://blobv1?nonce=AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw&idfp=y1iDTfGICAGYgZL2iQdGMQ&content=uDRoThkKoW8ps_KvFuVI2FRbiMiHre5e59XbGKvg1ywUQGkaGpCRVs_lN6I2ht1QvLFGXjY7f-U5wNXtHaLLiywR50j3fl-brJ_79rIjdiRNLFHh"
+    static let frozenMessage = "fidopass://blobv1?nonce=AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw&idfp=VMOErSEwEcq9RfnurIO9OQ&content=dQOxHmQ_BtE6JsKQb8VGv1VbVTgc-1exDIyFB0pawCGvz-n_xc2AWBoFfXnqQmbTShRU2TyLIc92fCpNjesPDXxU2kQLfj0czSy1C2eRlAiZpIhj"
 }

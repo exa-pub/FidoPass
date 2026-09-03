@@ -4,18 +4,12 @@ import TestSupport
 
 final class PortableEnrollmentServiceTests: XCTestCase {
 
-    private let identity = AccountIdentity(hex: "a1a2a3a4a5a6a7a8a9aaabac")!
+    private let identity = AccountIdentity(hex: "a1a2a3a4a5a6a7a8a9aaabacadaeaf00")!
 
     private func makeService(fixed: Data,
                              enrollment: MockEnrollmentService = MockEnrollmentService()) -> (PortableEnrollmentService, MockEnrollmentService, MockSecretDerivationService) {
         let secret = MockSecretDerivationService()
         secret.deriveFixedClosure = { _, _ in fixed }
-        enrollment.enrollClosure = { accountId, kind, devicePath, _ in
-            AccountHandle.fixture(id: accountId,
-                                  kind: kind,
-                                  credentialId: Data("cred".utf8),
-                                  devicePath: devicePath)
-        }
         return (PortableEnrollmentService(enrollmentService: enrollment, secretDerivationService: secret),
                 enrollment,
                 secret)
@@ -23,72 +17,98 @@ final class PortableEnrollmentServiceTests: XCTestCase {
 
     // MARK: - Enrolment
 
-    func testEnrollPortableGeneratesKeyAndIdentityWhenNothingIsImported() throws {
+    func testEnrollPortableGeneratesKeyWhenNothingIsImported() throws {
         let fixed = Data(repeating: 0xAB, count: 32)
         let (service, enrollment, secret) = makeService(fixed: fixed)
 
         let (account, generated) = try service.enrollPortable(accountId: "acct",
+                                                               identity: identity,
                                                                devicePath: "/dev/key",
                                                                askPIN: nil,
                                                                imported: nil,
                                                                onStep: nil)
 
-        XCTAssertEqual(account.kind, AccountKind.portable)
-        XCTAssertEqual(enrollment.updateCalls.count, 1)
+        XCTAssertEqual(account.kind, .portable)
+        XCTAssertEqual(account.account.format, .v2)
+        XCTAssertEqual(account.account.identity, identity, "the identity the form chose is the one on the key")
+        XCTAssertEqual(account.account.integrity, .ok)
+        XCTAssertEqual(enrollment.enrollCalls.map(\.identity), [identity])
+        XCTAssertEqual(enrollment.enrollCalls.first?.namesakePolicy, .refuse)
+        XCTAssertEqual(enrollment.writeRecordCalls.count, 1, "the record is written once, after the mask exists")
         XCTAssertEqual(secret.deriveFixedCalls.count, 1)
 
         let backup = try XCTUnwrap(generated, "fresh material has to be handed back to be written down")
         XCTAssertFalse(backup.isLegacy)
-        let payload = try XCTUnwrap(account.account.portable)
-        XCTAssertEqual(payload.identity, backup.identity, "the backup carries the identity the key was given")
-        XCTAssertFalse(payload.needsMigration, "a freshly written payload is never in the old layout")
-        XCTAssertEqual(payload.base64.count, 60)
-        XCTAssertEqual(Data(zip(backup.masterKey, fixed).map { $0 ^ $1 }), payload.external)
+        XCTAssertEqual(backup.identity, identity)
+        XCTAssertEqual(backup.base64.count, 64)
+        let mask = try XCTUnwrap(account.account.mask)
+        XCTAssertEqual(Data(zip(backup.masterKey, fixed).map { $0 ^ $1 }), mask)
+        XCTAssertEqual(enrollment.writeRecordCalls.first?.account.mask, mask, "what went to the key is the mask")
     }
 
-    func testEnrollPortableKeepsTheImportedKeyAndIdentity() throws {
+    func testEnrollPortableKeepsTheImportedKey() throws {
         let fixed = Data(repeating: 0x11, count: 32)
         let (service, _, _) = makeService(fixed: fixed)
         let imported = PortableBackup(masterKey: Data(repeating: 0x22, count: 32), identity: identity)!
 
         let (account, generated) = try service.enrollPortable(accountId: "acct",
+                                                               identity: identity,
                                                                devicePath: "/dev/mock",
                                                                askPIN: nil,
                                                                imported: imported,
                                                                onStep: nil)
 
         XCTAssertNil(generated, "an import has its backup already")
-        let payload = try XCTUnwrap(account.account.portable)
-        XCTAssertEqual(Data(zip(imported.masterKey, fixed).map { $0 ^ $1 }), payload.external)
-        XCTAssertEqual(payload.identity, identity, "the second key shows the same identity as the first")
-    }
-
-    /// A backup printed before identities existed has none. The panel asks for one before
-    /// importing; if one still reaches the service, the account gets a random one rather
-    /// than the layout that would need migrating the moment it was created.
-    func testEnrollPortableGivesALegacyImportAnIdentity() throws {
-        let (service, _, _) = makeService(fixed: Data(repeating: 0x11, count: 32))
-        let legacy = PortableBackup(masterKey: Data(repeating: 0x22, count: 32), identity: nil)!
-
-        let (account, generated) = try service.enrollPortable(accountId: "acct",
-                                                               devicePath: "/dev/mock",
-                                                               askPIN: nil,
-                                                               imported: legacy,
-                                                               onStep: nil)
-        XCTAssertNil(generated)
-        XCTAssertNotNil(account.account.portable?.identity)
-        XCTAssertFalse(account.account.needsMigration)
+        XCTAssertEqual(Data(zip(imported.masterKey, fixed).map { $0 ^ $1 }), account.account.mask)
+        XCTAssertEqual(account.account.identity, identity, "the second key shows the same identity as the first")
     }
 
     func testEnrollPortableReportsEveryStep() throws {
         let (service, _, _) = makeService(fixed: Data(repeating: 0x00, count: 32))
         nonisolated(unsafe) var steps: [PortableEnrollmentStep] = []
         _ = try service.enrollPortable(accountId: "acct",
+                                       identity: identity,
                                        devicePath: "/dev/mock",
                                        askPIN: nil,
                                        imported: nil,
                                        onStep: { steps.append($0) })
-        XCTAssertEqual(steps, [.creatingCredential, .derivingBackupKey, .savingPayload])
+        XCTAssertEqual(steps, [.creatingCredential, .derivingBackupKey, .savingRecord])
+    }
+
+    /// A credential without a record is not an account. If the record cannot be written, the
+    /// credential goes back off the key rather than sitting in a slot as "incomplete".
+    func testAFailedRecordWriteTakesTheCredentialBack() {
+        let enrollment = MockEnrollmentService()
+        enrollment.writeRecordClosure = { _, _ in throw TestError.generic("store full") }
+        let (service, _, _) = makeService(fixed: Data(repeating: 0x00, count: 32), enrollment: enrollment)
+
+        XCTAssertThrowsError(try service.enrollPortable(accountId: "acct",
+                                                        identity: identity,
+                                                        devicePath: "/dev/mock",
+                                                        askPIN: { "1234" },
+                                                        imported: nil,
+                                                        onStep: nil)) { error in
+            XCTAssertEqual(error as? TestError, .generic("store full"))
+        }
+        XCTAssertEqual(enrollment.deleteCalls.count, 1)
+        XCTAssertEqual(enrollment.deleteCalls.first?.0.id, "acct")
+        XCTAssertEqual(enrollment.deleteCalls.first?.1, "1234")
+    }
+
+    func testAFailedFixedComponentTakesTheCredentialBack() {
+        let enrollment = MockEnrollmentService()
+        let secret = MockSecretDerivationService()
+        secret.deriveFixedClosure = { _, _ in throw TestError.generic("no touch") }
+        let service = PortableEnrollmentService(enrollmentService: enrollment, secretDerivationService: secret)
+
+        XCTAssertThrowsError(try service.enrollPortable(accountId: "acct",
+                                                        identity: identity,
+                                                        devicePath: "/dev/mock",
+                                                        askPIN: nil,
+                                                        imported: nil,
+                                                        onStep: nil))
+        XCTAssertEqual(enrollment.deleteCalls.count, 1)
+        XCTAssertTrue(enrollment.writeRecordCalls.isEmpty)
     }
 
     // MARK: - Export
@@ -97,9 +117,8 @@ final class PortableEnrollmentServiceTests: XCTestCase {
         let fixed = Data(repeating: 0xA5, count: 32)
         let (service, _, secret) = makeService(fixed: fixed)
         let masterKey = Data((0..<32).map { UInt8(truncatingIfNeeded: $0) })
-        let external = Data(zip(masterKey, fixed).map { $0 ^ $1 })
-        let account = AccountHandle.fixture(kind: .portable,
-                                            portable: PortablePayload(external: external, identity: identity))
+        let mask = Data(zip(masterKey, fixed).map { $0 ^ $1 })
+        let account = AccountHandle.v2Fixture(kind: .portable, identity: identity, mask: mask)
 
         let backup = try service.exportBackup(account, pinProvider: nil)
         XCTAssertEqual(backup.masterKey, masterKey)
@@ -108,9 +127,9 @@ final class PortableEnrollmentServiceTests: XCTestCase {
         XCTAssertEqual(secret.deriveFixedCalls.count, 1, "one touch")
     }
 
-    /// An account from before identities exports what it always did — the same 32 bytes,
-    /// without an identity. Export does not wait for migration.
-    func testExportBackupOfALegacyAccountIsTheLegacyBackup() throws {
+    /// A v1 account exports what it always did — the same 32 bytes, without an identity.
+    /// Export does not wait for migration.
+    func testExportBackupOfAV1AccountIsTheLegacyBackup() throws {
         let fixed = Data(repeating: 0xA5, count: 32)
         let (service, _, _) = makeService(fixed: fixed)
         let masterKey = Data((0..<32).map { UInt8(truncatingIfNeeded: 0xF0 &- $0) })
@@ -127,59 +146,10 @@ final class PortableEnrollmentServiceTests: XCTestCase {
     }
 
     func testExportBackupNeedsAPortableAccountWithMaterial() {
-        let (service, _, _) = makeService(fixed: Data(repeating: 0x00, count: 32))
+        let (service, _, secret) = makeService(fixed: Data(repeating: 0x00, count: 32))
         XCTAssertThrowsError(try service.exportBackup(AccountHandle.fixture(kind: .local), pinProvider: nil))
         XCTAssertThrowsError(try service.exportBackup(AccountHandle.fixture(kind: .portable, portable: nil), pinProvider: nil))
-    }
-
-    // MARK: - Migration
-
-    func testAssignIdentityRewritesTheNameAndNothingElse() throws {
-        let (service, enrollment, secret) = makeService(fixed: Data(repeating: 0x00, count: 32))
-        let external = Data(repeating: 0x5A, count: 32)
-        let legacy = AccountHandle.fixture(id: "vault", kind: .portable, portable: PortablePayload(external: external))
-
-        let migrated = try service.assignIdentity(legacy, identity: identity, pinProvider: nil)
-
-        XCTAssertEqual(enrollment.updateCalls.count, 1, "one credential-management write")
-        XCTAssertEqual(enrollment.updateCalls.first?.account.portable?.identity, identity,
-                       "the payload handed to the key carries the identity")
-        XCTAssertEqual(secret.deriveFixedCalls.count, 0, "no touch: the key material is not recomputed")
-        XCTAssertEqual(migrated.account.portable?.external, external, "the material is untouched")
-        XCTAssertEqual(migrated.account.identity, identity)
-        XCTAssertFalse(migrated.account.needsMigration)
-        XCTAssertEqual(migrated.devicePath, legacy.devicePath)
-        XCTAssertEqual(migrated.id, "vault")
-    }
-
-    /// Identities are meant to be stable. Re-assigning one is not migration and is refused.
-    func testAssignIdentityRefusesAnAccountThatAlreadyHasOne() throws {
-        let (service, enrollment, _) = makeService(fixed: Data(repeating: 0x00, count: 32))
-        let current = AccountHandle.portableFixture(id: "vault")
-        XCTAssertThrowsError(try service.assignIdentity(current, identity: identity, pinProvider: nil))
-        XCTAssertEqual(enrollment.updateCalls.count, 0)
-    }
-
-    func testAssignIdentityNeedsAPortableAccountWithMaterial() {
-        let (service, enrollment, _) = makeService(fixed: Data(repeating: 0x00, count: 32))
-        XCTAssertThrowsError(try service.assignIdentity(AccountHandle.fixture(kind: .local),
-                                                        identity: identity,
-                                                        pinProvider: nil))
-        XCTAssertThrowsError(try service.assignIdentity(AccountHandle.fixture(kind: .portable, portable: nil),
-                                                        identity: identity,
-                                                        pinProvider: nil))
-        XCTAssertEqual(enrollment.updateCalls.count, 0)
-    }
-
-    /// The write itself can be refused by the key; the caller must see that rather than a
-    /// handle claiming to be migrated.
-    func testAssignIdentityPropagatesARefusedWrite() {
-        let enrollment = MockEnrollmentService()
-        enrollment.updateClosure = { _, _ in throw TestError.generic("refused") }
-        let (service, _, _) = makeService(fixed: Data(repeating: 0x00, count: 32), enrollment: enrollment)
-        let legacy = AccountHandle.portableFixture(id: "vault", legacy: true)
-        XCTAssertThrowsError(try service.assignIdentity(legacy, identity: identity, pinProvider: nil)) { error in
-            XCTAssertEqual(error as? TestError, .generic("refused"))
-        }
+        XCTAssertThrowsError(try service.exportBackup(AccountHandle.v2Fixture(kind: .portable, integrity: .recordMissing), pinProvider: nil))
+        XCTAssertTrue(secret.deriveFixedCalls.isEmpty, "no touch is spent on an account that cannot export")
     }
 }

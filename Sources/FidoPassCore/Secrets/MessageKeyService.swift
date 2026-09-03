@@ -32,8 +32,11 @@ final class MessageKeyService: MessageKeyDeriving, Sendable {
         guard nonce.count == EncryptionKeyURL.nonceByteCount else {
             throw FidoPassError.invalidState("Nonce must be \(EncryptionKeyURL.nonceByteCount) bytes")
         }
-        // The same gate as passwords: an account from before identities has no locator, so
-        // no message could ever find it. Migrate first.
+        if let problem = handle.account.integrity.problem {
+            throw FidoPassError.invalidState(problem)
+        }
+        // A portable v1 account has no identity, so no locator, so no message could ever
+        // find it. Migrate first.
         guard let identity = handle.account.identity else { throw MessageCryptoError.accountNeedsMigration }
 
         let secret = try secret(for: handle, nonce: nonce, pinProvider: pinProvider)

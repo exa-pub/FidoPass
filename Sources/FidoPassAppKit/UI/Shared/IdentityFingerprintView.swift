@@ -1,7 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// An account's identity as a person can compare it: the hex, and a strip of twelve colours
+/// An account's identity as a person can compare it: the hex, and a strip of sixteen colours
 /// under it. Used by the panel and the manager alike.
 ///
 /// Two sizes. The swatch (`.swatch`) is a small capsule that sits in a list row beside the
@@ -10,7 +10,7 @@ import FidoPassCore
 /// identity is read out, typed in or checked against paper.
 struct IdentityFingerprintView: View {
     enum Style {
-        /// Inline in a row: 12 cells of 4 pt, 6 pt tall, no hex.
+        /// Inline in a row: 16 cells of 3 pt, 6 pt tall, no hex.
         case swatch
         /// Hex above a strip, capped in width so it does not become a banner.
         case full
@@ -23,7 +23,7 @@ struct IdentityFingerprintView: View {
         switch style {
         case .swatch:
             strip
-                .frame(width: CGFloat(IdentityPalette.cellCount) * 4, height: 6)
+                .frame(width: CGFloat(IdentityPalette.cellCount) * 3, height: 6)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Identity \(identity.groupedHex)")
         case .full:

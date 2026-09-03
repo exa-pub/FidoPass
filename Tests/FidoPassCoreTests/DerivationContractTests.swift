@@ -67,35 +67,53 @@ final class DerivationContractTests: XCTestCase {
         XCTAssertNotEqual(standard, otherVersion, "policy.version feeds HKDF info and must change the output")
     }
 
-    /// The identity names the account and takes no part in deriving from it: payloads with
-    /// the same material and different identities — or none at all — produce the same
-    /// password, and the ones with an identity issue the same message key. This is what
-    /// makes migrating an account a rename of a field on the key rather than a change of key.
+    /// The identity names the account and takes no part in deriving from it: accounts with
+    /// the same mask and different identities produce the same password and issue the same
+    /// message key. This is what lets the identity be chosen freely at creation, and what
+    /// makes a migrated copy — new identity, same mask arithmetic — derive what the original
+    /// did.
     func testIdentityDoesNotAffectDerivation() throws {
         let secret = Self.secretService()
         let generator = PasswordGenerator(secretDerivationService: secret)
         let messageKeys = MessageKeyService(secretDerivationService: secret)
-        let external = Data(repeating: 0x3C, count: 32)
-        let variants = [
-            PortablePayload(external: external)!,
-            PortablePayload(external: external, identity: AccountIdentity(hex: "000000000000000000000000"))!,
-            PortablePayload(external: external, identity: AccountIdentity(hex: "ffffffffffffffffffffffff"))!,
-            PortablePayload(external: external, identity: .random())!
+        let mask = Data(repeating: 0x3C, count: 32)
+        let identities = [
+            AccountIdentity(hex: "00000000000000000000000000000000")!,
+            AccountIdentity(hex: "ffffffffffffffffffffffffffffffff")!,
+            AccountIdentity.random()
         ]
-        let handles = variants.map { AccountHandle.fixture(id: "vault", kind: .portable, portable: $0) }
+        let handles = identities.map { AccountHandle.v2Fixture(id: "vault", kind: .portable, identity: $0, mask: mask) }
+            + [AccountHandle.fixture(id: "vault", kind: .portable, portable: PortablePayload(external: mask))]
 
         let passwords = try handles.map {
             try generator.generatePassword($0, label: "vault", parameters: .v1, pinProvider: nil)
         }
-        XCTAssertEqual(Set(passwords).count, 1, "every identity, and no identity, derives the same password")
+        XCTAssertEqual(Set(passwords).count, 1, "every identity, and the v1 account with none, derives the same password")
 
-        // Message keys need an identity for the locator, so the legacy payload is out; the
+        // Message keys need an identity for the locator, so the v1 account is out; the
         // other three — every identity — share one public key.
         let nonce = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 3 &+ 1) })
-        let publicKeys = try handles.dropFirst().map {
+        let publicKeys = try handles.dropLast().map {
             try messageKeys.deriveMessageKey($0, nonce: nonce, pinProvider: nil).url.publicKey
         }
         XCTAssertEqual(Set(publicKeys).count, 1, "every identity issues the same message key")
+    }
+
+    /// A v2 local account is asked under a different salt from a v1 one: the format is part
+    /// of what the key is asked, and the name is not.
+    func testFormatChangesTheLocalSaltAndTheNameDoesNot() throws {
+        let secret = MockSecretDerivationService()
+        nonisolated(unsafe) var seen: [AccountFormat] = []
+        secret.deriveSecretClosure = { handle, _, _, _ in
+            seen.append(handle.account.format)
+            return Data(repeating: 1, count: 32)
+        }
+        let generator = PasswordGenerator(secretDerivationService: secret)
+        _ = try generator.generatePassword(AccountHandle.fixture(id: "a"), label: "l", parameters: .v1, pinProvider: nil)
+        _ = try generator.generatePassword(AccountHandle.v2Fixture(id: "a"), label: "l", parameters: .v1, pinProvider: nil)
+        XCTAssertEqual(seen, [.v1, .v2])
+        XCTAssertNotEqual(SaltFactory.localPasswordSalt(label: "l", revision: 1),
+                          SaltFactory.residentSalt(label: "l", rpId: "fidopass.local", accountId: "a", revision: 1))
     }
 
     func testPortableLabelIsolation() {

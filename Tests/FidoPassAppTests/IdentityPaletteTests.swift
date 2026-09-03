@@ -12,12 +12,12 @@ final class IdentityPaletteTests: XCTestCase {
 
     func testOneCellPerByte() {
         let colors = IdentityPalette.colors(for: .random())
-        XCTAssertEqual(colors.count, 12)
+        XCTAssertEqual(colors.count, 16)
         XCTAssertEqual(colors.count, AccountIdentity.byteCount)
     }
 
     func testTheSameIdentityAlwaysGetsTheSameColours() throws {
-        let identity = try XCTUnwrap(AccountIdentity(hex: "00112233445566778899aabb"))
+        let identity = try XCTUnwrap(AccountIdentity(hex: "00112233445566778899aabbccddeeff"))
         let first = IdentityPalette.colors(for: identity).map(components)
         let second = IdentityPalette.colors(for: identity).map(components)
         for (left, right) in zip(first, second) {
@@ -29,8 +29,8 @@ final class IdentityPaletteTests: XCTestCase {
     /// Hue is the byte: 0x00 is red, 0x80 is halfway round the wheel. Two bytes that differ
     /// must not land on the same colour, or the strip would lie about the identity.
     func testHueFollowsTheByte() throws {
-        let zero = try XCTUnwrap(AccountIdentity(bytes: Data(repeating: 0x00, count: 12)))
-        let half = try XCTUnwrap(AccountIdentity(bytes: Data(repeating: 0x80, count: 12)))
+        let zero = try XCTUnwrap(AccountIdentity(bytes: Data(repeating: 0x00, count: 16)))
+        let half = try XCTUnwrap(AccountIdentity(bytes: Data(repeating: 0x80, count: 16)))
         let red = components(IdentityPalette.colors(for: zero)[0])
         let cyan = components(IdentityPalette.colors(for: half)[0])
         // The hue wheel wraps: AppKit reports pure red as 1.0 as readily as 0.0.
@@ -41,7 +41,7 @@ final class IdentityPaletteTests: XCTestCase {
     /// Every cell is drawn at the same saturation and brightness: a dark or grey cell would
     /// read as "missing" rather than as a value.
     func testEveryCellIsLegible() throws {
-        let identity = try XCTUnwrap(AccountIdentity(hex: "0010203040506070809fb0ff"))
+        let identity = try XCTUnwrap(AccountIdentity(hex: "0010203040506070809fb0ff2a4b6c8d"))
         for color in IdentityPalette.colors(for: identity) {
             let parts = components(color)
             XCTAssertEqual(parts.brightness, IdentityPalette.brightness, accuracy: 0.03)

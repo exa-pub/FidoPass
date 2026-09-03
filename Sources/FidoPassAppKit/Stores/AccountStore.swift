@@ -8,7 +8,14 @@ import Foundation
 @MainActor
 final class AccountStore: ObservableObject {
 
+    /// What the panel lists. An unfinished migration copy is not in here — see
+    /// `migrationCopies` — so an account id names one row per key, as `AccountRef` assumes.
     @Published private(set) var accounts: [AccountHandle] = []
+    /// v2 accounts that share a name and a key with a v1 portable account: the copies an
+    /// interrupted migration left. Ordinary creation refuses a taken name under every
+    /// relying party, so the pair can arise no other way. Kept apart from the list, and
+    /// reached through the v1 account they belong to.
+    @Published private(set) var migrationCopies: [AccountHandle] = []
     @Published private(set) var isLoading = false
 
     /// Read failures, per device path. Kept separate from a global error so one unreadable
@@ -38,9 +45,14 @@ final class AccountStore: ObservableObject {
         accounts.first { ref.matches($0) }
     }
 
+    /// The unfinished v2 copy of a v1 portable account, if one is on its key.
+    func migrationCopy(for ref: AccountRef) -> AccountHandle? {
+        migrationCopies.first { ref.matches($0) }
+    }
+
     // MARK: - Loading
 
-    /// Re-reads accounts from every unlocked key.
+    /// Re-reads accounts from every unlocked key. One read per key, every format at once.
     ///
     /// Failures stay attached to the key that caused them: unplugging one key while another
     /// stays connected is routine — hot-plug is exactly when this runs — and must not blank
@@ -54,30 +66,39 @@ final class AccountStore: ObservableObject {
 
         for path in unlockedPaths {
             guard let pin = pinFor(path) else { continue }
-            for kind in AccountKind.allCases {
-                do {
-                    collected += try await worker.accounts { try $0.enumerateAccounts(kind: kind, devicePath: path, pin: pin) }
-                } catch {
-                    // Keep the first failure per key: later kinds usually fail for the same
-                    // underlying reason and would only overwrite it.
-                    if errors[path] == nil {
-                        errors[path] = PresentedError(error)
-                    }
-                }
+            do {
+                collected += try await worker.accounts { try $0.enumerateAccounts(devicePath: path, pin: pin) }
+            } catch {
+                errors[path] = PresentedError(error)
             }
         }
 
-        accounts = collected.sorted { $0.id < $1.id }
+        let split = Self.split(collected)
+        accounts = split.visible.sorted { $0.id < $1.id }
+        migrationCopies = split.copies
         readErrors = errors
+    }
+
+    /// Separates unfinished migration copies from the accounts to list.
+    static func split(_ all: [AccountHandle]) -> (visible: [AccountHandle], copies: [AccountHandle]) {
+        let legacy = all.filter { $0.account.needsMigration }
+        let copies = all.filter { candidate in
+            candidate.account.format == .v2
+                && legacy.contains { $0.id == candidate.id && $0.devicePath == candidate.devicePath }
+        }
+        let visible = all.filter { handle in !copies.contains(handle) }
+        return (visible, copies)
     }
 
     func drop(devicePath: String) {
         accounts.removeAll { $0.devicePath == devicePath }
+        migrationCopies.removeAll { $0.devicePath == devicePath }
         readErrors.removeValue(forKey: devicePath)
     }
 
     func dropAll() {
         accounts.removeAll()
+        migrationCopies.removeAll()
         readErrors.removeAll()
     }
 
@@ -99,13 +120,14 @@ final class AccountStore: ObservableObject {
         }
     }
 
-    /// Creates an account on the key.
+    /// Creates an account on the key, with the identity the form chose.
     ///
     /// Portable is not just a flag: it costs a second touch and — when the material is fresh
     /// — produces a backup that the caller must show the user immediately. Returning it here
     /// rather than storing it keeps that value out of the store's memory a moment longer
     /// than necessary.
     func enroll(accountId: String,
+                identity: AccountIdentity,
                 request: EnrollRequest,
                 devicePath: String,
                 onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) async throws -> (AccountHandle, PortableBackup?) {
@@ -118,6 +140,7 @@ final class AccountStore: ObservableObject {
             if case .import(let backup) = request { imported = backup } else { imported = nil }
             result = try await worker.accounts {
                 try $0.enrollPortable(accountId: accountId,
+                                      identity: identity,
                                       devicePath: devicePath,
                                       askPIN: provider,
                                       imported: imported,
@@ -125,7 +148,7 @@ final class AccountStore: ObservableObject {
             }
         case .local:
             let account = try await worker.accounts {
-                try $0.enroll(accountId: accountId, kind: .local, devicePath: devicePath, askPIN: provider)
+                try $0.enroll(accountId: accountId, kind: .local, identity: identity, devicePath: devicePath, askPIN: provider)
             }
             result = (account, nil)
         }
@@ -135,18 +158,46 @@ final class AccountStore: ObservableObject {
         return result
     }
 
-    /// Gives a portable account from before identities one. PIN, no touch, and no change to
-    /// any password — see `Account.needsMigration`.
-    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity) async throws -> AccountHandle {
-        guard let pin = pinFor(handle.devicePath) else { throw KeyLockedError() }
-        let updated = try await worker.accounts { try $0.assignIdentity(handle, identity: identity, pin: pin) }
-        if let index = accounts.firstIndex(of: handle) {
-            accounts[index] = updated
-        } else {
-            accounts.append(updated)
-            accounts.sort { $0.id < $1.id }
+    // MARK: - Migration
+
+    /// Recreates a v1 portable account as v2. Four touches; the original is deleted only
+    /// after the copy has been verified. The migrated account takes the original's place in
+    /// the list.
+    func migrate(_ handle: AccountHandle,
+                 identity: AccountIdentity,
+                 onStep: @escaping @Sendable (MigrationStep) -> Void) async throws -> AccountHandle {
+        guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
+        let migrated = try await worker.accounts { try $0.migrate(handle, identity: identity, askPIN: provider, onStep: onStep) }
+        replace(handle, with: migrated)
+        return migrated
+    }
+
+    /// Finishes the migration whose copy is on the key. Two touches when the copy has its
+    /// record, the whole migration again when it does not.
+    func finishMigration(_ handle: AccountHandle,
+                         onStep: @escaping @Sendable (MigrationStep) -> Void) async throws -> AccountHandle {
+        guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
+        guard let copy = migrationCopy(for: AccountRef(handle)) else {
+            throw FidoPassError.invalidState("There is no unfinished copy of “\(handle.id)” on this key")
         }
-        return updated
+        let migrated = try await worker.accounts { try $0.finishMigration(old: handle, copy: copy, askPIN: provider, onStep: onStep) }
+        replace(handle, with: migrated)
+        return migrated
+    }
+
+    /// Deletes the unfinished copy of an account. The original stays. PIN, no touch.
+    func discardMigrationCopy(of handle: AccountHandle) async throws {
+        guard let pin = pinFor(handle.devicePath) else { throw KeyLockedError() }
+        guard let copy = migrationCopy(for: AccountRef(handle)) else { return }
+        try await worker.accounts { try $0.discardMigrationCopy(copy, pin: pin) }
+        migrationCopies.removeAll { $0 == copy }
+    }
+
+    private func replace(_ old: AccountHandle, with new: AccountHandle) {
+        migrationCopies.removeAll { $0.id == new.id && $0.devicePath == new.devicePath }
+        accounts.removeAll { $0 == old }
+        accounts.append(new)
+        accounts.sort { $0.id < $1.id }
     }
 
     func delete(_ handle: AccountHandle) async throws {
@@ -171,10 +222,10 @@ final class AccountStore: ObservableObject {
     /// The account on a key that a message is for, found by its locator.
     ///
     /// Nothing on the key is asked: the locators come from the identities already read. One
-    /// argon2id per account, which is why this is async and runs off the main actor. An
-    /// account from before identities has no locator and cannot match.
+    /// argon2id per account, which is why this is async and runs off the main actor. A v1
+    /// portable account has no identity, no locator, and cannot match.
     func accountMatching(locator: AccountLocator, nonce: Data, onDevice path: String) async throws -> AccountHandle? {
-        let candidates = accounts(onDevice: path).filter { $0.account.identity != nil }
+        let candidates = accounts(onDevice: path).filter { $0.account.identity != nil && $0.account.canDerive }
         let sealer = messages
         return try await Task.detached {
             try candidates.first { candidate in

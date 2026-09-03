@@ -28,23 +28,26 @@ struct LiveKeyBackend: KeyBackend {
         try core.inventory(devicePath: devicePath, pin: pin)
     }
 
-    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [AccountHandle] {
-        try core.enumerateAccounts(kind: kind, devicePath: devicePath, pin: pin)
+    func enumerateAccounts(devicePath: String, pin: String) throws -> [AccountHandle] {
+        try core.enumerateAccounts(devicePath: devicePath, pin: pin)
     }
 
     func enroll(accountId: String,
                 kind: AccountKind,
+                identity: AccountIdentity,
                 devicePath: String,
                 askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle {
-        try core.enroll(accountId: accountId, kind: kind, devicePath: devicePath, askPIN: askPIN)
+        try core.enroll(accountId: accountId, kind: kind, identity: identity, devicePath: devicePath, askPIN: askPIN)
     }
 
     func enrollPortable(accountId: String,
+                        identity: AccountIdentity,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
                         imported: PortableBackup?,
                         onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, PortableBackup?) {
         try core.enrollPortable(accountId: accountId,
+                                identity: identity,
                                 devicePath: devicePath,
                                 askPIN: askPIN,
                                 imported: imported,
@@ -63,8 +66,22 @@ struct LiveKeyBackend: KeyBackend {
         try core.exportBackup(handle, pinProvider: pinProvider)
     }
 
-    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle {
-        try core.assignIdentity(handle, identity: identity, pinProvider: { pin })
+    func migrate(_ old: AccountHandle,
+                 identity: AccountIdentity,
+                 askPIN: @escaping @Sendable () -> String?,
+                 onStep: @escaping @Sendable (MigrationStep) -> Void) throws -> AccountHandle {
+        try core.migrate(old, identity: identity, askPIN: askPIN, onStep: onStep)
+    }
+
+    func finishMigration(old: AccountHandle,
+                         copy: AccountHandle,
+                         askPIN: @escaping @Sendable () -> String?,
+                         onStep: @escaping @Sendable (MigrationStep) -> Void) throws -> AccountHandle {
+        try core.finishMigration(old: old, copy: copy, askPIN: askPIN, onStep: onStep)
+    }
+
+    func discardMigrationCopy(_ copy: AccountHandle, pin: String) throws {
+        try core.discardMigrationCopy(copy, pin: pin)
     }
 
     func deriveMessageKey(_ handle: AccountHandle,

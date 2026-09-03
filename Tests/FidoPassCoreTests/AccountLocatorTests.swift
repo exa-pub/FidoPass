@@ -15,7 +15,7 @@ final class AccountLocatorTests: XCTestCase {
         let base = try AccountLocator.compute(nonce: MessageFixtures.nonce, identity: MessageFixtures.identity)
         let otherNonce = try AccountLocator.compute(nonce: MessageFixtures.otherNonce, identity: MessageFixtures.identity)
         let otherIdentity = try AccountLocator.compute(nonce: MessageFixtures.nonce,
-                                                       identity: AccountIdentity(hex: "0c0b0a090807060504030201")!)
+                                                       identity: AccountIdentity(hex: "0c0b0a09080706050403020100ffeedd")!)
         XCTAssertNotEqual(base, otherNonce)
         XCTAssertNotEqual(base, otherIdentity)
         XCTAssertEqual(base, try AccountLocator.compute(nonce: MessageFixtures.nonce, identity: MessageFixtures.identity),
@@ -32,7 +32,8 @@ final class AccountLocatorTests: XCTestCase {
     func testWrongNonceLengthIsRefused() {
         XCTAssertThrowsError(try AccountLocator.compute(nonce: Data(repeating: 1, count: 16), identity: MessageFixtures.identity))
         XCTAssertNil(AccountLocator(bytes: Data(repeating: 1, count: 12)))
+        XCTAssertNil(AccountLocator(bytes: Data(repeating: 1, count: 32)))
     }
 
-    static let frozenHex = "cb58834df1880801988192f689074631"
+    static let frozenHex = "54c384ad213011cabd45f9eeac83bd39"
 }

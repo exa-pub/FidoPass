@@ -2,7 +2,7 @@ import XCTest
 @testable import FidoPassCore
 
 /// The manager window shows every credential on a key, including FidoPass's own — and a
-/// portable account keeps its exported master key in the credential's `user.name`, which
+/// portable v1 account keeps its exported master key in the credential's `user.name`, which
 /// credential management hands back for a PIN alone, with no touch.
 ///
 /// Rendering that field verbatim would print a backup key on screen and write it into the
@@ -10,30 +10,14 @@ import XCTest
 /// from coming back: the redaction happens in the core, before anything can encode it.
 final class CredentialRedactionTests: XCTestCase {
 
-    /// A real portable payload: 32 bytes, base64 — exactly what `EnrollmentService` writes.
+    /// A real v1 portable payload: 32 bytes, base64 — exactly what released versions wrote.
     private let payload = Data(repeating: 0xA7, count: 32).base64EncodedString()
 
     func testPortableKeyMaterialIsWithheld() {
         let name = CredentialUserName.classify(rawName: payload, rpId: AccountKind.portable.rpId)
-        XCTAssertEqual(name, .portableKeyMaterialWithheld(identity: nil))
+        XCTAssertEqual(name, .portableKeyMaterialWithheld)
         XCTAssertNil(name.revealed, "the material must not be reachable through the model")
         XCTAssertFalse(name.display.contains(payload), "the display string must not carry it either")
-    }
-
-    /// The current layout appends the account's identity to the material. The identity is
-    /// not a secret and comes through; the 32 bytes in front of it still do not.
-    func testCurrentLayoutWithholdsTheMaterialButKeepsTheIdentity() throws {
-        let identity = try XCTUnwrap(AccountIdentity(hex: "0102030405060708090a0b0c"))
-        let payload = try XCTUnwrap(PortablePayload(external: Data(repeating: 0xA7, count: 32), identity: identity))
-        let name = CredentialUserName.classify(rawName: payload.base64, rpId: AccountKind.portable.rpId)
-        XCTAssertEqual(name, .portableKeyMaterialWithheld(identity: identity))
-        XCTAssertNil(name.revealed)
-        XCTAssertFalse(name.display.contains(String(payload.base64.prefix(8))))
-
-        let json = String(decoding: try JSONEncoder().encode(name), as: UTF8.self)
-        XCTAssertTrue(json.contains(identity.hex), "the identity is what the export may show")
-        XCTAssertFalse(json.contains(String(payload.base64.prefix(8))))
-        XCTAssertFalse(json.contains(Data(repeating: 0xA7, count: 32).base64EncodedString().prefix(8)))
     }
 
     /// Redaction is keyed on the relying party, not on the shape of the string. A foreign
@@ -45,13 +29,20 @@ final class CredentialRedactionTests: XCTestCase {
         XCTAssertEqual(name.revealed, payload)
     }
 
-    /// A local FidoPass account stores its account id here, not key material.
+    /// A local v1 FidoPass account stores its account id here, not key material.
     func testLocalFidoPassCredentialKeepsItsName() {
         let name = CredentialUserName.classify(rawName: "vault", rpId: AccountKind.local.rpId)
         XCTAssertEqual(name, .value("vault"))
     }
 
-    /// A portable credential whose name is not a 32-byte payload is not key material — an
+    /// A v2 account's name is a name: nothing in it is withheld, whatever it looks like. The
+    /// mask lives in the record, which the inventory never carries.
+    func testV2NameIsNeverWithheld() {
+        XCTAssertEqual(CredentialUserName.classify(rawName: "vault", rpId: AccountFormat.v2RelyingPartyId), .value("vault"))
+        XCTAssertEqual(CredentialUserName.classify(rawName: payload, rpId: AccountFormat.v2RelyingPartyId), .value(payload))
+    }
+
+    /// A portable v1 credential whose name is not a 32-byte payload is not key material — an
     /// account created by some other tool under the same relying party, say.
     func testPortableRelyingPartyWithNonPayloadNameIsNotRedacted() {
         let name = CredentialUserName.classify(rawName: "not-a-key", rpId: AccountKind.portable.rpId)
@@ -97,39 +88,52 @@ final class CredentialRedactionTests: XCTestCase {
         XCTAssertTrue(json.contains("portableKeyMaterialWithheld"), "but the fact of it should be visible")
     }
 
-    /// The manager shows an identity for FidoPass's own credentials — derived for a local
-    /// one, read from the withheld name for a portable one — and nothing for anyone else's.
+    /// The manager shows an identity for FidoPass's own credentials — `user.id` for a v2
+    /// one, derived for a local v1 one — and nothing for anyone else's, nor for a portable
+    /// v1 one, which has none.
     func testResidentCredentialExposesTheIdentityAndOnlyThat() throws {
-        let identity = try XCTUnwrap(AccountIdentity(hex: "0102030405060708090a0b0c"))
-        func credential(rpId: String, name: CredentialUserName) -> ResidentCredential {
+        let identity = try XCTUnwrap(AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10"))
+        func credential(rpId: String, name: CredentialUserName, userIdHex: String = "66", record: ResidentCredential.RecordState? = nil) -> ResidentCredential {
             ResidentCredential(rpId: rpId,
                                credentialIdB64: Data("cred".utf8).base64EncodedString(),
-                               userIdHex: "66", userIdUTF8: "f",
+                               userIdHex: userIdHex, userIdUTF8: nil,
                                userName: name, userDisplayName: "f",
                                coseAlgorithm: -7, publicKeyB64: nil,
-                               credentialProtection: nil, hasLargeBlobKey: false)
+                               credentialProtection: nil, hasLargeBlobKey: false,
+                               record: record)
         }
 
         let local = credential(rpId: AccountKind.local.rpId, name: .value("vault"))
         XCTAssertEqual(local.accountIdentity, AccountIdentity.derived(fromCredentialId: Data("cred".utf8)))
         XCTAssertFalse(local.needsMigration)
+        XCTAssertEqual(local.accountFormat, .v1)
+        XCTAssertEqual(local.accountKind, .local)
 
-        let portable = credential(rpId: AccountKind.portable.rpId, name: .portableKeyMaterialWithheld(identity: identity))
-        XCTAssertEqual(portable.accountIdentity, identity)
-        XCTAssertFalse(portable.needsMigration)
-
-        let legacy = credential(rpId: AccountKind.portable.rpId, name: .portableKeyMaterialWithheld(identity: nil))
+        let legacy = credential(rpId: AccountKind.portable.rpId, name: .portableKeyMaterialWithheld)
         XCTAssertNil(legacy.accountIdentity)
         XCTAssertTrue(legacy.needsMigration)
+        XCTAssertEqual(legacy.accountKind, .portable)
+
+        let current = credential(rpId: AccountFormat.v2RelyingPartyId, name: .value("vault"), userIdHex: identity.hex, record: .portable)
+        XCTAssertEqual(current.accountIdentity, identity)
+        XCTAssertFalse(current.needsMigration)
+        XCTAssertEqual(current.accountFormat, .v2)
+        XCTAssertEqual(current.accountKind, .portable, "the kind of a v2 account comes from its record")
+
+        let incomplete = credential(rpId: AccountFormat.v2RelyingPartyId, name: .value("vault"), userIdHex: identity.hex, record: .missing)
+        XCTAssertNil(incomplete.accountKind, "without a record there is no kind to report")
+        XCTAssertEqual(incomplete.accountIdentity, identity)
 
         let foreign = credential(rpId: "github.com", name: .value("alice"))
         XCTAssertNil(foreign.accountIdentity, "a foreign credential has no FidoPass identity, whatever its id hashes to")
+        XCTAssertNil(foreign.accountFormat)
         XCTAssertFalse(foreign.needsMigration)
     }
 
-    /// `hasLargeBlobKey` is a flag precisely so the key itself cannot end up here.
-    func testLargeBlobKeyIsOnlyEverAFlag() throws {
-        let credential = ResidentCredential(rpId: "example.org",
+    /// `hasLargeBlobKey` is a flag precisely so the key itself cannot end up here — and the
+    /// record is a state, so the mask cannot either.
+    func testLargeBlobKeyAndRecordAreOnlyEverStates() throws {
+        let credential = ResidentCredential(rpId: AccountFormat.v2RelyingPartyId,
                                             credentialIdB64: "AAAA",
                                             userIdHex: "01",
                                             userIdUTF8: nil,
@@ -138,9 +142,12 @@ final class CredentialRedactionTests: XCTestCase {
                                             coseAlgorithm: -7,
                                             publicKeyB64: nil,
                                             credentialProtection: .uvRequired,
-                                            hasLargeBlobKey: true)
+                                            hasLargeBlobKey: true,
+                                            record: .portable)
         let json = String(decoding: try JSONEncoder().encode(credential), as: UTF8.self)
         XCTAssertTrue(json.contains("hasLargeBlobKey"))
         XCTAssertFalse(json.lowercased().contains("largeblobkeyb64"))
+        XCTAssertTrue(json.contains("\"record\":\"portable\""))
+        XCTAssertFalse(json.lowercased().contains("mask"))
     }
 }

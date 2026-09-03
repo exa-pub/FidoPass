@@ -27,6 +27,9 @@ struct CredentialDetailView: View {
                        value: credential.credentialProtection?.summary ?? "not reported")
             ManagerRow(label: "Large blob key",
                        value: credential.hasLargeBlobKey ? "present — withheld" : "absent")
+            if let record = credential.record {
+                ManagerRow(label: "Account record", value: recordDescription(record))
+            }
 
             if let publicKey = credential.publicKeyB64 {
                 DisclosureGroup("Public key (\(publicKey.count) chars base64)", isExpanded: $showsPublicKey) {
@@ -41,7 +44,7 @@ struct CredentialDetailView: View {
             }
 
             if case .portableKeyMaterialWithheld = credential.userName {
-                Label("This is a FidoPass portable account. Its key material is stored in the credential's user name, so this window shows only the identity that follows it — use the panel's backup-key screen, which explains what the value is before revealing it.",
+                Label("This is a FidoPass portable account in the v1 layout. Its key material is stored in the credential's user name, which is why this window withholds it — use the panel's backup-key screen, which explains what the value is before revealing it. The panel migrates it to the current layout.",
                       systemImage: "lock.shield")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -54,6 +57,15 @@ struct CredentialDetailView: View {
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 12)
+        }
+    }
+
+    private func recordDescription(_ record: ResidentCredential.RecordState) -> String {
+        switch record {
+        case .local: return "local account"
+        case .portable: return "portable account — mask withheld"
+        case .missing: return "missing — the credential is not a usable account; delete it from the panel"
+        case .corrupt: return "unreadable — the credential is not a usable account; delete it from the panel"
         }
     }
 
@@ -73,8 +85,12 @@ struct CredentialDetailView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if credential.needsMigration {
+                    Text("Not assigned yet — this account is in the v1 layout. Open the panel and migrate it.")
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("Not assigned yet — this account was written by an earlier version. Open the panel and migrate it.")
+                    Text("Not readable — the credential's user id is not an identity.")
                         .font(.system(size: 12))
                         .fixedSize(horizontal: false, vertical: true)
                 }

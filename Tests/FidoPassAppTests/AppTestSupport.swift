@@ -42,10 +42,11 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     var accountsByPath: [String: [Account]] = [:]
     var statusByPath: [String: DeviceStatus] = [:]
     var generatedPassword = "PASSWORD-from-key"
-    /// What a fresh portable enrolment hands back, and the master key every export answers
-    /// with. The identity of an export is the account's own — none for a legacy account.
+    /// The master key every fresh portable enrolment and every export answers with. The
+    /// identity of a backup is the account's own — the one the form chose, none for a v1
+    /// account.
     var backupValue = PortableBackup(masterKey: Data(repeating: 0x42, count: 32),
-                                     identity: AccountIdentity(hex: "424242424242424242424242"))!
+                                     identity: AccountIdentity(hex: "42424242424242424242424242424242"))!
     var enumerateError: Error?
     var listDevicesError: Error?
     /// When set, `enumerateAccounts` blocks until the gate is opened.
@@ -66,11 +67,16 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     var inspectError: Error?
     var inventoryError: Error?
     private(set) var generateCalls: [(accountId: String, label: String)] = []
-    private(set) var enrollCalls: [(accountId: String, kind: AccountKind, imported: PortableBackup?)] = []
+    private(set) var enrollCalls: [(accountId: String, kind: AccountKind, identity: AccountIdentity, imported: PortableBackup?)] = []
     private(set) var deleteCalls: [String] = []
     private(set) var exportCalls: [String] = []
-    private(set) var assignIdentityCalls: [(accountId: String, identity: AccountIdentity)] = []
-    var assignIdentityError: Error?
+    private(set) var migrateCalls: [(accountId: String, identity: AccountIdentity)] = []
+    private(set) var finishCalls: [String] = []
+    private(set) var discardCalls: [String] = []
+    var migrateError: Error?
+    /// When set, a migration stops right after creating the copy and throws — the state an
+    /// unplugged key leaves behind.
+    var migrationLeavesCopy = false
     private(set) var setInitialPINCalls: [(path: String, pin: String)] = []
     private(set) var changePINCalls: [(path: String, old: String, new: String)] = []
     private(set) var resetCalls: [String] = []
@@ -213,40 +219,91 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         return statusByPath[devicePath] ?? DeviceStatus(pinRetriesRemaining: 5,
                                                         hasPIN: true,
                                                         supportsHmacSecret: true,
+                                                        supportsLargeBlobs: true,
                                                         remainingResidentKeys: 20,
                                                         aaguid: aaguid)
     }
 
-    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [AccountHandle] {
+    func enumerateAccounts(devicePath: String, pin: String) throws -> [AccountHandle] {
         enumerateGate?.wait()
         enumerateCallCount += 1
         if let enumerateError { throw enumerateError }
         guard pins[devicePath] == pin else { throw Self.wrongPin }
-        return (accountsByPath[devicePath] ?? [])
-            .filter { $0.kind == kind }
-            .map { AccountHandle(account: $0, devicePath: devicePath) }
+        return (accountsByPath[devicePath] ?? []).map { AccountHandle(account: $0, devicePath: devicePath) }
     }
 
-    func enroll(accountId: String, kind: AccountKind, devicePath: String, askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle {
-        enrollCalls.append((accountId, kind, nil))
-        let account = Account.fixture(id: accountId, kind: kind)
+    func enroll(accountId: String, kind: AccountKind, identity: AccountIdentity, devicePath: String, askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle {
+        enrollCalls.append((accountId, kind, identity, nil))
+        let account = Account.v2Fixture(id: accountId, kind: kind, identity: identity)
         accountsByPath[devicePath, default: []].append(account)
         return AccountHandle(account: account, devicePath: devicePath)
     }
 
     func enrollPortable(accountId: String,
+                        identity: AccountIdentity,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
                         imported: PortableBackup?,
                         onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, PortableBackup?) {
-        enrollCalls.append((accountId, .portable, imported))
+        enrollCalls.append((accountId, .portable, identity, imported))
         onStep(.creatingCredential)
         onStep(.derivingBackupKey)
-        // As the real service: an import keeps its identity, fresh material gets the one the
-        // backup will carry.
-        let account = Account.portableFixture(id: accountId, identity: imported?.identity ?? backupValue.identity)
+        onStep(.savingRecord)
+        // As the real service: the identity the form chose is the one on the key, and the
+        // one a fresh backup carries.
+        let account = Account.v2Fixture(id: accountId, kind: .portable, identity: identity)
         accountsByPath[devicePath, default: []].append(account)
-        return (AccountHandle(account: account, devicePath: devicePath), imported == nil ? backupValue : nil)
+        let generated = imported == nil ? PortableBackup(masterKey: backupValue.masterKey, identity: identity) : nil
+        return (AccountHandle(account: account, devicePath: devicePath), generated)
+    }
+
+    func migrate(_ old: AccountHandle,
+                 identity: AccountIdentity,
+                 askPIN: @escaping @Sendable () -> String?,
+                 onStep: @escaping @Sendable (MigrationStep) -> Void) throws -> AccountHandle {
+        migrateCalls.append((old.id, identity))
+        guard pins[old.devicePath] == askPIN() else { throw Self.wrongPin }
+        onStep(.readingOldAccount)
+        onStep(.creatingCredential)
+        if migrationLeavesCopy {
+            let copy = Account.v2Fixture(id: old.id, kind: .portable, credentialId: Data("copy-\(old.id)".utf8),
+                                         identity: identity, integrity: .recordMissing)
+            accountsByPath[old.devicePath, default: []].append(copy)
+            throw MigrationError.copyRemains(name: old.id, reason: "unplugged")
+        }
+        if let migrateError { throw migrateError }
+        onStep(.derivingNewComponent)
+        onStep(.savingRecord)
+        onStep(.verifying)
+        onStep(.deletingOld)
+        let migrated = Account.v2Fixture(id: old.id, kind: .portable, credentialId: Data("copy-\(old.id)".utf8),
+                                         identity: identity, mask: old.account.mask)
+        accountsByPath[old.devicePath]?.removeAll { $0 == old.account }
+        accountsByPath[old.devicePath, default: []].append(migrated)
+        return AccountHandle(account: migrated, devicePath: old.devicePath)
+    }
+
+    func finishMigration(old: AccountHandle,
+                         copy: AccountHandle,
+                         askPIN: @escaping @Sendable () -> String?,
+                         onStep: @escaping @Sendable (MigrationStep) -> Void) throws -> AccountHandle {
+        finishCalls.append(old.id)
+        if let migrateError { throw migrateError }
+        onStep(.readingOldAccount)
+        onStep(.verifying)
+        onStep(.deletingOld)
+        var done = copy.account
+        done.mask = old.account.mask
+        done.integrity = .ok
+        accountsByPath[old.devicePath]?.removeAll { $0 == old.account || $0 == copy.account }
+        accountsByPath[old.devicePath, default: []].append(done)
+        return AccountHandle(account: done, devicePath: old.devicePath)
+    }
+
+    func discardMigrationCopy(_ copy: AccountHandle, pin: String) throws {
+        discardCalls.append(copy.id)
+        guard pins[copy.devicePath] == pin else { throw Self.wrongPin }
+        accountsByPath[copy.devicePath]?.removeAll { $0 == copy.account }
     }
 
     func generatePassword(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
@@ -256,20 +313,8 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
 
     func exportBackup(_ handle: AccountHandle, pinProvider: @escaping @Sendable () -> String?) throws -> PortableBackup {
         exportCalls.append(handle.id)
-        // What the key answers: this account's identity, or none for a legacy one.
+        // What the key answers: this account's identity, or none for a v1 one.
         return PortableBackup(masterKey: backupValue.masterKey, identity: handle.account.identity)!
-    }
-
-    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle {
-        assignIdentityCalls.append((handle.id, identity))
-        if let assignIdentityError { throw assignIdentityError }
-        guard pins[handle.devicePath] == pin else { throw Self.wrongPin }
-        var updated = handle
-        updated.account.portable = handle.account.portable.flatMap { PortablePayload(external: $0.external, identity: identity) }
-        if let index = accountsByPath[handle.devicePath]?.firstIndex(of: handle.account) {
-            accountsByPath[handle.devicePath]?[index] = updated.account
-        }
-        return updated
     }
 
     /// `MessageKey` is only constructible inside the core, so the mock borrows a core wired

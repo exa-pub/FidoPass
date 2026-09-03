@@ -11,6 +11,9 @@ public struct DeviceStatus: Hashable, Sendable {
     public var hasPIN: Bool
     /// Whether the authenticator supports the extension every derived password depends on.
     public var supportsHmacSecret: Bool
+    /// Whether the authenticator has a large-blob store. Every v2 account keeps its record
+    /// there, so a key without one can hold no new account — only what is already on it.
+    public var supportsLargeBlobs: Bool
     /// Free resident-credential slots, when the authenticator reports them.
     public var remainingResidentKeys: Int?
     /// Shortest PIN this key will accept, when it says. CTAP2 floors it at 4, but a key may
@@ -28,6 +31,7 @@ public struct DeviceStatus: Hashable, Sendable {
     public init(pinRetriesRemaining: Int?,
                 hasPIN: Bool,
                 supportsHmacSecret: Bool,
+                supportsLargeBlobs: Bool = false,
                 remainingResidentKeys: Int?,
                 minPINLength: Int? = nil,
                 forcePINChange: Bool = false,
@@ -35,6 +39,7 @@ public struct DeviceStatus: Hashable, Sendable {
         self.pinRetriesRemaining = pinRetriesRemaining
         self.hasPIN = hasPIN
         self.supportsHmacSecret = supportsHmacSecret
+        self.supportsLargeBlobs = supportsLargeBlobs
         self.remainingResidentKeys = remainingResidentKeys
         self.minPINLength = minPINLength
         self.forcePINChange = forcePINChange

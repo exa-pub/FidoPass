@@ -203,6 +203,7 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
             let rawName = fido_cred_user_name(credential).map { String(cString: $0) }
             let rawDisplay = fido_cred_display_name(credential).map { String(cString: $0) }
             let coseType = fido_cred_type(credential)
+            let largeBlobKey = LargeBlobStore.key(of: credential)
 
             credentials.append(ResidentCredential(
                 // From the loop, never `fido_cred_rp_id`: that returns NULL for a credential
@@ -216,9 +217,20 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
                 coseAlgorithm: coseType == 0 ? nil : Int(coseType),
                 publicKeyB64: publicKey?.base64EncodedString(),
                 credentialProtection: CredentialProtection(rawValue: Int(fido_cred_prot(credential))),
-                hasLargeBlobKey: fido_cred_largeblob_key_len(credential) > 0))
+                hasLargeBlobKey: largeBlobKey != nil,
+                record: recordState(device: device, rpId: rpId, largeBlobKey: largeBlobKey)))
         }
         return credentials
+    }
+
+    /// The state of a v2 account's record — read for FidoPass's v2 credentials only, and
+    /// only as a state: the record's mask is key material and stays in the core.
+    private static func recordState(device: OpaquePointer, rpId: String, largeBlobKey: Data?) -> ResidentCredential.RecordState? {
+        guard AccountFormat.parse(rpId: rpId)?.format == .v2 else { return nil }
+        guard let largeBlobKey,
+              let blob = try? LargeBlobStore.read(device: device, key: largeBlobKey) else { return .missing }
+        guard let record = AccountRecord(decoding: blob) else { return .corrupt }
+        return record.kind == .portable ? .portable : .local
     }
 
     /// Size of the serialized large-blob array. Needs no PIN, and its contents are never read.

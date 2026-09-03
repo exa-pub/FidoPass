@@ -6,7 +6,7 @@ enum MessageFixtures {
     static let nonce = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) })
     static let otherNonce = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 13 &+ 1) })
     static let scalar = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 5 &+ 11) })
-    static let identity = AccountIdentity(hex: "0102030405060708090a0b0c")!
+    static let identity = AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10")!
 
     static func locator(nonce: Data = nonce) throws -> AccountLocator {
         try AccountLocator.compute(nonce: nonce, identity: identity)

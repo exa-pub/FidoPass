@@ -1,20 +1,24 @@
 import Foundation
 import CryptoKit
 
-/// Twelve bytes that tell one account apart from another. Not a secret, and never an input
+/// Sixteen bytes that tell one account apart from another. Not a secret, and never an input
 /// to derivation.
 ///
-/// A portable account carries its identity on the key next to its key material, and a
-/// backup carries it too, so a copy of the account on a second key shows the same identity
-/// — which is how a person tells "the same vault" from "another account named vault"
-/// without deriving a password and comparing. A local account has no room for one on the
-/// key and needs none: its credential id already names one credential on one key, so the
-/// identity is derived from it and never written.
+/// A v2 account carries its identity on the key as the credential's `user.id`, so a copy of
+/// the account on a second key shows the same identity — which is how a person tells "the
+/// same vault" from "another account named vault" without deriving a password and comparing
+/// — and so that a browser, which is handed `user.id` as the `userHandle` of an assertion
+/// and nothing else about the user, can show the same fingerprint. It is chosen when the
+/// account is created: random unless the person says otherwise.
+///
+/// A local account from the v1 format has no room for one on the key and needs none: its
+/// credential id already names one credential on one key, so the identity is derived from
+/// it and never written. A portable v1 account has none until it is migrated.
 ///
 /// `DerivationContractTests.testIdentityDoesNotAffectDerivation` pins the "never an input"
 /// half; the golden vectors do not know this type exists, which is the point.
 public struct AccountIdentity: Hashable, Sendable {
-    public static let byteCount = 12
+    public static let byteCount = 16
 
     public let bytes: Data
 
@@ -40,7 +44,7 @@ public struct AccountIdentity: Hashable, Sendable {
         self.init(bytes: bytes)
     }
 
-    /// 24 lowercase hex characters.
+    /// 32 lowercase hex characters.
     public var hex: String {
         bytes.map { String(format: "%02x", $0) }.joined()
     }
@@ -59,7 +63,7 @@ public struct AccountIdentity: Hashable, Sendable {
         AccountIdentity(bytes: CryptoHelpers.randomBytes(count: byteCount))!
     }
 
-    /// The identity of a local account: the first twelve bytes of SHA-256 over its
+    /// The identity of a v1 local account: the first sixteen bytes of SHA-256 over its
     /// credential id. Deterministic, so it needs no storage and survives every reconnect.
     public static func derived(fromCredentialId credentialId: Data) -> AccountIdentity {
         AccountIdentity(bytes: Data(SHA256.hash(data: credentialId)).prefix(byteCount))!
@@ -73,7 +77,7 @@ extension AccountIdentity: Codable {
         let container = try decoder.singleValueContainer()
         let text = try container.decode(String.self)
         guard let parsed = AccountIdentity(hex: text) else {
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "not a 12-byte hex identity")
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "not a 16-byte hex identity")
         }
         self = parsed
     }

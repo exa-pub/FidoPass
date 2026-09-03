@@ -67,6 +67,7 @@ final class DeviceRepository: DeviceAccessing, Sendable {
                 DeviceStatus(pinRetriesRemaining: remainingPINAttempts,
                              hasPIN: info.option("clientPin") == true,
                              supportsHmacSecret: info.hasExtension("hmac-secret"),
+                             supportsLargeBlobs: info.supportsLargeBlobs,
                              remainingResidentKeys: info.remainingResidentKeys,
                              minPINLength: info.minPINLength,
                              forcePINChange: info.forcePINChange,

@@ -4,10 +4,14 @@ import FidoPassCore
 /// Creating an account. Portable is the default because losing the only key that can derive
 /// a vault master password is unrecoverable; Import is the same kind of account made from a
 /// backup, and gets its own segment because it is a different thing to ask for.
+///
+/// The identity is chosen here, whatever the mode: random unless the person says otherwise,
+/// and from the backup for an import. It is written to the key as the credential's user id
+/// and cannot be changed afterwards.
 struct EnrollView: View {
     @ObservedObject var store: PanelStore
 
-    private enum Field: Hashable { case accountId, importText, legacyIdentity }
+    private enum Field: Hashable { case accountId, importText, identity }
     @FocusState private var focus: Field?
 
     private var draft: EnrollDraft { store.enrollDraft }
@@ -16,9 +20,9 @@ struct EnrollView: View {
     private var fields: [Field] {
         switch draft.mode {
         case .import:
-            return draft.importIsLegacy ? [.accountId, .importText, .legacyIdentity] : [.accountId, .importText]
+            return [.accountId, .importText, .identity]
         case .portable, .local:
-            return [.accountId]
+            return [.accountId, .identity]
         }
     }
 
@@ -28,48 +32,74 @@ struct EnrollView: View {
                 store.backToAccounts()
             }
 
-            VStack(alignment: .leading, spacing: 9) {
-                TextField("Account ID, e.g. vault", text: $store.enrollDraft.accountId)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focus, equals: .accountId)
-                    .onSubmit { Task { await store.createAccount() } }
-
-                Picker("", selection: $store.enrollDraft.mode) {
-                    ForEach(EnrollDraft.Mode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                Text(modeDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if draft.mode == .import {
-                    importFields
-                }
-
-                if let step = store.enrollStep {
-                    Label(step, systemImage: "hourglass").font(.caption).foregroundStyle(.secondary)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel") { store.backToAccounts() }
-                        .keyboardShortcut(.cancelAction)
-                    Button(draft.mode == .import ? "Import" : "Create") { Task { await store.createAccount() } }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(!draft.canCreate || store.isWorking)
-                }
+            if store.selectedKeyHoldsRecords {
+                form
+            } else {
+                unsupportedKey
             }
-            .padding(.horizontal, PanelMetrics.padding)
-            .padding(.bottom, 12)
         }
         .tabFocusChain(fields, focus: $focus)
         .onAppear { focus = .accountId }
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            TextField("Account ID, e.g. vault", text: $store.enrollDraft.accountId)
+                .textFieldStyle(.roundedBorder)
+                .focused($focus, equals: .accountId)
+                .onSubmit { Task { await store.createAccount() } }
+
+            Picker("", selection: $store.enrollDraft.mode) {
+                ForEach(EnrollDraft.Mode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Text(modeDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if draft.mode == .import {
+                importFields
+            }
+
+            identityFields
+
+            if let step = store.enrollStep {
+                Label(step, systemImage: "hourglass").font(.caption).foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { store.backToAccounts() }
+                    .keyboardShortcut(.cancelAction)
+                Button(draft.mode == .import ? "Import" : "Create") { Task { await store.createAccount() } }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!draft.canCreate || store.isWorking)
+            }
+        }
+        .padding(.horizontal, PanelMetrics.padding)
+        .padding(.bottom, 12)
+    }
+
+    /// A key with no large-blob store cannot hold an account record, so nothing can be
+    /// created on it — while everything already on it keeps working.
+    private var unsupportedKey: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            PanelWarningBox(title: "This key cannot hold new accounts",
+                          message: "Every new account keeps its record in the key's large-blob store, and this key has none — older firmware. Accounts already on it keep working as before.")
+            HStack {
+                Spacer()
+                Button("Back") { store.backToAccounts() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(.horizontal, PanelMetrics.padding)
+        .padding(.bottom, 12)
     }
 
     private var modeDescription: String {
@@ -92,18 +122,8 @@ struct EnrollView: View {
 
             if let error = draft.importError {
                 Text(error).font(.caption2).foregroundStyle(.red)
-            } else if let backup = draft.parsedBackup {
-                if backup.isLegacy {
-                    legacyIdentityFields
-                } else if let identity = backup.identity {
-                    IdentityFingerprintView(identity: identity)
-                    Text("Identity carried by this backup key — compare it with the other key.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } else {
-                Text("60 characters as shown on the other key's backup screen, or 44 from an earlier version.")
+            } else if draft.parsedBackup == nil {
+                Text("64 characters as shown on the other key's backup screen, or 44 from an earlier version.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -111,36 +131,37 @@ struct EnrollView: View {
         }
     }
 
-    /// A backup from before identities has none, so the account being created needs to be
-    /// given one — the one the account already shows on another key, if it was migrated
-    /// there, or a random one.
-    private var legacyIdentityFields: some View {
+    private var identityFields: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("This backup key predates identities. Enter the identity the other key shows after migration, or keep the random one.")
+            Text("IDENTITY")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+
+            IdentityFieldView(hex: $store.enrollDraft.identityHex,
+                              identity: draft.identity,
+                              error: draft.identityError,
+                              onRandomise: { store.randomiseEnrollIdentity() },
+                              onSubmit: { Task { await store.createAccount() } })
+                .focused($focus, equals: .identity)
+
+            Text(identityHint)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(draft.importIdentityDiffers ? .orange : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            HStack(spacing: 6) {
-                TextField("Identity, 24 hex characters", text: $store.enrollDraft.legacyIdentityHex)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11, design: .monospaced))
-                    .focused($focus, equals: .legacyIdentity)
-                Button {
-                    store.randomiseImportIdentity()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Pick a random identity")
-            }
-
-            if let error = draft.legacyIdentityError {
-                Text(error).font(.caption2).foregroundStyle(.red)
-            } else if let identity = draft.legacyIdentity {
-                IdentityFingerprintView(identity: identity)
-            }
+    private var identityHint: String {
+        if draft.importIdentityDiffers {
+            return "Differs from the identity the backup carries — the two keys will not show the same identity."
+        }
+        switch draft.mode {
+        case .import:
+            return draft.importIsLegacy
+                ? "This backup key predates identities. Enter the one the account shows on another key, or keep the random one."
+                : "Carried by the backup key: the same identity as the account it came from."
+        case .portable, .local:
+            return "Not a secret and no part of any password. Tells this account apart from a namesake; a copy on a second key shows the same identity."
         }
     }
 }

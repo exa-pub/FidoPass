@@ -14,6 +14,7 @@ import FidoPassCore
 struct RecoverySheet {
     let accountId: String
     let kind: AccountKind
+    let format: AccountFormat
     /// Not a secret, and no input to derivation — on the sheet because it is what tells
     /// this account apart from a namesake, on this key or on the copy on another one.
     let identity: AccountIdentity?
@@ -30,6 +31,7 @@ struct RecoverySheet {
          generatedAt: Date = Date()) {
         self.accountId = account.id
         self.kind = account.kind
+        self.format = account.format
         self.identity = account.identity
         self.revision = parameters.revision
         self.policy = parameters.policy
@@ -49,6 +51,7 @@ struct RecoverySheet {
         lines.append("")
         lines.append("Account id   : \(accountId)")
         lines.append("Credential   : \(kind == .portable ? "portable (can be copied to a second key)" : "local (bound to one key)")")
+        lines.append("Format       : \(format == .v2 ? "v2 (relying party fidopass.org)" : "v1 (relying party \(kind.rpId))")")
         lines.append("Identity     : \(identity?.groupedHex ?? "(not assigned — migrate this account first)")")
         lines.append("Revision     : \(revision)")
         lines.append("Length       : \(policy.length)")

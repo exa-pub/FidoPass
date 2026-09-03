@@ -123,6 +123,37 @@ final class LabelStoreTests: XCTestCase {
         XCTAssertEqual(defaults.array(forKey: LabelStore.legacyStorageKey) as? [String], ["from-before"])
     }
 
+    // MARK: - Migration
+
+    /// A migrated account is a new credential. Its labels are the one thing about the old
+    /// one that cannot be derived again, so they move with it — merging with anything
+    /// already recorded under the new credential.
+    @MainActor
+    func testAHistoryMovesToTheMigratedCredential() {
+        let defaults = Self.defaults()
+        let store = Self.makeStore(defaults: defaults)
+        store.use("work", in: Self.vault)
+        store.use("archive", in: Self.vaultOnSpare)
+        store.focus(Self.vault)
+
+        store.move(from: Self.vault.scope, to: Self.vaultOnSpare.scope)
+
+        XCTAssertEqual(store.labels(for: Self.vault.scope), [], "nothing is left under the old credential")
+        XCTAssertEqual(store.labels(for: Self.vaultOnSpare.scope), ["work", "archive"], "the histories are merged, the moved one first")
+        XCTAssertEqual(store.scope, Self.vaultOnSpare.scope, "the focus follows the account")
+        XCTAssertEqual(store.recent, ["work", "archive"])
+        XCTAssertEqual(Self.stored(defaults).map(\.credentialId), ["cred-vault-spare"], "and it is on disk")
+    }
+
+    @MainActor
+    func testMovingANonexistentHistoryDoesNothing() {
+        let defaults = Self.defaults()
+        let store = Self.makeStore(defaults: defaults)
+        store.use("work", in: Self.vaultOnSpare)
+        store.move(from: Self.vault.scope, to: Self.vaultOnSpare.scope)
+        XCTAssertEqual(store.labels(for: Self.vaultOnSpare.scope), ["work"])
+    }
+
     // MARK: - Identity
 
     /// The key's name is recorded so the settings window can say which key an account lives

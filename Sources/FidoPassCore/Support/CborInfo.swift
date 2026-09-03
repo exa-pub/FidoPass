@@ -65,6 +65,9 @@ struct CborInfo {
         options.first { $0.name == name }?.value
     }
 
+    /// Whether the key has a large-blob store — what a v2 account's record is kept in.
+    var supportsLargeBlobs: Bool { option("largeBlobs") == true }
+
     /// The 16-byte model identifier, hex-encoded. Not an identity — see `DeviceStatus.aaguid`.
     /// `nil` when the key reports all zeroes, which is how it declines to identify its model.
     var aaguid: String? {

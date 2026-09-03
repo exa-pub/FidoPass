@@ -68,7 +68,7 @@ final class MessageKeyServiceTests: XCTestCase {
         XCTAssertEqual(mock.deriveFixedCalls.count, 1, "one touch, for the fixed component")
         XCTAssertTrue(mock.deriveMessageSecretCalls.isEmpty)
 
-        let masterKey = PortableMasterKey.combine(fixed, handle.account.portable!.external)
+        let masterKey = PortableMasterKey.combine(fixed, handle.account.mask!)
         let secret = Data(HMAC<SHA256>.authenticationCode(for: SaltFactory.portableMessageSalt(nonce: MessageFixtures.nonce),
                                                           using: SymmetricKey(data: masterKey)))
         let scalar = try Argon2.id(password: MessageKeyService.scalarDomain + secret,
@@ -91,13 +91,13 @@ final class MessageKeyServiceTests: XCTestCase {
         XCTAssertEqual(first.url, second.url)
     }
 
-    /// The identity names the account and takes no part in the key: two payloads with the
-    /// same material and different identities issue the same public key — and different
+    /// The identity names the account and takes no part in the key: two accounts with the
+    /// same mask and different identities issue the same public key — and different
     /// locators, which is the identity's only job here.
     func testIdentityAffectsOnlyTheLocator() throws {
         let service = MessageKeyService(secretDerivationService: derivation())
-        let one = AccountHandle.portableFixture(id: "vault", identity: AccountIdentity(hex: "000000000000000000000000"))
-        let other = AccountHandle.portableFixture(id: "vault", identity: AccountIdentity(hex: "ffffffffffffffffffffffff"))
+        let one = AccountHandle.portableFixture(id: "vault", identity: AccountIdentity(hex: "00000000000000000000000000000000"))
+        let other = AccountHandle.portableFixture(id: "vault", identity: AccountIdentity(hex: "ffffffffffffffffffffffffffffffff"))
 
         let first = try service.deriveMessageKey(one, nonce: MessageFixtures.nonce, pinProvider: nil)
         let second = try service.deriveMessageKey(other, nonce: MessageFixtures.nonce, pinProvider: nil)
@@ -117,6 +117,7 @@ final class MessageKeyServiceTests: XCTestCase {
         XCTAssertNotEqual(first.url.locator, second.url.locator)
     }
 
+    /// A portable v1 account has no identity, so no locator: refused until migrated.
     func testAnAccountWithoutAnIdentityIsRefusedBeforeTheKeyIsTouched() throws {
         let mock = derivation()
         let service = MessageKeyService(secretDerivationService: mock)

@@ -20,14 +20,17 @@ protocol KeyDeviceBackend: Sendable {
     func inventory(devicePath: String, pin: String) throws -> CredentialInventory
 }
 
-/// FidoPass accounts on a key: enumerating, creating, deriving from, deleting.
+/// FidoPass accounts on a key: enumerating, creating, deriving from, migrating, deleting.
 protocol KeyAccountBackend: Sendable {
-    func enumerateAccounts(kind: AccountKind, devicePath: String, pin: String) throws -> [AccountHandle]
+    /// Every account on the key, of every format. PIN, no touch, one open.
+    func enumerateAccounts(devicePath: String, pin: String) throws -> [AccountHandle]
     func enroll(accountId: String,
                 kind: AccountKind,
+                identity: AccountIdentity,
                 devicePath: String,
                 askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle
     func enrollPortable(accountId: String,
+                        identity: AccountIdentity,
                         devicePath: String,
                         askPIN: @escaping @Sendable () -> String?,
                         imported: PortableBackup?,
@@ -38,8 +41,19 @@ protocol KeyAccountBackend: Sendable {
     /// The account's master key and identity. One touch.
     func exportBackup(_ handle: AccountHandle,
                       pinProvider: @escaping @Sendable () -> String?) throws -> PortableBackup
-    /// Writes an identity onto a portable account from before identities. PIN, no touch.
-    func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle
+    /// Recreates a portable v1 account as v2 and, once the copy is verified, deletes the
+    /// original. Four touches.
+    func migrate(_ old: AccountHandle,
+                 identity: AccountIdentity,
+                 askPIN: @escaping @Sendable () -> String?,
+                 onStep: @escaping @Sendable (MigrationStep) -> Void) throws -> AccountHandle
+    /// Finishes a migration that was interrupted, from whatever state its copy is in.
+    func finishMigration(old: AccountHandle,
+                         copy: AccountHandle,
+                         askPIN: @escaping @Sendable () -> String?,
+                         onStep: @escaping @Sendable (MigrationStep) -> Void) throws -> AccountHandle
+    /// Deletes an unfinished copy. PIN, no touch.
+    func discardMigrationCopy(_ copy: AccountHandle, pin: String) throws
     /// The account's message key for a nonce — the link others seal under, and the private
     /// half that opens what they sealed. One touch.
     func deriveMessageKey(_ handle: AccountHandle,

@@ -24,9 +24,9 @@ public struct PortableBackup: Hashable, Sendable {
         self.identity = identity
     }
 
-    /// Parses the text a person pastes: 60 characters for a backup with an identity, 44 for
-    /// one from an earlier version. Whitespace is ignored — the value is printed, typed and
-    /// wrapped by whatever it was stored in.
+    /// Parses the text a person pastes: 64 characters for a backup with an identity, 44 for
+    /// one from a version that predates them. Whitespace is ignored — the value is printed,
+    /// typed and wrapped by whatever it was stored in.
     public init?(base64: String) {
         let compact = base64.filter { !$0.isWhitespace }
         guard let decoded = Data(base64Encoded: compact) else { return nil }
@@ -41,7 +41,7 @@ public struct PortableBackup: Hashable, Sendable {
         }
     }
 
-    /// 60 characters with an identity, 44 without.
+    /// 64 characters with an identity, 44 without.
     public var base64: String {
         var bytes = masterKey
         if let identity { bytes.append(identity.bytes) }
@@ -52,7 +52,8 @@ public struct PortableBackup: Hashable, Sendable {
     public var isLegacy: Bool { identity == nil }
 
     /// The same master key with an identity chosen for it — what importing a legacy backup
-    /// does once the user has picked or accepted one.
+    /// does once the user has picked or accepted one, and what happens when someone types
+    /// over the identity a current backup carries.
     public func withIdentity(_ identity: AccountIdentity) -> PortableBackup {
         PortableBackup(masterKey: masterKey, identity: identity)!
     }

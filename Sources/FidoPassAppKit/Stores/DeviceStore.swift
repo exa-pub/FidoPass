@@ -31,6 +31,9 @@ final class DeviceStore: ObservableObject {
         /// Make and model, not identity. Used only to notice that a *different* key came back
         /// after a reconnect — see `DeviceStatus.aaguid`.
         var aaguid: String?
+        /// Whether the key has a large-blob store, which every new account's record needs.
+        /// `nil` until the key has been asked; only a definite `false` closes anything.
+        var supportsLargeBlobs: Bool?
 
         /// The rules to enforce in a PIN field for this key.
         var pinPolicy: PinPolicy { PinPolicy(minLengthBytes: minPINLength ?? PinPolicy.ctapFloor) }
@@ -179,7 +182,8 @@ final class DeviceStore: ObservableObject {
                                             pinRetriesRemaining: old?.pinRetriesRemaining,
                                             minPINLength: old?.minPINLength,
                                             forcePINChange: old?.forcePINChange ?? false,
-                                            aaguid: old?.aaguid)
+                                            aaguid: old?.aaguid,
+                                            supportsLargeBlobs: old?.supportsLargeBlobs)
         }
 
         // A key that vanished takes its state with it, which would strand its vault token
@@ -218,7 +222,7 @@ final class DeviceStore: ObservableObject {
         guard !pin.isEmpty else { return }
         let path = device.path
         do {
-            _ = try await worker.accounts { try $0.enumerateAccounts(kind: .local, devicePath: path, pin: pin) }
+            _ = try await worker.accounts { try $0.enumerateAccounts(devicePath: path, pin: pin) }
         } catch {
             await recordUnlockFailure(error, for: device)
             throw error
@@ -454,6 +458,7 @@ final class DeviceStore: ObservableObject {
         state.minPINLength = status.minPINLength
         state.forcePINChange = status.forcePINChange
         state.aaguid = status.aaguid
+        state.supportsLargeBlobs = status.supportsLargeBlobs
         states[path] = state
     }
 }

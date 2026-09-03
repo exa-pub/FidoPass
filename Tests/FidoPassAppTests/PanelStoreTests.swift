@@ -17,7 +17,7 @@ final class PanelStoreTests: XCTestCase {
         let device = MockKeyBackend.device()
         backend.devices = [device]
         backend.pins[device.path] = "1234"
-        backend.accountsByPath[device.path] = [Account.fixture(id: "vault", kind: .portable)]
+        backend.accountsByPath[device.path] = [Account.portableFixture(id: "vault")]
 
         let store = AppTestFactory.makeStore(backend: backend)
         let ref = AccountRef(accountId: "vault", devicePath: device.path)
@@ -202,26 +202,54 @@ final class PanelStoreTests: XCTestCase {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
         store.enrollDraft.accountId = "  backup  "
         store.enrollDraft.mode = .portable
+        let identity = store.enrollDraft.identity!
         await store.createAccount()
 
         XCTAssertEqual(backend.enrollCalls.last?.accountId, "backup", "the id must be trimmed before it reaches the key")
         XCTAssertNil(backend.enrollCalls.last?.imported)
+        XCTAssertEqual(backend.enrollCalls.last?.identity, identity, "the identity the form showed is the one written")
         let ref = AccountRef(accountId: "backup", devicePath: device.path)
         XCTAssertEqual(store.route, .backupKey(ref), "a freshly created backup key has to be shown once, immediately")
-        XCTAssertEqual(store.backup, backend.backupValue)
-        XCTAssertEqual(store.backup?.base64.count, 60)
-        XCTAssertEqual(store.accounts.account(ref)?.account.identity, store.backup?.identity,
+        XCTAssertEqual(store.backup?.masterKey, backend.backupValue.masterKey)
+        XCTAssertEqual(store.backup?.identity, identity)
+        XCTAssertEqual(store.backup?.base64.count, 64)
+        XCTAssertEqual(store.accounts.account(ref)?.account.identity, identity,
                        "the backup carries the identity the new account shows")
+        XCTAssertEqual(store.accounts.account(ref)?.account.format, .v2)
     }
 
     func testLocalEnrolmentProducesNoBackupKey() async {
-        let (store, _, _) = await AppTestFactory.unlockedStore()
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
         store.enrollDraft.accountId = "disk-2"
         store.enrollDraft.mode = .local
+        let identity = store.enrollDraft.identity!
         await store.createAccount()
 
         XCTAssertEqual(store.route, .accounts)
         XCTAssertNil(store.backup)
+        XCTAssertEqual(backend.enrollCalls.last?.identity, identity)
+        XCTAssertEqual(store.accounts.account(AccountRef(accountId: "disk-2", devicePath: device.path))?.account.identity, identity)
+    }
+
+    /// The form opens with a random identity, offers another on demand, and keeps what is
+    /// typed over it.
+    func testTheFormOffersAnIdentityAndKeepsWhatIsTyped() async {
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        XCTAssertNotNil(store.enrollDraft.identity, "opens with a random identity")
+        let first = store.enrollDraft.identityHex
+        store.randomiseEnrollIdentity()
+        XCTAssertNotEqual(store.enrollDraft.identityHex, first)
+
+        let chosen = AccountIdentity(hex: "0c0b0a090807060504030201ffeeddcc")!
+        store.enrollDraft.identityHex = chosen.groupedHex
+        store.enrollDraft.accountId = "chosen"
+        store.enrollDraft.mode = .local
+        await store.createAccount()
+        XCTAssertEqual(backend.enrollCalls.last?.identity, chosen)
+
+        store.enrollDraft.identityHex = "not hex"
+        XCTAssertNotNil(store.enrollDraft.identityError)
+        XCTAssertFalse(store.enrollDraft.canCreate, "no identity, no account")
     }
 
     /// Anything but a whole backup would derive different passwords, silently.
@@ -239,28 +267,40 @@ final class PanelStoreTests: XCTestCase {
         draft.importText = Data(repeating: 7, count: 16).base64EncodedString()
         XCTAssertNotNil(draft.importError, "a short key would derive different passwords, silently")
 
+        draft.importText = Data(repeating: 7, count: 44).base64EncodedString()
+        XCTAssertNotNil(draft.importError, "the layout an unreleased build printed is not read")
+
         let current = PortableBackup(masterKey: Data(repeating: 7, count: 32),
-                                     identity: AccountIdentity(hex: "070707070707070707070707"))!
+                                     identity: AccountIdentity(hex: "07070707070707070707070707070707"))!
         draft.importText = " " + current.base64 + "\n"
+        draft.adoptImportIdentityIfNeeded()
         XCTAssertNil(draft.importError)
         XCTAssertTrue(draft.canCreate)
+        XCTAssertEqual(draft.identity, current.identity, "the backup's identity fills the field")
         XCTAssertEqual(draft.request, .import(current))
+        XCTAssertFalse(draft.importIdentityDiffers)
 
-        // A backup from before identities parses, but is not complete until it has one.
+        // Typing over it is allowed, and flagged: the two keys will not agree.
+        draft.identityHex = "0c0b0a090807060504030201ffeeddcc"
+        XCTAssertTrue(draft.importIdentityDiffers)
+        XCTAssertEqual(draft.parsedImport?.identity, AccountIdentity(hex: "0c0b0a090807060504030201ffeeddcc"))
+        XCTAssertEqual(draft.parsedImport?.masterKey, current.masterKey)
+        draft.adoptImportIdentityIfNeeded()
+        XCTAssertTrue(draft.importIdentityDiffers, "adopted once — a later keystroke must not overwrite what was typed")
+
+        // A backup from before identities parses, and the field's identity completes it.
         draft.importText = Data(repeating: 7, count: 32).base64EncodedString()
         XCTAssertNil(draft.importError)
         XCTAssertTrue(draft.importIsLegacy)
-        XCTAssertFalse(draft.canCreate)
-        draft.legacyIdentityHex = "not hex"
-        XCTAssertNotNil(draft.legacyIdentityError)
-        XCTAssertFalse(draft.canCreate)
-        draft.legacyIdentityHex = "0102 0304 0506 0708 090a 0b0c"
-        XCTAssertNil(draft.legacyIdentityError)
         XCTAssertTrue(draft.canCreate)
-        XCTAssertEqual(draft.parsedImport?.identity, AccountIdentity(hex: "0102030405060708090a0b0c"))
         XCTAssertEqual(draft.parsedImport?.masterKey, Data(repeating: 7, count: 32))
+        XCTAssertEqual(draft.parsedImport?.identity, draft.identity)
+        draft.identityHex = "not hex"
+        XCTAssertNotNil(draft.identityError)
+        XCTAssertFalse(draft.canCreate)
 
         // Local and portable ignore whatever is left in the import field.
+        draft.identityHex = "0102 0304 0506 0708 090a 0b0c 0d0e 0f10"
         draft.mode = .local
         draft.importText = "garbage"
         XCTAssertNil(draft.importError)
@@ -273,13 +313,15 @@ final class PanelStoreTests: XCTestCase {
     func testImportEndsOnTheAccountList() async {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
         let backup = PortableBackup(masterKey: Data(repeating: 9, count: 32),
-                                    identity: AccountIdentity(hex: "090909090909090909090909"))!
+                                    identity: AccountIdentity(hex: "09090909090909090909090909090909"))!
         store.enrollDraft.accountId = "copy"
         store.enrollDraft.mode = .import
         store.enrollDraft.importText = backup.base64
+        XCTAssertEqual(store.enrollDraft.identity, backup.identity, "recognised, and adopted at once")
         await store.createAccount()
 
         XCTAssertEqual(backend.enrollCalls.last?.imported, backup)
+        XCTAssertEqual(backend.enrollCalls.last?.identity, backup.identity)
         XCTAssertEqual(store.route, .accounts)
         XCTAssertNil(store.backup)
         let ref = AccountRef(accountId: "copy", devicePath: device.path)
@@ -296,20 +338,21 @@ final class PanelStoreTests: XCTestCase {
         store.enrollDraft.importText = Data(repeating: 3, count: 32).base64EncodedString()
 
         XCTAssertTrue(store.enrollDraft.importIsLegacy)
-        XCTAssertNotNil(store.enrollDraft.legacyIdentity, "a random identity is offered the moment a legacy backup is recognised")
+        XCTAssertNotNil(store.enrollDraft.identity, "the random identity the form opened with stands")
         XCTAssertTrue(store.enrollDraft.canCreate)
 
-        let chosen = AccountIdentity(hex: "0c0b0a090807060504030201")!
-        store.enrollDraft.legacyIdentityHex = chosen.groupedHex
+        let chosen = AccountIdentity(hex: "0c0b0a090807060504030201ffeeddcc")!
+        store.enrollDraft.identityHex = chosen.groupedHex
         await store.createAccount()
 
         XCTAssertEqual(backend.enrollCalls.last?.imported?.masterKey, Data(repeating: 3, count: 32))
         XCTAssertEqual(backend.enrollCalls.last?.imported?.identity, chosen)
+        XCTAssertEqual(backend.enrollCalls.last?.identity, chosen)
         XCTAssertEqual(store.route, .accounts)
     }
 
-    /// The list shows the identity beside every account: stored for a portable one, derived
-    /// for a local one. Nothing on the key is read for the second.
+    /// The list shows the identity beside every account: stored for a v2 one, derived for a
+    /// v1 local one. Nothing on the key is read for the second.
     func testEveryAccountHasAnIdentity() async {
         let (store, _, _) = await AppTestFactory.unlockedStore()
         for handle in store.visibleAccounts {
@@ -318,9 +361,30 @@ final class PanelStoreTests: XCTestCase {
         }
     }
 
+    /// A key without a large-blob store cannot hold a record, so nothing is created on it —
+    /// and the form says so instead of failing at the key.
+    func testCreatingIsClosedOnAKeyWithoutLargeBlobs() async {
+        let backend = MockKeyBackend()
+        let device = MockKeyBackend.device()
+        backend.devices = [device]
+        backend.pins[device.path] = "1234"
+        backend.statusByPath[device.path] = DeviceStatus(pinRetriesRemaining: 5, hasPIN: true, supportsHmacSecret: true,
+                                                         supportsLargeBlobs: false, remainingResidentKeys: 20)
+        let store = AppTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
+        store.pinDraft = "1234"
+        await store.submitPin()
+
+        XCTAssertFalse(store.selectedKeyHoldsRecords)
+        store.enrollDraft.accountId = "new"
+        store.enrollDraft.mode = .local
+        await store.createAccount()
+        XCTAssertTrue(backend.enrollCalls.isEmpty)
+    }
+
     // MARK: - Migration
 
-    /// A key holding one account from before identities and one local account.
+    /// A key holding one portable account in the v1 layout and one local account.
     private static func legacyStore() async -> (PanelStore, MockKeyBackend, FidoDevice, AccountRef) {
         let (store, backend, device) = await AppTestFactory.unlockedStore(accounts: [
             Account.portableFixture(id: "old", legacy: true),
@@ -329,17 +393,18 @@ final class PanelStoreTests: XCTestCase {
         return (store, backend, device, AccountRef(accountId: "old", devicePath: device.path))
     }
 
-    /// Nothing is derived from an account until it has an identity: asking for a password
-    /// lands on the migration screen, and the key is not touched.
+    /// Nothing is derived from a v1 portable account until it has been migrated: asking for
+    /// a password lands on the migration screen, and the key is not touched.
     func testALegacyAccountRoutesToMigrationInsteadOfGenerating() async {
         let (store, backend, _, old) = await Self.legacyStore()
         await store.copyPassword(for: old, label: "vault")
 
         XCTAssertEqual(store.route, .migrate(old))
         XCTAssertEqual(store.selection, old)
-        XCTAssertTrue(backend.generateCalls.isEmpty, "nothing is derived before the identity exists")
+        XCTAssertTrue(backend.generateCalls.isEmpty, "nothing is derived before the migration")
         XCTAssertNil(store.generation.result)
         XCTAssertNotNil(store.migrationDraft.identity, "a random identity is offered")
+        XCTAssertFalse(store.migrationDraft.isFixed)
     }
 
     func testIssuingAKeyForALegacyAccountRoutesToMigration() async {
@@ -364,24 +429,37 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertEqual(store.primaryAction, .generateAndCopy(disk))
     }
 
-    func testMigrationRewritesTheAccountAndUnlocksGeneration() async {
+    /// The whole migration from the panel's side: the chosen identity reaches the key, the
+    /// migrated account takes the old one's place, its labels follow it, and `⏎` generates
+    /// again.
+    func testMigrationRecreatesTheAccountAndUnlocksGeneration() async throws {
         let (store, backend, _, old) = await Self.legacyStore()
+        let oldScope = try XCTUnwrap(store.labelTarget(for: old)?.scope)
+        store.labels.use("work", in: try XCTUnwrap(store.labelTarget(for: old)))
         store.beginMigration(old)
         XCTAssertEqual(store.route, .migrate(old))
 
-        let chosen = AccountIdentity(hex: "0102030405060708090a0b0c")!
+        let chosen = AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10")!
         store.migrationDraft.identityHex = chosen.groupedHex
         await store.migrate()
 
-        XCTAssertEqual(backend.assignIdentityCalls.count, 1)
-        XCTAssertEqual(backend.assignIdentityCalls.first?.identity, chosen)
+        XCTAssertEqual(backend.migrateCalls.count, 1)
+        XCTAssertEqual(backend.migrateCalls.first?.identity, chosen)
+        XCTAssertTrue(backend.finishCalls.isEmpty)
         XCTAssertEqual(store.route, .accounts)
         XCTAssertNotNil(store.statusText)
 
-        let migrated = store.accounts.account(old)
-        XCTAssertEqual(migrated?.account.identity, chosen)
-        XCTAssertEqual(migrated?.account.needsMigration, false)
+        let migrated = try XCTUnwrap(store.accounts.account(old))
+        XCTAssertEqual(migrated.account.format, .v2)
+        XCTAssertEqual(migrated.account.identity, chosen)
+        XCTAssertFalse(migrated.account.needsMigration)
+        XCTAssertEqual(store.visibleAccounts.map(\.id), ["disk", "old"], "one row, not two")
         XCTAssertEqual(store.primaryAction, .generateAndCopy(old), "once migrated, ⏎ generates again")
+
+        let newScope = LabelScope(credentialId: migrated.credentialIdB64)
+        XCTAssertNotEqual(newScope, oldScope)
+        XCTAssertEqual(store.labels.labels(for: newScope), ["work"], "the history followed the account")
+        XCTAssertEqual(store.labels.labels(for: oldScope), [])
 
         await store.copyPassword(for: old, label: "vault")
         XCTAssertEqual(backend.generateCalls.map { $0.accountId }, ["old"])
@@ -402,13 +480,17 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertNil(draft.identity)
         XCTAssertNil(draft.error, "an empty field is not an error, just incomplete")
 
-        draft.identityHex = "0102-0304-0506-0708-090A-0B0C"
-        XCTAssertEqual(draft.identity, AccountIdentity(hex: "0102030405060708090a0b0c"))
+        draft.identityHex = "0102-0304-0506-0708-090A-0B0C-0D0E-0F10"
+        XCTAssertEqual(draft.identity, AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10"))
 
         let before = draft.identityHex
         draft.randomise()
         XCTAssertNotEqual(draft.identityHex, before)
         XCTAssertNotNil(draft.identity)
+
+        var fixed = MigrationDraft(identity: AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10")!, isFixed: true)
+        fixed.randomise()
+        XCTAssertEqual(fixed.identity, AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10"), "a fixed identity does not move")
     }
 
     func testMigrateWithAnInvalidIdentityDoesNothing() async {
@@ -417,19 +499,140 @@ final class PanelStoreTests: XCTestCase {
         store.migrationDraft.identityHex = "not hex"
         await store.migrate()
 
-        XCTAssertTrue(backend.assignIdentityCalls.isEmpty)
+        XCTAssertTrue(backend.migrateCalls.isEmpty)
         XCTAssertEqual(store.route, .migrate(old))
     }
 
     func testARefusedMigrationStaysOnTheScreenWithTheError() async {
         let (store, backend, _, old) = await Self.legacyStore()
-        backend.assignIdentityError = TestError.generic("refused")
+        backend.migrateError = TestError.generic("refused")
         store.beginMigration(old)
         await store.migrate()
 
         XCTAssertEqual(store.route, .migrate(old))
         XCTAssertNotNil(store.error)
         XCTAssertEqual(store.accounts.account(old)?.account.needsMigration, true)
+    }
+
+    /// The migration raises the touch prompt and names its steps in it: four touches must
+    /// not look like one that hangs.
+    func testMigrationNamesItsStepsInThePrompt() async {
+        let (store, _, _, old) = await Self.legacyStore()
+        store.beginMigration(old)
+        nonisolated(unsafe) var messages: [String] = []
+        let watching = store.touchGate.$prompt.sink { if let message = $0?.message { messages.append(message) } }
+        await store.migrate()
+        await Task.yield()
+        watching.cancel()
+
+        XCTAssertFalse(messages.isEmpty, "the prompt was raised")
+        XCTAssertTrue(messages.contains { $0.contains("Step 1 of 4") })
+        XCTAssertNil(store.touch, "and taken down afterwards")
+    }
+
+    /// An interrupted migration leaves a copy on the key. The list shows one row, and that
+    /// row finishes the migration rather than starting another.
+    func testAnInterruptedMigrationIsFinishedNotRepeated() async throws {
+        let (store, backend, _, old) = await Self.legacyStore()
+        backend.migrationLeavesCopy = true
+        store.beginMigration(old)
+        let chosen = AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10")!
+        store.migrationDraft.identityHex = chosen.groupedHex
+        await store.migrate()
+        XCTAssertNotNil(store.error, "the interruption is reported")
+        backend.migrationLeavesCopy = false
+
+        await store.refresh()
+        XCTAssertEqual(store.visibleAccounts.map(\.id), ["disk", "old"], "the copy is not a row of its own")
+        let copy = try XCTUnwrap(store.accounts.migrationCopy(for: old))
+        XCTAssertEqual(copy.account.identity, chosen)
+        XCTAssertEqual(store.accounts.account(old)?.account.format, .v1, "the original is what the row is")
+
+        store.beginMigration(old)
+        XCTAssertTrue(store.migrationDraft.isFixed, "the identity is already on the key")
+        XCTAssertEqual(store.migrationDraft.identity, chosen)
+        XCTAssertNotNil(store.migrationCopy)
+
+        await store.migrate()
+        XCTAssertEqual(backend.finishCalls, ["old"])
+        XCTAssertEqual(backend.migrateCalls.count, 1, "no second copy is made")
+        XCTAssertEqual(store.route, .accounts)
+        XCTAssertEqual(store.accounts.account(old)?.account.format, .v2)
+        XCTAssertNil(store.accounts.migrationCopy(for: old))
+        XCTAssertEqual(store.visibleAccounts.map(\.id), ["disk", "old"])
+    }
+
+    func testDiscardingTheCopyLeavesTheOriginal() async throws {
+        let (store, backend, _, old) = await Self.legacyStore()
+        backend.migrationLeavesCopy = true
+        store.beginMigration(old)
+        await store.migrate()
+        backend.migrationLeavesCopy = false
+        await store.refresh()
+        XCTAssertNotNil(store.accounts.migrationCopy(for: old))
+
+        store.beginMigration(old)
+        await store.discardMigrationCopy()
+
+        XCTAssertEqual(backend.discardCalls, ["old"])
+        XCTAssertNil(store.accounts.migrationCopy(for: old))
+        XCTAssertEqual(store.accounts.account(old)?.account.needsMigration, true, "the original is as it was")
+        XCTAssertEqual(store.route, .migrate(old), "and the screen now offers a fresh migration")
+        XCTAssertFalse(store.migrationDraft.isFixed)
+    }
+
+    /// A key without a large-blob store has nothing to migrate into: the v1 account keeps
+    /// deriving what it always did, and only the things that need an identity are refused.
+    func testMigrationIsNotForcedOnAKeyWithoutLargeBlobs() async {
+        let backend = MockKeyBackend()
+        let device = MockKeyBackend.device()
+        backend.devices = [device]
+        backend.pins[device.path] = "1234"
+        backend.statusByPath[device.path] = DeviceStatus(pinRetriesRemaining: 5, hasPIN: true, supportsHmacSecret: true,
+                                                         supportsLargeBlobs: false, remainingResidentKeys: 20)
+        backend.accountsByPath[device.path] = [Account.portableFixture(id: "old", legacy: true)]
+        let store = AppTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
+        store.pinDraft = "1234"
+        await store.submitPin()
+        let old = AccountRef(accountId: "old", devicePath: device.path)
+
+        XCTAssertEqual(store.primaryAction, .generateAndCopy(old))
+        await store.copyPassword(for: old, label: "vault")
+        XCTAssertEqual(backend.generateCalls.map(\.accountId), ["old"])
+        XCTAssertEqual(store.route, .accounts)
+
+        await store.issueEncryptionKey(for: old)
+        XCTAssertEqual(store.route, .accounts, "no migration screen to send it to")
+        XCTAssertNotNil(store.error)
+        XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty)
+
+        store.beginMigration(old)
+        XCTAssertEqual(store.route, .accounts)
+    }
+
+    /// A credential without a usable record is not an account: nothing is derived from it,
+    /// `⏎` does not pretend otherwise, and it can be deleted.
+    func testAnIncompleteAccountDerivesNothingAndCanBeDeleted() async {
+        let (store, backend, device) = await AppTestFactory.unlockedStore(accounts: [
+            Account.v2Fixture(id: "half", kind: .local, integrity: .recordMissing),
+            Account.fixture(id: "disk", kind: .local)
+        ])
+        let half = AccountRef(accountId: "half", devicePath: device.path)
+        store.select(half)
+        XCTAssertEqual(store.primaryAction, .chooseAccount)
+
+        await store.copyPassword(for: half, label: "vault")
+        XCTAssertTrue(backend.generateCalls.isEmpty)
+        XCTAssertNotNil(store.error)
+        XCTAssertEqual(store.route, .accounts)
+
+        await store.issueEncryptionKey(for: half)
+        XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty)
+
+        await store.deleteAccount(half)
+        XCTAssertEqual(backend.deleteCalls, ["half"])
+        XCTAssertNil(store.accounts.account(half))
     }
 
     /// Export is the one thing that does not wait for migration: a legacy account hands out
@@ -648,7 +851,7 @@ final class PanelStoreTests: XCTestCase {
     /// One account, one label: no arrows are advertised, because there is nowhere to go.
     func testHintsOmitArrowsWhenThereIsNothingToMoveBetween() async {
         let device = MockKeyBackend.device()
-        let single = [Account.fixture(id: "vault", kind: .portable)]
+        let single = [Account.portableFixture(id: "vault")]
         let (store, _, _) = await AppTestFactory.unlockedStore(accounts: single)
 
         XCTAssertFalse(store.keyboardHints.contains("↑↓ account"))

@@ -64,6 +64,14 @@ final class TouchGate: ObservableObject {
         return try await body()
     }
 
+    /// Replaces what the prompt says while it is up — a multi-touch operation naming the
+    /// step it is on. The title, the key and the clock stay as they are.
+    func updatePrompt(message: String) {
+        guard var current = prompt else { return }
+        current.message = message
+        prompt = current
+    }
+
     /// Hides the prompt and abandons the result.
     ///
     /// libfido2 exposes `fido_dev_cancel`, but the repository does not surface the handle,

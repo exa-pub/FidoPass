@@ -131,6 +131,25 @@ final class PanelReducerTests: XCTestCase {
         XCTAssertEqual(PanelReducer.primaryAction(snapshot), .migrate(vault))
     }
 
+    /// A credential without a usable record derives nothing, so `⏎` on it points at the list
+    /// rather than pretending there is a password to copy.
+    func testAnIncompleteSelectionDoesNotGenerate() {
+        let snapshot = PanelSnapshot(hasDevices: true,
+                                   selectedDevicePath: "/dev/one",
+                                   isUnlocked: true,
+                                   accountRefs: [vault, disk],
+                                   incompleteRefs: [vault],
+                                   selection: vault)
+        XCTAssertEqual(PanelReducer.primaryAction(snapshot), .chooseAccount)
+        let only = PanelSnapshot(hasDevices: true,
+                                 selectedDevicePath: "/dev/one",
+                                 isUnlocked: true,
+                                 accountRefs: [vault],
+                                 incompleteRefs: [vault],
+                                 selection: nil)
+        XCTAssertEqual(PanelReducer.primaryAction(only), .chooseAccount)
+    }
+
     /// A neighbour needing migration changes nothing for the account that does not.
     func testALegacyNeighbourDoesNotChangeTheSelectedAccountsAction() {
         let snapshot = PanelSnapshot(hasDevices: true,

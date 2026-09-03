@@ -12,22 +12,23 @@ final class FidoPassCoreFacadeTests: XCTestCase {
                                         productId: 2)
         deviceLister.devices = [expectedDevice]
 
+        let identity = AccountIdentity(hex: "0102030405060708090a0b0c0d0e0f10")!
         let enrollment = MockEnrollmentService()
-        enrollment.enrollClosure = { accountId, kind, devicePath, _ in
-            AccountHandle.fixture(id: accountId, kind: kind, devicePath: devicePath)
+        enrollment.enrollClosure = { accountId, kind, identity, devicePath, _, _ in
+            AccountHandle.v2Fixture(id: accountId, kind: kind, identity: identity, devicePath: devicePath)
         }
-        enrollment.enumerateClosure = { _, devicePath, _ in
+        enrollment.enumerateClosure = { devicePath, _ in
             [AccountHandle.fixture(id: "acct", kind: .local, devicePath: devicePath)]
         }
 
-        let generatedBackup = PortableBackup(masterKey: Data(repeating: 0x01, count: 32),
-                                             identity: AccountIdentity(hex: "0102030405060708090a0b0c"))!
+        let generatedBackup = PortableBackup(masterKey: Data(repeating: 0x01, count: 32), identity: identity)!
         let exportedBackup = PortableBackup(masterKey: Data(repeating: 0x02, count: 32), identity: nil)!
         let portable = MockPortableEnrollmentService()
-        portable.enrollPortableClosure = { accountId, devicePath, _, _ in
-            (AccountHandle.portableFixture(id: accountId, devicePath: devicePath), generatedBackup)
+        portable.enrollPortableClosure = { accountId, identity, devicePath, _, _ in
+            (AccountHandle.portableFixture(id: accountId, identity: identity, devicePath: devicePath), generatedBackup)
         }
         portable.exportClosure = { _, _ in exportedBackup }
+        let migration = MockMigrationService()
 
         let secret = MockSecretDerivationService()
         let passwordGenerator = MockPasswordGenerator()
@@ -41,7 +42,8 @@ final class FidoPassCoreFacadeTests: XCTestCase {
                                 secretDerivationService: secret,
                                 passwordGenerator: passwordGenerator,
                                 messageKeyService: messageKeys,
-                                messageSealer: sealer)
+                                messageSealer: sealer,
+                                migrationService: migration)
 
         let devices = try core.listDevices()
         XCTAssertEqual(devices, [expectedDevice])
@@ -49,13 +51,17 @@ final class FidoPassCoreFacadeTests: XCTestCase {
 
         let enrolled = try core.enroll(accountId: "acct",
                                        kind: .local,
+                                       identity: identity,
                                        devicePath: "/dev/mock",
                                        askPIN: nil)
         XCTAssertEqual(enrolled.id, "acct")
         XCTAssertEqual(enrolled.devicePath, "/dev/mock")
+        XCTAssertEqual(enrolled.account.identity, identity)
         XCTAssertEqual(enrollment.enrollCalls.count, 1)
+        XCTAssertEqual(enrollment.enrollCalls.first?.namesakePolicy, .refuse, "the facade never allows a namesake")
 
         let (portableAccount, portableKey) = try core.enrollPortable(accountId: "pacct",
+                                                                     identity: identity,
                                                                      devicePath: "/dev/mock",
                                                                      askPIN: nil,
                                                                      imported: nil)
@@ -78,10 +84,14 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         XCTAssertEqual(portable.exportCalls.count, 1)
 
         let legacy = AccountHandle.portableFixture(id: "old", legacy: true)
-        let identity = AccountIdentity(hex: "0c0b0a090807060504030201")!
-        let migrated = try core.assignIdentity(legacy, identity: identity, pinProvider: nil)
+        let migrated = try core.migrate(legacy, identity: identity)
         XCTAssertEqual(migrated.account.identity, identity)
-        XCTAssertEqual(portable.assignIdentityCalls.count, 1)
+        XCTAssertEqual(migrated.account.format, .v2)
+        XCTAssertEqual(migration.migrateCalls.count, 1)
+        _ = try core.finishMigration(old: legacy, copy: migrated)
+        XCTAssertEqual(migration.finishCalls.count, 1)
+        try core.discardMigrationCopy(migrated, pin: "1234")
+        XCTAssertEqual(migration.discardCalls.count, 1)
 
         let messageKey = try core.deriveMessageKey(enrolled, nonce: MessageFixtures.nonce, pinProvider: nil)
         XCTAssertEqual(messageKey.url, try MessageFixtures.url())

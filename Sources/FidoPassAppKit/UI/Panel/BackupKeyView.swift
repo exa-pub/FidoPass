@@ -24,7 +24,7 @@ struct BackupKeyView: View {
                 PanelWarningBox(title: "This is not a password",
                               message: "Anyone holding this value can reproduce every password of this account without the security key. Store it offline — a safe, a printed copy — and never paste it into a website.")
 
-                Text(revealed ? (backup?.base64 ?? "") : String(repeating: "•", count: backup?.base64.count ?? 60))
+                Text(revealed ? (backup?.base64 ?? "") : String(repeating: "•", count: backup?.base64.count ?? 64))
                     .font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -39,7 +39,7 @@ struct BackupKeyView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if backup?.isLegacy == true {
-                    Text("This backup key predates identities and carries none. Importing it asks for one; migrating this account adds one to the key and to future backups.")
+                    Text("This backup key predates identities and carries none. Importing it asks for one; migrating this account gives it one and puts it in future backups.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

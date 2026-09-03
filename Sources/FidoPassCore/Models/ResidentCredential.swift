@@ -29,6 +29,18 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
     /// was asked for at creation, so this carries little information — but it must still
     /// never be the material itself.
     public let hasLargeBlobKey: Bool
+    /// The state of a v2 FidoPass account's record in the large-blob store. `nil` for every
+    /// other credential. The record's mask is never carried here: it is key material in the
+    /// same sense as the withheld v1 name.
+    public let record: RecordState?
+
+    /// What the inventory found in the large-blob store for a v2 account.
+    public enum RecordState: String, Sendable, Hashable, Codable {
+        case local
+        case portable
+        case missing
+        case corrupt
+    }
 
     public var id: String { credentialIdB64 }
 
@@ -60,7 +72,8 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
                 coseAlgorithm: Int?,
                 publicKeyB64: String?,
                 credentialProtection: CredentialProtection?,
-                hasLargeBlobKey: Bool) {
+                hasLargeBlobKey: Bool,
+                record: RecordState? = nil) {
         self.rpId = rpId
         self.credentialIdB64 = credentialIdB64
         self.userIdHex = userIdHex
@@ -71,6 +84,7 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
         self.publicKeyB64 = publicKeyB64
         self.credentialProtection = credentialProtection
         self.hasLargeBlobKey = hasLargeBlobKey
+        self.record = record
     }
 
     /// Whether this credential belongs to FidoPass itself.
@@ -78,27 +92,40 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
     /// Used only to offer the proper screen for it — never to filter the list. The manager
     /// shows the key as it is, and hiding the app's own credentials would make it lie by
     /// omission.
-    public var isFidoPassCredential: Bool { AccountKind(rpId: rpId) != nil }
+    public var isFidoPassCredential: Bool { AccountFormat.parse(rpId: rpId) != nil }
 
-    /// The identity of the FidoPass account this credential is, if it is one: derived from
-    /// the credential id for a local account, read out of the withheld name for a portable
-    /// one. `nil` for a foreign credential — and for a portable account written before
-    /// identities existed, which `needsMigration` says outright.
+    /// The layout this credential is in, if it is FidoPass's.
+    public var accountFormat: AccountFormat? { AccountFormat.parse(rpId: rpId)?.format }
+
+    /// The kind of FidoPass account this is: from the relying party for v1, from the record
+    /// for v2. `nil` for a foreign credential, and for a v2 credential without a record.
+    public var accountKind: AccountKind? {
+        guard let parsed = AccountFormat.parse(rpId: rpId) else { return nil }
+        if let kind = parsed.kind { return kind }
+        switch record {
+        case .local: return .local
+        case .portable: return .portable
+        case .missing, .corrupt, nil: return nil
+        }
+    }
+
+    /// The identity of the FidoPass account this credential is, if it is one: `user.id` for
+    /// v2, derived from the credential id for a local v1 account. `nil` for a foreign
+    /// credential — and for a portable v1 account, which `needsMigration` says outright.
     public var accountIdentity: AccountIdentity? {
-        switch AccountKind(rpId: rpId) {
-        case .local:
+        switch AccountFormat.parse(rpId: rpId) {
+        case (.v2, _)?:
+            return AccountIdentity(hex: userIdHex)
+        case (.v1, .local?)?:
             return Data(base64Encoded: credentialIdB64).map(AccountIdentity.derived(fromCredentialId:))
-        case .portable:
-            if case .portableKeyMaterialWithheld(let identity) = userName { return identity }
-            return nil
-        case nil:
+        case (.v1, _)?, nil:
             return nil
         }
     }
 
-    /// A FidoPass portable account whose payload predates identities.
+    /// A FidoPass portable account in the v1 layout: migration reproduces it as v2.
     public var needsMigration: Bool {
-        if case .portableKeyMaterialWithheld(identity: .none) = userName { return true }
+        if case .portableKeyMaterialWithheld = userName { return true }
         return false
     }
 

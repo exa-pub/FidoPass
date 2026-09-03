@@ -20,16 +20,16 @@ final class PanelStore: ObservableObject {
     @Published private(set) var backup: PortableBackup?
     @Published var enrollDraft = EnrollDraft() {
         didSet {
-            // A backup from before identities has none. The moment one is recognised the
-            // identity field gets a random value, so Import is one click away; it stays
-            // editable for the case where the same account already shows one on another key.
-            if enrollDraft.importIsLegacy, enrollDraft.legacyIdentityHex.isEmpty {
-                enrollDraft.legacyIdentityHex = AccountIdentity.random().groupedHex
+            // A backup that carries an identity fills the field with it the moment it is
+            // recognised — once, so that typing over it sticks. Checked before mutating:
+            // a mutation here re-enters this observer, and an unconditional one recurses.
+            if enrollDraft.hasUnadoptedImportIdentity {
+                enrollDraft.adoptImportIdentityIfNeeded()
             }
         }
     }
     @Published private(set) var enrollStep: String?
-    /// The identity about to be written by the migration screen. Reset each time it opens.
+    /// The identity the migration screen will create the copy with. Reset each time it opens.
     @Published var migrationDraft = MigrationDraft()
     /// Set while a system panel of our own is up — a save dialog takes key status away, and
     /// the HUD must not vanish behind it.
@@ -104,6 +104,11 @@ final class PanelStore: ObservableObject {
     var isWorking: Bool { touchGate.isWorking }
     var busyTitle: String? { touchGate.panelBusyTitle }
     var isSelectedKeyUnlocked: Bool { devices.selectedState?.unlocked == true }
+    /// Whether the selected key can hold a v2 account at all. Every new account keeps its
+    /// record in the key's large-blob store; a key without one — older firmware — can only
+    /// go on serving what is already on it. `nil` from the key reads as "yes": only a
+    /// definite refusal closes anything.
+    var selectedKeyHoldsRecords: Bool { devices.selectedState?.supportsLargeBlobs != false }
 
     var visibleAccounts: [AccountHandle] {
         guard let path = devices.selectedPath else { return [] }
@@ -135,8 +140,16 @@ final class PanelStore: ObservableObject {
                     isUnlocked: isSelectedKeyUnlocked,
                     keyHasPIN: devices.selectedState?.hasPIN,
                     accountRefs: visibleAccounts.map(AccountRef.init),
-                    legacyRefs: Set(visibleAccounts.filter { $0.account.needsMigration }.map(AccountRef.init)),
+                    legacyRefs: Set(visibleAccounts.filter { isMigratable($0) }.map(AccountRef.init)),
+                    incompleteRefs: Set(visibleAccounts.filter { !$0.account.canDerive }.map(AccountRef.init)),
                     selection: selection)
+    }
+
+    /// A v1 portable account on a key that can take the v2 copy. On a key without a
+    /// large-blob store there is nothing to migrate into, and the account goes on deriving
+    /// what it always did rather than being refused for a migration that cannot happen.
+    func isMigratable(_ handle: AccountHandle) -> Bool {
+        handle.account.needsMigration && devices.state(for: handle.devicePath)?.supportsLargeBlobs != false
     }
 
     /// What `⏎` is expected to do in the current state.
@@ -519,11 +532,16 @@ final class PanelStore: ObservableObject {
             route = .unlock
             return
         }
-        // An account from before identities would derive exactly what it always did — the
-        // identity is not an input — but it is refused until it has one, so that every
-        // account on screen can be told from its namesake on another key. The screen it
-        // lands on explains that and does the one thing there is to do.
-        if account.account.needsMigration {
+        // A credential without a usable record is not an account. Nothing is derived from
+        // it, and the one thing to do with it is delete it.
+        if let problem = account.account.integrity.problem {
+            error = .plain(problem)
+            return
+        }
+        // A v1 portable account would derive exactly what it always did, but it is refused
+        // until it has been migrated — the screen it lands on explains that and does the
+        // one thing there is to do. On a key that cannot take the copy it derives as before.
+        if isMigratable(account) {
             beginMigration(ref)
             return
         }
@@ -578,8 +596,10 @@ final class PanelStore: ObservableObject {
     func createAccount() async {
         guard !isWorking else { return }
         guard let request = enrollDraft.request,
+              let identity = enrollDraft.identity,
               let path = devices.selectedPath,
-              let device = selectedDevice else { return }
+              let device = selectedDevice,
+              selectedKeyHoldsRecords else { return }
         let draft = enrollDraft
 
         do {
@@ -589,9 +609,13 @@ final class PanelStore: ObservableObject {
                                                                     : "Confirming with the key.",
                                                                 deviceName: device.displayName)) {
                 try await self.accounts.enroll(accountId: draft.trimmedId,
+                                               identity: identity,
                                                request: request,
                                                devicePath: path) { step in
-                    Task { @MainActor in self.enrollStep = Self.stepMessage(step) }
+                    Task { @MainActor in
+                        self.enrollStep = Self.stepMessage(step)
+                        self.touchGate.updatePrompt(message: Self.stepMessage(step))
+                    }
                 }
             }
             enrollStep = nil
@@ -618,17 +642,29 @@ final class PanelStore: ObservableObject {
         }
     }
 
-    /// A fresh identity for a backup that predates them. The one the form filled in is
-    /// random too; this is for someone who typed over it and wants a random one back.
-    func randomiseImportIdentity() {
-        enrollDraft.legacyIdentityHex = AccountIdentity.random().groupedHex
+    /// A fresh identity for the account being created — for someone who typed over the one
+    /// offered and wants a random one back.
+    func randomiseEnrollIdentity() {
+        enrollDraft.randomiseIdentity()
     }
 
     static func stepMessage(_ step: PortableEnrollmentStep) -> String {
         switch step {
         case .creatingCredential: return "Step 1 of 2 — touch your key to create the credential"
         case .derivingBackupKey:  return "Step 2 of 2 — touch your key again to derive its backup key"
-        case .savingPayload:      return "Saving to the key…"
+        case .savingRecord:       return "Saving the record to the key…"
+        }
+    }
+
+    static func stepMessage(_ step: MigrationStep) -> String {
+        switch step {
+        case .readingOldAccount:    return "Step 1 of 4 — touch your key to read the old record"
+        case .creatingCredential:   return "Step 2 of 4 — touch your key to create the new record"
+        case .derivingNewComponent: return "Step 3 of 4 — touch your key to seal the new record"
+        case .savingRecord:         return "Saving the record to the key…"
+        case .verifying:            return "Step 4 of 4 — touch your key to verify the new record"
+        case .deletingOld:          return "Verified. Deleting the old record…"
+        case .rollingBack:          return "Something went wrong — removing the unfinished copy…"
         }
     }
 
@@ -655,30 +691,73 @@ final class PanelStore: ObservableObject {
 
     // MARK: - Migration
 
-    /// Opens the migration screen for an account from before identities, with a fresh random
-    /// identity to accept or replace.
+    /// Opens the migration screen for a v1 portable account. The identity is random, or —
+    /// when an unfinished copy is already on the key — the copy's own, which is not for
+    /// changing here.
     func beginMigration(_ ref: AccountRef) {
-        guard let account = accounts.account(ref), account.account.needsMigration else { return }
-        migrationDraft = MigrationDraft()
+        guard let account = accounts.account(ref), isMigratable(account) else { return }
+        if let copy = accounts.migrationCopy(for: ref), let identity = copy.account.identity {
+            migrationDraft = MigrationDraft(identity: identity, isFixed: true)
+        } else {
+            migrationDraft = MigrationDraft()
+        }
         selection = ref
         show(.migrate(ref))
     }
 
-    /// Writes the chosen identity to the key. PIN only, no touch — the material, and so every
-    /// password, stays exactly as it is.
+    /// The unfinished copy of the account the migration screen is about, if there is one.
+    var migrationCopy: AccountHandle? {
+        guard case .migrate(let ref) = route else { return nil }
+        return accounts.migrationCopy(for: ref)
+    }
+
+    /// Recreates the account as v2 — or finishes the copy already on the key. Four touches
+    /// the first time, two to finish; the old record goes only after the new one has been
+    /// read back and verified, so a failure leaves every password where it was.
     func migrate() async {
         guard !isWorking else { return }
         guard case .migrate(let ref) = route,
               let account = accounts.account(ref),
-              account.account.needsMigration,
+              isMigratable(account),
               let identity = migrationDraft.identity else { return }
+        // The history follows the account: the migrated one is a new credential, and the
+        // labels are the one thing about the old one that cannot be derived again.
+        let oldScope = labelTarget(for: ref)?.scope
+        let finishing = accounts.migrationCopy(for: ref) != nil
         do {
-            try await touchGate.withBusy("Migrating “\(ref.accountId)”…") {
-                _ = try await accounts.assignIdentity(account, identity: identity)
+            let migrated = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
+                                                                 message: finishing
+                                                                     ? "Two touches: read the old record, verify the new one."
+                                                                     : "Four touches. The old record is deleted only after the new one is verified.",
+                                                                 deviceName: selectedDevice?.displayName ?? "Security key")) {
+                let report: @Sendable (MigrationStep) -> Void = { step in
+                    Task { @MainActor in self.touchGate.updatePrompt(message: Self.stepMessage(step)) }
+                }
+                return finishing
+                    ? try await self.accounts.finishMigration(account, onStep: report)
+                    : try await self.accounts.migrate(account, identity: identity, onStep: report)
+            }
+            if let oldScope {
+                labels.move(from: oldScope, to: LabelScope(credentialId: migrated.credentialIdB64))
             }
             select(ref)
             show(.accounts)
             setStatus("Account migrated — passwords are unchanged")
+        } catch {
+            present(error)
+        }
+    }
+
+    /// Deletes the unfinished copy and leaves the original as it was. PIN, no touch.
+    func discardMigrationCopy() async {
+        guard !isWorking else { return }
+        guard case .migrate(let ref) = route, let account = accounts.account(ref) else { return }
+        do {
+            try await touchGate.withBusy("Removing the unfinished copy of “\(ref.accountId)”…") {
+                try await accounts.discardMigrationCopy(of: account)
+            }
+            migrationDraft = MigrationDraft()
+            setStatus("Unfinished copy removed — the account is as it was")
         } catch {
             present(error)
         }
@@ -700,6 +779,10 @@ final class PanelStore: ObservableObject {
     func showBackupKey(for ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref), account.kind == .portable else { return }
+        if let problem = account.account.integrity.problem {
+            error = .plain(problem)
+            return
+        }
         do {
             let exported = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
                                                                  message: "Recovering the backup key.",
@@ -748,10 +831,18 @@ final class PanelStore: ObservableObject {
     func issueEncryptionKey(for ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref) else { return }
-        // Same rule as generating: nothing is derived from an account until it has an
-        // identity. The backup key is the one exception — see `showBackupKey`.
+        if let problem = account.account.integrity.problem {
+            error = .plain(problem)
+            return
+        }
+        // A v1 portable account has no identity, so no locator: no message could find it.
+        // Migration is the way to one — or, on a key that cannot take the copy, nothing is.
         if account.account.needsMigration {
-            beginMigration(ref)
+            if isMigratable(account) {
+                beginMigration(ref)
+            } else {
+                error = .plain("“\(ref.accountId)” cannot issue encryption keys: it was created by an earlier version, and this key cannot hold the current format.")
+            }
             return
         }
         do {

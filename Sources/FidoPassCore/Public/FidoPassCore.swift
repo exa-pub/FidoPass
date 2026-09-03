@@ -13,6 +13,7 @@ public final class FidoPassCore: Sendable {
     private let deviceManagement: DeviceManaging
     private let inspection: AuthenticatorInspecting
     private let configuration: DeviceConfiguring
+    private let migration: Migrating
 
     public convenience init(deviceLister: DeviceListing? = nil,
                             enrollmentService: Enrolling? = nil,
@@ -23,7 +24,8 @@ public final class FidoPassCore: Sendable {
                             messageSealer: MessageSealing? = nil,
                             deviceManagement: DeviceManaging? = nil,
                             inspection: AuthenticatorInspecting? = nil,
-                            configuration: DeviceConfiguring? = nil) {
+                            configuration: DeviceConfiguring? = nil,
+                            migrationService: Migrating? = nil) {
         self.init(deviceRepository: DeviceRepository(),
                   deviceLister: deviceLister,
                   enrollmentService: enrollmentService,
@@ -34,7 +36,8 @@ public final class FidoPassCore: Sendable {
                   messageSealer: messageSealer,
                   deviceManagement: deviceManagement,
                   inspection: inspection,
-                  configuration: configuration)
+                  configuration: configuration,
+                  migrationService: migrationService)
     }
 
     /// The designated initialiser, with the device repository itself substitutable. Internal:
@@ -49,7 +52,8 @@ public final class FidoPassCore: Sendable {
          messageSealer: MessageSealing? = nil,
          deviceManagement: DeviceManaging? = nil,
          inspection: AuthenticatorInspecting? = nil,
-         configuration: DeviceConfiguring? = nil) {
+         configuration: DeviceConfiguring? = nil,
+         migrationService: Migrating? = nil) {
         Libfido2Context.initialize()
 
         self.deviceRepository = resolvedDeviceRepository
@@ -73,6 +77,8 @@ public final class FidoPassCore: Sendable {
         self.deviceManagement = deviceManagement ?? DeviceManagementService(deviceRepository: resolvedDeviceRepository)
         self.inspection = inspection ?? AuthenticatorInspectionService(deviceRepository: resolvedDeviceRepository)
         self.configuration = configuration ?? DeviceConfigurationService(deviceRepository: resolvedDeviceRepository)
+        self.migration = migrationService ?? AccountMigrationService(enrollmentService: resolvedEnrollment,
+                                                                     secretDerivationService: resolvedSecretDerivation)
     }
 
     public func listDevices() throws -> [FidoDevice] {
@@ -123,25 +129,31 @@ public final class FidoPassCore: Sendable {
         try configuration.enableEnterpriseAttestation(devicePath: devicePath, pin: pin)
     }
 
-    /// Creates a local account: one resident credential, one touch.
+    /// Creates a local account: one resident credential, one touch, then its record under
+    /// the PIN. The identity goes into `user.id` exactly as given.
     public func enroll(accountId: String,
                        kind: AccountKind = .local,
+                       identity: AccountIdentity,
                        devicePath: String,
                        askPIN: (@Sendable () -> String?)? = nil) throws -> AccountHandle {
         try enrollmentService.enroll(accountId: accountId,
                                      kind: kind,
+                                     identity: identity,
                                      devicePath: devicePath,
-                                     askPIN: askPIN)
+                                     askPIN: askPIN,
+                                     namesakePolicy: .refuse)
     }
 
     /// Creates a portable account: two touches, and — when the key material is fresh rather
     /// than imported — a backup to show the user once.
     public func enrollPortable(accountId: String,
+                               identity: AccountIdentity,
                                devicePath: String,
                                askPIN: (@Sendable () -> String?)? = nil,
                                imported: PortableBackup?,
                                onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (AccountHandle, PortableBackup?) {
         try portableEnrollmentService.enrollPortable(accountId: accountId,
+                                                     identity: identity,
                                                      devicePath: devicePath,
                                                      askPIN: askPIN,
                                                      imported: imported,
@@ -162,12 +174,10 @@ public final class FidoPassCore: Sendable {
                                                pinProvider: pinProvider)
     }
 
-    public func enumerateAccounts(kind: AccountKind = .local,
-                                  devicePath: String,
+    /// Every FidoPass account on the key, of every format. PIN, no touch, one open.
+    public func enumerateAccounts(devicePath: String,
                                   pin: String?) throws -> [AccountHandle] {
-        try enrollmentService.enumerateAccounts(rpId: kind.rpId,
-                                                devicePath: devicePath,
-                                                pin: pin)
+        try enrollmentService.enumerateAccounts(devicePath: devicePath, pin: pin)
     }
 
     /// The account's backup — master key and identity. One touch.
@@ -176,12 +186,28 @@ public final class FidoPassCore: Sendable {
         try portableEnrollmentService.exportBackup(handle, pinProvider: pinProvider)
     }
 
-    /// Gives a portable account written before identities existed one. PIN, no touch, and
-    /// no change to any password: the identity is not an input to derivation.
-    public func assignIdentity(_ handle: AccountHandle,
-                               identity: AccountIdentity,
-                               pinProvider: (@Sendable () -> String?)? = nil) throws -> AccountHandle {
-        try portableEnrollmentService.assignIdentity(handle, identity: identity, pinProvider: pinProvider)
+    // MARK: - Migration
+
+    /// Recreates a portable v1 account as v2 — the same master key under a new credential,
+    /// verified before the old one is deleted. Four touches.
+    public func migrate(_ old: AccountHandle,
+                        identity: AccountIdentity,
+                        askPIN: (@Sendable () -> String?)? = nil,
+                        onStep: (@Sendable (MigrationStep) -> Void)? = nil) throws -> AccountHandle {
+        try migration.migrate(old, identity: identity, askPIN: askPIN, onStep: onStep)
+    }
+
+    /// Finishes a migration that was interrupted, from whatever state its copy is in.
+    public func finishMigration(old: AccountHandle,
+                                copy: AccountHandle,
+                                askPIN: (@Sendable () -> String?)? = nil,
+                                onStep: (@Sendable (MigrationStep) -> Void)? = nil) throws -> AccountHandle {
+        try migration.finishMigration(old: old, copy: copy, askPIN: askPIN, onStep: onStep)
+    }
+
+    /// Deletes an unfinished migration copy. The original is untouched. PIN, no touch.
+    public func discardMigrationCopy(_ copy: AccountHandle, pin: String?) throws {
+        try migration.discardMigrationCopy(copy, pin: pin)
     }
 
     /// The account's message key for a nonce — the link others seal messages under, and the

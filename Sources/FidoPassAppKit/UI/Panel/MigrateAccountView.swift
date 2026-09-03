@@ -1,11 +1,12 @@
 import SwiftUI
 import FidoPassCore
 
-/// Giving a portable account from before identities one.
+/// Recreating a v1 portable account in the current layout.
 ///
-/// The identity is random unless the user says otherwise, and the field is there for the
-/// one reason to say otherwise: the same account, already migrated on another key, shows
-/// an identity — entering it here makes both keys agree about what is the same account.
+/// Four touches: read the old record, create the new one, seal it, verify it — and only
+/// then is the old record deleted, so a failure anywhere leaves every password where it
+/// was. When an earlier attempt left its copy on the key, the screen offers to finish or
+/// discard that instead of making another.
 struct MigrateAccountView: View {
     @ObservedObject var store: PanelStore
     let ref: AccountRef
@@ -13,48 +14,47 @@ struct MigrateAccountView: View {
     private enum Field: Hashable { case identity }
     @FocusState private var focus: Field?
 
+    private var copy: AccountHandle? { store.migrationCopy }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelScreenHeader(title: "Migrate account", subtitle: ref.accountId) { store.backToAccounts() }
+            PanelScreenHeader(title: copy == nil ? "Migrate account" : "Finish migration", subtitle: ref.accountId) {
+                store.backToAccounts()
+            }
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("This account was created by an earlier version and has no identity yet. Migration writes a 12-byte identity next to the key material on the security key. Passwords do not change. Needs the PIN, no touch.")
+                Text(explanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                HStack(spacing: 6) {
-                    TextField("Identity, 24 hex characters", text: $store.migrationDraft.identityHex)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11, design: .monospaced))
-                        .focused($focus, equals: .identity)
-                        .onSubmit { Task { await store.migrate() } }
-                    Button {
-                        store.migrationDraft.randomise()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Pick a random identity")
-                }
+                Text("IDENTITY")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
 
-                if let error = store.migrationDraft.error {
-                    Text(error).font(.caption2).foregroundStyle(.red)
-                } else if let identity = store.migrationDraft.identity {
-                    IdentityFingerprintView(identity: identity)
-                }
+                IdentityFieldView(hex: $store.migrationDraft.identityHex,
+                                  identity: store.migrationDraft.identity,
+                                  error: store.migrationDraft.error,
+                                  isEditable: !store.migrationDraft.isFixed,
+                                  onRandomise: { store.migrationDraft.randomise() },
+                                  onSubmit: { Task { await store.migrate() } })
+                    .focused($focus, equals: .identity)
 
-                Text("If this account already exists on another key and was migrated there, enter the identity that key shows — both keys should show the same fingerprint.")
+                Text(identityHint)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack {
+                    if copy != nil {
+                        Button("Discard copy") { Task { await store.discardMigrationCopy() } }
+                            .disabled(store.isWorking)
+                            .help("Delete the unfinished copy and leave the account as it was")
+                    }
                     Spacer()
                     Button("Cancel") { store.backToAccounts() }
                         .keyboardShortcut(.cancelAction)
-                    Button("Migrate") { Task { await store.migrate() } }
+                    Button(copy == nil ? "Migrate" : "Finish") { Task { await store.migrate() } }
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .disabled(store.migrationDraft.identity == nil || store.isWorking)
@@ -64,6 +64,22 @@ struct MigrateAccountView: View {
             .padding(.bottom, 12)
         }
         .tabFocusChain([Field.identity], focus: $focus)
-        .onAppear { focus = .identity }
+        .onAppear { if !store.migrationDraft.isFixed { focus = .identity } }
+    }
+
+    private var explanation: String {
+        guard let copy else {
+            return "This account was created by an earlier version. Migration writes it again in the current layout — the same master key, so the same passwords — then verifies the new record and only then deletes the old one. Four touches."
+        }
+        if copy.account.canDerive {
+            return "An earlier attempt left a finished copy on the key. Finishing verifies that the copy derives the same master key, then deletes the old record. Two touches."
+        }
+        return "An earlier attempt left an unfinished copy on the key — a credential without its record. Finishing removes it and runs the migration again with the same identity. Four touches."
+    }
+
+    private var identityHint: String {
+        copy == nil
+            ? "If this account already exists on another key in the current layout, enter the identity that key shows — both keys should show the same fingerprint."
+            : "The identity the copy was created with. It is already on the key."
     }
 }
