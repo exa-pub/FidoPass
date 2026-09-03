@@ -33,4 +33,14 @@ public enum LinkCarrier: CaseIterable, Sendable {
         case .app: return "fidopass://"
         }
     }
+
+    /// The part of `prefix` a reader may match without regard to case: the scheme and the
+    /// host, which RFC 3986 (§3.1, §3.2.2) defines as case-insensitive and which mail
+    /// clients do capitalise. The rest — the path — is exact: `/LINK` is a different page.
+    public var caseInsensitiveHead: String {
+        switch self {
+        case .web: return "https://\(Self.webHost)"
+        case .app: return "fidopass://"
+        }
+    }
 }

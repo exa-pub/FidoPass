@@ -231,7 +231,7 @@ https://fidopass.org/link#hpkeblobv1?nonce=<32 B>&idfp=<16 B>&content=<enc 32 B 
   per message, so the AEAD nonce never repeats. Anyone with the link can seal; the recipient
   cannot tell who did.
 - **A link is either canonical or not ours.** `FidoPassLinkParser` strips whitespace,
-  matches the carrier without regard to case (schemes and hosts are case-insensitive) and
+  matches the carrier's scheme and host without regard to case (they are case-insensitive; the path is not) and
   then demands the payload exactly: order, base64url without padding, lower case. Every
   prefix of a valid link reads as `.incomplete`, never as an error, because that is what a
   field being typed into looks like — a key link cut off before `&keyfp=` included: the

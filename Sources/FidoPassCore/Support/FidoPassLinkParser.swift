@@ -4,10 +4,10 @@ import Foundation
 ///
 /// A link is a carrier (`LinkCarrier`) followed by a payload, and the payload is either
 /// canonical or not ours: parameters in one fixed order, base64url without padding, nothing
-/// extra. The carrier is matched without regard to case — schemes and hosts are
-/// case-insensitive, and mail clients do write `Https://` — the payload byte for byte. The
-/// only other leniency is whitespace — mail clients wrap long links — which is removed
-/// before anything is looked at.
+/// extra. The carrier's scheme and host are matched without regard to case — they are
+/// case-insensitive, and mail clients do write `Https://` — its path and the payload byte
+/// for byte. The only other leniency is whitespace — mail clients wrap long links — which
+/// is removed before anything is looked at.
 ///
 /// What it is careful about is the difference between *wrong* and *not finished*: someone
 /// pasting or typing a link passes through many prefixes of a valid one, and every one of
@@ -139,24 +139,36 @@ enum FidoPassLinkParser {
     /// Removes the carrier. A prefix of a carrier is a link being typed; anything else is
     /// not ours.
     private static func payload(of stripped: String) throws -> String {
+        let scalars = Array(stripped.unicodeScalars)
         for carrier in LinkCarrier.allCases {
-            if hasPrefix(stripped, carrier.prefix) {
-                return String(stripped.dropFirst(carrier.prefix.count))
+            let prefixCount = carrier.prefix.unicodeScalars.count
+            if matchedCount(of: scalars, against: carrier) == prefixCount {
+                return String(String.UnicodeScalarView(scalars.dropFirst(prefixCount)))
             }
         }
-        if LinkCarrier.allCases.contains(where: { hasPrefix($0.prefix, stripped) }) {
+        if LinkCarrier.allCases.contains(where: { matchedCount(of: scalars, against: $0) == scalars.count }) {
             throw MessageCryptoError.incomplete
         }
         throw MessageCryptoError.notFidoPassURL
     }
 
-    /// Case-insensitive for ASCII letters only: a carrier is ASCII, and Unicode case
-    /// folding (the Kelvin sign is a `k`) has no business in a link.
-    private static func hasPrefix(_ text: String, _ prefix: String) -> Bool {
-        let textScalars = Array(text.unicodeScalars)
-        let prefixScalars = Array(prefix.unicodeScalars)
-        guard textScalars.count >= prefixScalars.count else { return false }
-        return zip(textScalars, prefixScalars).allSatisfy { asciiLowercased($0) == asciiLowercased($1) }
+    /// How many leading scalars of `text` the carrier accounts for: all of its prefix for a
+    /// link, all of `text` for one still being typed.
+    ///
+    /// The scheme and host (`LinkCarrier.caseInsensitiveHead`) compare without regard to
+    /// case — for ASCII letters only: a carrier is ASCII, and Unicode case folding (the
+    /// Kelvin sign is a `k`) has no business in a link. The path compares exactly.
+    private static func matchedCount(of text: [Unicode.Scalar], against carrier: LinkCarrier) -> Int {
+        let head = carrier.caseInsensitiveHead.unicodeScalars.count
+        var matched = 0
+        for (expected, actual) in zip(carrier.prefix.unicodeScalars, text) {
+            let same = matched < head
+                ? asciiLowercased(expected) == asciiLowercased(actual)
+                : expected == actual
+            guard same else { break }
+            matched += 1
+        }
+        return matched
     }
 
     private static func asciiLowercased(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
