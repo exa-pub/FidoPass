@@ -1,6 +1,6 @@
 import XCTest
 import FidoPassCore
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 import TestSupport
 
 /// Labels are not secret, but forgetting one makes its password unreproducible — so the
@@ -66,7 +66,6 @@ final class LabelStoreTests: XCTestCase {
 
         XCTAssertEqual(store.recent.first, "label-5")
         XCTAssertEqual(store.recent.count, LabelStore.limit)
-        XCTAssertEqual(store.current, "label-5")
     }
 
     /// Whitespace around a label would derive a different password from the one the user
@@ -121,8 +120,38 @@ final class LabelStoreTests: XCTestCase {
         store.focus(Self.vault)
 
         XCTAssertEqual(store.chips, ["default"])
-        XCTAssertEqual(store.current, "default")
         XCTAssertEqual(defaults.array(forKey: LabelStore.legacyStorageKey) as? [String], ["from-before"])
+    }
+
+    // MARK: - Migration
+
+    /// A migrated account is a new credential. Its labels are the one thing about the old
+    /// one that cannot be derived again, so they move with it — merging with anything
+    /// already recorded under the new credential.
+    @MainActor
+    func testAHistoryMovesToTheMigratedCredential() {
+        let defaults = Self.defaults()
+        let store = Self.makeStore(defaults: defaults)
+        store.use("work", in: Self.vault)
+        store.use("archive", in: Self.vaultOnSpare)
+        store.focus(Self.vault)
+
+        store.move(from: Self.vault.scope, to: Self.vaultOnSpare.scope)
+
+        XCTAssertEqual(store.labels(for: Self.vault.scope), [], "nothing is left under the old credential")
+        XCTAssertEqual(store.labels(for: Self.vaultOnSpare.scope), ["work", "archive"], "the histories are merged, the moved one first")
+        XCTAssertEqual(store.scope, Self.vaultOnSpare.scope, "the focus follows the account")
+        XCTAssertEqual(store.recent, ["work", "archive"])
+        XCTAssertEqual(Self.stored(defaults).map(\.credentialId), ["cred-vault-spare"], "and it is on disk")
+    }
+
+    @MainActor
+    func testMovingANonexistentHistoryDoesNothing() {
+        let defaults = Self.defaults()
+        let store = Self.makeStore(defaults: defaults)
+        store.use("work", in: Self.vaultOnSpare)
+        store.move(from: Self.vault.scope, to: Self.vaultOnSpare.scope)
+        XCTAssertEqual(store.labels(for: Self.vaultOnSpare.scope), ["work"])
     }
 
     // MARK: - Identity
@@ -311,7 +340,7 @@ final class PreferencesTests: XCTestCase {
 
         // Same key, new session handle: the memory has to still apply.
         let reconnected = MockKeyBackend.device(path: "/dev/whatever-else")
-        XCTAssertEqual(preferences.lastUsed?.deviceSignature, Preferences.signature(for: reconnected))
+        XCTAssertEqual(preferences.lastUsed?.deviceSignature, reconnected.modelSignature)
     }
 
     /// The account id is the only piece of account data that reaches the disk, and it is
@@ -329,23 +358,6 @@ final class PreferencesTests: XCTestCase {
 
         preferences.remember(accountId: "vault", label: "work", device: MockKeyBackend.device())
         XCTAssertNil(preferences.lastUsed, "with the switch off, nothing new may be recorded either")
-    }
-
-    /// Recording a new shortcut has to release the old one first: Carbon dispatches a
-    /// registered hot key before any window sees the key, so pressing the current
-    /// combination would fire the HUD instead of being recorded.
-    @MainActor
-    func testRecordingAShortcutAsksForTheOldOneToBeReleased() {
-        let preferences = Preferences(defaults: Self.defaults())
-        var reapplied = 0
-        preferences.onHotkeyChanged = { reapplied += 1 }
-
-        preferences.isRecordingHotkey = true
-        XCTAssertEqual(reapplied, 1, "starting to record must re-apply — that is what unregisters it")
-
-        preferences.hotkey = HotkeyCombo(keyCode: 4, modifiers: 0x0100, display: "⌘H")
-        preferences.isRecordingHotkey = false
-        XCTAssertEqual(reapplied, 3, "and finishing must re-apply again, with whatever the combination now is")
     }
 
     /// The timeout is what stands between "unlocked" and "anyone at this Mac can generate

@@ -1,17 +1,14 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 import PackageDescription
 
 let package = Package(
     name: "FidoPass",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "FidoPassCore", targets: ["FidoPassCore"]),
-    .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
-    ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0")
+        .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
     ],
     targets: [
         .systemLibrary(
@@ -21,40 +18,52 @@ let package = Package(
                 .brew(["libfido2"])
             ]
         ),
+        // Argon2 reference implementation, vendored — see Sources/CArgon2/README.md.
         .target(
-            name: "TestSupport",
-            dependencies: ["FidoPassCore"],
-            path: "Tests/TestSupport"
+            name: "CArgon2",
+            exclude: ["LICENSE", "README.md"],
+            cSettings: [.define("ARGON2_NO_THREADS")]
         ),
         .target(
             name: "FidoPassCore",
-            dependencies: ["CLibfido2"],
-            swiftSettings: [.define("SWIFT_PACKAGE")],
+            dependencies: ["CLibfido2", "CArgon2"],
+            swiftSettings: [.swiftLanguageMode(.v6)],
             linkerSettings: [
-                .linkedFramework("IOKit", .when(platforms: [.macOS])),
-                .linkedFramework("CoreFoundation", .when(platforms: [.macOS]))
+                .linkedFramework("IOKit"),
+                .linkedFramework("CoreFoundation")
             ]
         ),
+        // Everything the application is: stores, windows, views. A library so it can be
+        // imported by tests as one module and assembled from one entry point.
+        .target(
+            name: "FidoPassAppKit",
+            dependencies: ["FidoPassCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // The entry point and nothing else. The app icon lives here for `build_app.sh`,
+        // which copies it into the bundle itself; SwiftPM must not turn it into a resource
+        // bundle the app would never read.
         .executableTarget(
             name: "FidoPassApp",
-            dependencies: [
-                "FidoPassCore"
-            ],
-            path: "Sources/FidoPassApp",
-            resources: [
-                // Copy the app icon (.icns); final .app bundling will happen via helper script
-                .copy("Resources/AppIcon.icns")
-            ]
+            dependencies: ["FidoPassAppKit"],
+            exclude: ["Resources"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "TestSupport",
+            dependencies: ["FidoPassCore"],
+            path: "Tests/TestSupport",
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FidoPassCoreTests",
             dependencies: ["FidoPassCore", "TestSupport"],
-            path: "Tests/FidoPassCoreTests"
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FidoPassAppTests",
-            dependencies: ["FidoPassApp", "FidoPassCore", "TestSupport"],
-            path: "Tests/FidoPassAppTests"
+            dependencies: ["FidoPassAppKit", "FidoPassCore", "TestSupport"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
 )

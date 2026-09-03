@@ -1,26 +1,61 @@
 import Foundation
 
-public final class FidoPassCore {
+public final class FidoPassCore: Sendable {
     public static let shared = FidoPassCore()
 
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
     private let deviceLister: DeviceListing
-    private let enrollmentService: EnrollmentServiceProtocol
-    private let portableEnrollmentService: PortableEnrollmentServiceProtocol
+    private let enrollmentService: Enrolling
+    private let portableEnrollmentService: PortableEnrolling
     private let passwordGenerator: PasswordGenerating
-    private let secretEncryption: SecretEncrypting
+    private let messageKeyService: MessageKeyDeriving
+    private let messageSealer: MessageSealing
     private let deviceManagement: DeviceManaging
+    private let inspection: AuthenticatorInspecting
+    private let configuration: DeviceConfiguring
+    private let migration: Migrating
 
-    public init(deviceLister: DeviceListing? = nil,
-                enrollmentService: EnrollmentServiceProtocol? = nil,
-                portableEnrollmentService: PortableEnrollmentServiceProtocol? = nil,
-                secretDerivationService: SecretDerivationServiceProtocol? = nil,
-                passwordGenerator: PasswordGenerating? = nil,
-                secretEncryption: SecretEncrypting? = nil,
-                deviceManagement: DeviceManaging? = nil) {
+    public convenience init(deviceLister: DeviceListing? = nil,
+                            enrollmentService: Enrolling? = nil,
+                            portableEnrollmentService: PortableEnrolling? = nil,
+                            secretDerivationService: SecretDeriving? = nil,
+                            passwordGenerator: PasswordGenerating? = nil,
+                            messageKeyService: MessageKeyDeriving? = nil,
+                            messageSealer: MessageSealing? = nil,
+                            deviceManagement: DeviceManaging? = nil,
+                            inspection: AuthenticatorInspecting? = nil,
+                            configuration: DeviceConfiguring? = nil,
+                            migrationService: Migrating? = nil) {
+        self.init(deviceRepository: DeviceRepository(),
+                  deviceLister: deviceLister,
+                  enrollmentService: enrollmentService,
+                  portableEnrollmentService: portableEnrollmentService,
+                  secretDerivationService: secretDerivationService,
+                  passwordGenerator: passwordGenerator,
+                  messageKeyService: messageKeyService,
+                  messageSealer: messageSealer,
+                  deviceManagement: deviceManagement,
+                  inspection: inspection,
+                  configuration: configuration,
+                  migrationService: migrationService)
+    }
+
+    /// The designated initialiser, with the device repository itself substitutable. Internal:
+    /// the repository hands out raw libfido2 handles, which never cross the module boundary.
+    init(deviceRepository resolvedDeviceRepository: DeviceAccessing,
+         deviceLister: DeviceListing? = nil,
+         enrollmentService: Enrolling? = nil,
+         portableEnrollmentService: PortableEnrolling? = nil,
+         secretDerivationService: SecretDeriving? = nil,
+         passwordGenerator: PasswordGenerating? = nil,
+         messageKeyService: MessageKeyDeriving? = nil,
+         messageSealer: MessageSealing? = nil,
+         deviceManagement: DeviceManaging? = nil,
+         inspection: AuthenticatorInspecting? = nil,
+         configuration: DeviceConfiguring? = nil,
+         migrationService: Migrating? = nil) {
         Libfido2Context.initialize()
 
-        let resolvedDeviceRepository = DeviceRepository()
         self.deviceRepository = resolvedDeviceRepository
         self.deviceLister = deviceLister ?? resolvedDeviceRepository
 
@@ -37,12 +72,17 @@ public final class FidoPassCore {
         let resolvedPasswordGenerator = passwordGenerator ?? PasswordGenerator(secretDerivationService: resolvedSecretDerivation)
         self.passwordGenerator = resolvedPasswordGenerator
 
-        self.secretEncryption = secretEncryption ?? SecretEncryptionService(secretDerivationService: resolvedSecretDerivation)
+        self.messageKeyService = messageKeyService ?? MessageKeyService(secretDerivationService: resolvedSecretDerivation)
+        self.messageSealer = messageSealer ?? MessageSealer()
         self.deviceManagement = deviceManagement ?? DeviceManagementService(deviceRepository: resolvedDeviceRepository)
+        self.inspection = inspection ?? AuthenticatorInspectionService(deviceRepository: resolvedDeviceRepository)
+        self.configuration = configuration ?? DeviceConfigurationService(deviceRepository: resolvedDeviceRepository)
+        self.migration = migrationService ?? AccountMigrationService(enrollmentService: resolvedEnrollment,
+                                                                     secretDerivationService: resolvedSecretDerivation)
     }
 
-    public func listDevices(limit: Int = 16) throws -> [FidoDevice] {
-        try deviceLister.listDevices(limit: limit)
+    public func listDevices() throws -> [FidoDevice] {
+        try deviceLister.listDevices()
     }
 
     /// Reads authenticator state that needs no user interaction: PIN attempts left,
@@ -51,89 +91,138 @@ public final class FidoPassCore {
         try deviceRepository.status(devicePath: devicePath)
     }
 
-    /// Convenience for the most safety-critical field. `nil` means the authenticator did
-    /// not report it — never treat that as "plenty left".
-    public func pinRetriesRemaining(devicePath: String) throws -> Int? {
-        try status(devicePath: devicePath).pinRetriesRemaining
+
+    // MARK: - Inspection
+
+    /// Everything the key reports about itself. No PIN and no touch — but it does open the
+    /// device, so only ever call it because the user asked to look.
+    public func inspect(devicePath: String) throws -> AuthenticatorInfo {
+        try inspection.inspect(devicePath: devicePath)
     }
 
+    /// Every resident credential on the key, of every relying party — not just FidoPass's.
+    /// Needs the PIN, needs no touch.
+    public func inventory(devicePath: String, pin: String) throws -> CredentialInventory {
+        try inspection.inventory(devicePath: devicePath, pin: pin)
+    }
+
+    // MARK: - Authenticator settings
+
+    /// Flips `alwaysUv` and returns the state the key reports afterwards. Reversible.
+    @discardableResult
+    public func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool {
+        try configuration.toggleAlwaysUV(devicePath: devicePath, pin: pin)
+    }
+
+    /// Raises the shortest PIN the key accepts. **Cannot be undone or lowered.**
+    public func setMinimumPINLength(devicePath: String, length: Int, pin: String) throws {
+        try configuration.setMinimumPINLength(devicePath: devicePath, length: length, pin: pin)
+    }
+
+    /// Makes the key demand a new PIN before anything else works.
+    public func forcePINChange(devicePath: String, pin: String) throws {
+        try configuration.forcePINChange(devicePath: devicePath, pin: pin)
+    }
+
+    /// Turns on enterprise attestation. **Cannot be undone.**
+    public func enableEnterpriseAttestation(devicePath: String, pin: String) throws {
+        try configuration.enableEnterpriseAttestation(devicePath: devicePath, pin: pin)
+    }
+
+    /// Creates a local account: one resident credential, one touch, then its record under
+    /// the PIN. The identity goes into `user.id` exactly as given.
     public func enroll(accountId: String,
                        kind: AccountKind = .local,
-                       displayName: String = "",
-                       requireUV: Bool = true,
-                       devicePath: String? = nil,
-                       askPIN: (() -> String?)? = nil) throws -> Account {
+                       identity: AccountIdentity,
+                       devicePath: String,
+                       askPIN: (@Sendable () -> String?)? = nil) throws -> AccountHandle {
         try enrollmentService.enroll(accountId: accountId,
                                      kind: kind,
-                                     displayName: displayName,
-                                     requireUV: requireUV,
+                                     identity: identity,
                                      devicePath: devicePath,
-                                     askPIN: askPIN)
+                                     askPIN: askPIN,
+                                     namesakePolicy: .refuse)
     }
 
+    /// Creates a portable account: two touches, and — when the key material is fresh rather
+    /// than imported — a backup to show the user once.
     public func enrollPortable(accountId: String,
-                               requireUV: Bool = true,
-                               devicePath: String? = nil,
-                               askPIN: (() -> String?)? = nil,
-                               importedKeyB64: String?,
-                               onStep: ((PortableEnrollmentStep) -> Void)? = nil) throws -> (Account, String?) {
+                               identity: AccountIdentity,
+                               devicePath: String,
+                               askPIN: (@Sendable () -> String?)? = nil,
+                               imported: PortableBackup?,
+                               onStep: (@Sendable (PortableEnrollmentStep) -> Void)? = nil) throws -> (AccountHandle, PortableBackup?) {
         try portableEnrollmentService.enrollPortable(accountId: accountId,
-                                                     requireUV: requireUV,
+                                                     identity: identity,
                                                      devicePath: devicePath,
                                                      askPIN: askPIN,
-                                                     importedKeyB64: importedKeyB64,
+                                                     imported: imported,
                                                      onStep: onStep)
     }
 
-    public func generatePassword(account: Account,
+    /// Derives the password for `label`. One touch.
+    ///
+    /// `parameters` is `.v1` for every account until the key can store them per account;
+    /// passing anything else derives a different password, which is the point of the type.
+    public func generatePassword(_ handle: AccountHandle,
                                  label: String,
-                                 policy override: PasswordPolicy? = nil,
-                                 requireUV: Bool = true,
-                                 pinProvider: (() -> String?)? = nil) throws -> String {
-        try passwordGenerator.generatePassword(account: account,
+                                 parameters: DerivationParameters = .v1,
+                                 pinProvider: (@Sendable () -> String?)? = nil) throws -> String {
+        try passwordGenerator.generatePassword(handle,
                                                label: label,
-                                               policy: override,
-                                               requireUV: requireUV,
+                                               parameters: parameters,
                                                pinProvider: pinProvider)
     }
 
-    public func enumerateAccounts(kind: AccountKind = .local,
-                                  devicePath: String,
-                                  pin: String?) throws -> [Account] {
-        try enrollmentService.enumerateAccounts(rpId: kind.rpId,
-                                                devicePath: devicePath,
-                                                pin: pin)
+    /// Every FidoPass account on the key, of every format. PIN, no touch, one open.
+    public func enumerateAccounts(devicePath: String,
+                                  pin: String?) throws -> [AccountHandle] {
+        try enrollmentService.enumerateAccounts(devicePath: devicePath, pin: pin)
     }
 
-    public func exportImportedKey(_ account: Account,
-                                  requireUV: Bool = true,
-                                  pinProvider: (() -> String?)? = nil) throws -> String {
-        try portableEnrollmentService.exportImportedKey(account,
-                                                        requireUV: requireUV,
-                                                        pinProvider: pinProvider)
+    /// The account's backup — master key and identity. One touch.
+    public func exportBackup(_ handle: AccountHandle,
+                             pinProvider: (@Sendable () -> String?)? = nil) throws -> PortableBackup {
+        try portableEnrollmentService.exportBackup(handle, pinProvider: pinProvider)
     }
 
-    /// Derives the key used by the text editor. Costs one touch of the authenticator.
-    public func deriveEncryptionKey(account: Account,
-                                    label: String,
-                                    requireUV: Bool = true,
-                                    pinProvider: (() -> String?)? = nil) throws -> EncryptionKey {
-        try secretEncryption.deriveEncryptionKey(account: account,
-                                                 label: label,
-                                                 requireUV: requireUV,
-                                                 pinProvider: pinProvider)
+    // MARK: - Migration
+
+    /// Recreates a portable v1 account as v2 — the same master key under a new credential,
+    /// verified before the old one is deleted. Four touches.
+    public func migrate(_ old: AccountHandle,
+                        identity: AccountIdentity,
+                        askPIN: (@Sendable () -> String?)? = nil,
+                        onStep: (@Sendable (MigrationStep) -> Void)? = nil) throws -> AccountHandle {
+        try migration.migrate(old, identity: identity, askPIN: askPIN, onStep: onStep)
     }
 
-    public func seal(_ plaintext: String, with key: EncryptionKey) throws -> String {
-        try secretEncryption.seal(plaintext, with: key)
+    /// Finishes a migration that was interrupted, from whatever state its copy is in.
+    public func finishMigration(old: AccountHandle,
+                                copy: AccountHandle,
+                                askPIN: (@Sendable () -> String?)? = nil,
+                                onStep: (@Sendable (MigrationStep) -> Void)? = nil) throws -> AccountHandle {
+        try migration.finishMigration(old: old, copy: copy, askPIN: askPIN, onStep: onStep)
     }
 
-    public func open(_ envelopeB64: String, with key: EncryptionKey) throws -> String {
-        try secretEncryption.open(envelopeB64, with: key)
+    /// Deletes an unfinished migration copy. The original is untouched. PIN, no touch.
+    public func discardMigrationCopy(_ copy: AccountHandle, pin: String?) throws {
+        try migration.discardMigrationCopy(copy, pin: pin)
     }
 
-    public func deleteAccount(_ account: Account, pin: String?) throws {
-        try enrollmentService.deleteAccount(account, pin: pin)
+    /// The account's message key for a nonce — the link others seal messages under, and the
+    /// private half that opens them. One touch.
+    public func deriveMessageKey(_ handle: AccountHandle,
+                                 nonce: Data,
+                                 pinProvider: (@Sendable () -> String?)? = nil) throws -> MessageKey {
+        try messageKeyService.deriveMessageKey(handle, nonce: nonce, pinProvider: pinProvider)
+    }
+
+    /// Seals and opens messages, without the rest of the facade. No device involved.
+    public var messages: MessageSealing { messageSealer }
+
+    public func deleteAccount(_ handle: AccountHandle, pin: String?) throws {
+        try enrollmentService.deleteAccount(handle, pin: pin)
     }
 
     // MARK: - Key management

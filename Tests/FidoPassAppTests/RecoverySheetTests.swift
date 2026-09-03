@@ -1,5 +1,5 @@
 import XCTest
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 import FidoPassCore
 import TestSupport
 
@@ -7,12 +7,37 @@ final class RecoverySheetTests: XCTestCase {
 
     private func sheet(kind: AccountKind = .local,
                        labels: [String] = ["vault", "disk"]) -> String {
-        var account = Account.fixture(id: "personal-vault", kind: kind, revision: 3)
-        account.policy = PasswordPolicy(length: 24, useSymbols: false)
+        let account = kind == .portable
+            ? Account.portableFixture(id: "personal-vault")
+            : Account.fixture(id: "personal-vault", kind: .local)
         return RecoverySheet(account: account,
+                             parameters: DerivationParameters(revision: 3,
+                                                              policy: PasswordPolicy(length: 24, useSymbols: false)),
                              labels: labels,
                              deviceDescription: "Yubico YubiKey Bio — VID 1050 PID 0402")
             .render()
+    }
+
+    /// The identity is on the sheet because it is what tells this account apart from a
+    /// namesake — and it is the derived one for a local account, so the sheet and the
+    /// screen agree without anything having been stored.
+    func testSheetRecordsTheIdentity() {
+        let expected = AccountIdentity.derived(fromCredentialId: Data("personal-vault".utf8)).groupedHex
+        XCTAssertTrue(sheet(kind: .local).contains("Identity     : \(expected)"))
+
+        let portable = Account.portableFixture(id: "personal-vault").identity!.groupedHex
+        XCTAssertTrue(sheet(kind: .portable).contains("Identity     : \(portable)"))
+    }
+
+    /// An account from before identities has none to print; the sheet says what to do
+    /// rather than leaving the line blank.
+    func testLegacyPortableAccountIsToldToMigrate() {
+        let rendered = RecoverySheet(account: Account.portableFixture(id: "old", legacy: true),
+                                     parameters: .v1,
+                                     labels: [],
+                                     deviceDescription: nil).render()
+        XCTAssertTrue(rendered.contains("Identity     : (not assigned"))
+        XCTAssertTrue(rendered.contains("migrate this account first"))
     }
 
     /// The sheet exists to be printed and stored next to the key, which only works if it
@@ -53,9 +78,8 @@ final class RecoverySheetTests: XCTestCase {
     }
 
     func testFileNameIsSafeForTheFilesystem() {
-        var account = Account.fixture(id: "work/vault")
-        account.policy = PasswordPolicy()
-        let name = RecoverySheet(account: account, labels: [], deviceDescription: nil).suggestedFileName
+        let account = Account.fixture(id: "work/vault")
+        let name = RecoverySheet(account: account, parameters: .v1, labels: [], deviceDescription: nil).suggestedFileName
         XCTAssertFalse(name.contains("/"))
         XCTAssertTrue(name.hasSuffix(".txt"))
     }

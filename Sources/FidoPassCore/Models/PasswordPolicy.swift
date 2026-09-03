@@ -6,7 +6,7 @@ import Foundation
 /// frequently transcribed by hand — onto a phone, into a disk-encryption prompt — where
 /// telling `l` from `1` is guesswork. The flag existed but was never read, so removing it
 /// changes no output; making it switchable would have been the wrong fix.
-public struct PasswordPolicy: Codable, Hashable {
+public struct PasswordPolicy: Codable, Hashable, Sendable {
     /// Lengths outside this range are clamped rather than rejected.
     ///
     /// The lower bound also protects `PasswordEngine.mapToPassword`, which divides by the

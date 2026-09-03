@@ -1,8 +1,16 @@
 import Foundation
 import CLibfido2
 
-final class DeviceRepository: DeviceRepositoryProtocol {
-    func listDevices(limit: Int) throws -> [FidoDevice] {
+final class DeviceRepository: DeviceAccessing, Sendable {
+    /// More keys than this on one Mac is not a case worth handling.
+    private static let manifestLimit = 16
+
+    init() {
+        Libfido2Context.initialize()
+    }
+
+    func listDevices() throws -> [FidoDevice] {
+        let limit = Self.manifestLimit
         guard let rawList = fido_dev_info_new(limit) else {
             throw FidoPassError.noDevices
         }
@@ -34,8 +42,7 @@ final class DeviceRepository: DeviceRepositoryProtocol {
         return devices
     }
 
-    func withOpenedDevice<T>(path providedPath: String?, _ body: (OpaquePointer, String) throws -> T) throws -> T {
-        let path = try providedPath ?? firstDevicePath()
+    func withOpenedDevice<T>(path: String, _ body: (OpaquePointer, String) throws -> T) throws -> T {
         guard let device = fido_dev_new() else {
             throw FidoPassError.invalidState("fido_dev_new")
         }
@@ -50,117 +57,32 @@ final class DeviceRepository: DeviceRepositoryProtocol {
     }
 
     /// Reads what the authenticator will tell us without any user interaction.
-    ///
-    /// Every field is optional-by-nature: authenticators differ in what they report, and a
-    /// missing value must degrade to "unknown" rather than to a wrong number.
     func status(devicePath: String) throws -> DeviceStatus {
         try withOpenedDevice(path: devicePath) { device, _ in
             var retries: Int32 = -1
             let retryRC = fido_dev_get_retry_count(device, &retries)
             let remainingPINAttempts = (retryRC == FIDO_OK && retries >= 0) ? Int(retries) : nil
 
-            guard let rawInfo = fido_cbor_info_new() else {
-                throw FidoPassError.invalidState("cbor_info_new")
-            }
-            var info: OpaquePointer? = rawInfo
-            defer { fido_cbor_info_free(&info) }
-            try Libfido2Context.check(fido_dev_get_cbor_info(device, info), operation: "get_cbor_info")
-
-            let rkRemaining = fido_cbor_info_rk_remaining(info)
-            // Zero is what a key reports when it does not enforce a minimum of its own, and
-            // "0" as a minimum PIN length would let an empty PIN through the UI.
-            let declaredMinPIN = fido_cbor_info_minpinlen(info)
-
-            return DeviceStatus(pinRetriesRemaining: remainingPINAttempts,
-                                hasPIN: Self.option(named: "clientPin", in: info) == true,
-                                supportsHmacSecret: Self.hasExtension(named: "hmac-secret", in: info),
-                                remainingResidentKeys: rkRemaining >= 0 ? Int(rkRemaining) : nil,
-                                minPINLength: declaredMinPIN > 0 ? Int(declaredMinPIN) : nil,
-                                forcePINChange: fido_cbor_info_new_pin_required(info),
-                                aaguid: Self.aaguid(in: info))
-        }
-    }
-
-    /// The 16-byte model identifier, hex-encoded. Not an identity — see `DeviceStatus.aaguid`.
-    private static func aaguid(in info: OpaquePointer?) -> String? {
-        let length = fido_cbor_info_aaguid_len(info)
-        guard length > 0, let pointer = fido_cbor_info_aaguid_ptr(info) else { return nil }
-        let bytes = UnsafeBufferPointer(start: pointer, count: length)
-        // An all-zero AAGUID is what a key reports when it declines to identify its model.
-        guard bytes.contains(where: { $0 != 0 }) else { return nil }
-        return bytes.map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func option(named name: String, in info: OpaquePointer?) -> Bool? {
-        let count = fido_cbor_info_options_len(info)
-        guard let names = fido_cbor_info_options_name_ptr(info),
-              let values = fido_cbor_info_options_value_ptr(info) else { return nil }
-        for index in 0..<count {
-            guard let raw = names.advanced(by: Int(index)).pointee else { continue }
-            if String(cString: raw) == name {
-                return values.advanced(by: Int(index)).pointee
+            return try CborInfo.with(device: device) { info in
+                DeviceStatus(pinRetriesRemaining: remainingPINAttempts,
+                             hasPIN: info.option("clientPin") == true,
+                             supportsHmacSecret: info.hasExtension("hmac-secret"),
+                             supportsLargeBlobs: info.supportsLargeBlobs,
+                             remainingResidentKeys: info.remainingResidentKeys,
+                             minPINLength: info.minPINLength,
+                             forcePINChange: info.forcePINChange,
+                             aaguid: info.aaguid)
             }
         }
-        return nil
-    }
-
-    private static func hasExtension(named name: String, in info: OpaquePointer?) -> Bool {
-        let count = fido_cbor_info_extensions_len(info)
-        guard let pointer = fido_cbor_info_extensions_ptr(info) else { return false }
-        for index in 0..<count {
-            if let raw = pointer.advanced(by: Int(index)).pointee, String(cString: raw) == name {
-                return true
-            }
-        }
-        return false
     }
 
     func aaguid(of device: OpaquePointer) throws -> String? {
-        guard let rawInfo = fido_cbor_info_new() else {
-            throw FidoPassError.invalidState("cbor_info_new")
-        }
-        var info: OpaquePointer? = rawInfo
-        defer { fido_cbor_info_free(&info) }
-        try Libfido2Context.check(fido_dev_get_cbor_info(device, info), operation: "get_cbor_info")
-        return Self.aaguid(in: info)
+        try CborInfo.with(device: device) { $0.aaguid }
     }
 
     func ensureHmacSecretSupported(_ device: OpaquePointer) throws {
-        guard let rawInfo = fido_cbor_info_new() else {
-            throw FidoPassError.invalidState("cbor_info_new")
+        guard try CborInfo.with(device: device, { $0.hasExtension("hmac-secret") }) else {
+            throw FidoPassError.unsupported("Authenticator does not support hmac-secret")
         }
-        var info: OpaquePointer? = rawInfo
-        defer { fido_cbor_info_free(&info) }
-
-        try Libfido2Context.check(fido_dev_get_cbor_info(device, info), operation: "get_cbor_info")
-        let extensionsLength = fido_cbor_info_extensions_len(info)
-        guard let pointer = fido_cbor_info_extensions_ptr(info) else {
-            throw FidoPassError.unsupported("extension list is unavailable")
-        }
-        for index in 0..<extensionsLength {
-            if let ext = pointer.advanced(by: Int(index)).pointee,
-               String(cString: ext) == "hmac-secret" {
-                return
-            }
-        }
-        throw FidoPassError.unsupported("Authenticator does not support hmac-secret")
-    }
-
-    private func firstDevicePath() throws -> String {
-        let limit = 16
-        guard let rawList = fido_dev_info_new(limit) else {
-            throw FidoPassError.noDevices
-        }
-        var devlist: OpaquePointer? = rawList
-        defer { fido_dev_info_free(&devlist, limit) }
-
-        var obtained = 0
-        try Libfido2Context.check(fido_dev_info_manifest(devlist, limit, &obtained), operation: "dev_info_manifest")
-        guard obtained > 0,
-              let info = fido_dev_info_ptr(devlist, 0),
-              let pathPointer = fido_dev_info_path(info) else {
-            throw FidoPassError.noDevices
-        }
-        return String(cString: pathPointer)
     }
 }

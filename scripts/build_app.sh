@@ -114,6 +114,15 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <!-- FidoPass lives in the menu bar: no Dock icon, no window at launch. The "Show in
        Dock" preference flips the activation policy at runtime when a user wants one. -->
   <key>LSUIElement</key><true/>
+  <!-- fidopass:// links — an encryption key or a sealed message — open in the app. The
+       handler only fills a window with the link; it never touches the security key. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>${BUNDLE_ID}.link</string>
+      <key>CFBundleURLSchemes</key><array><string>fidopass</string></array>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST
@@ -151,6 +160,9 @@ MANIFEST="${RES_DIR}/DEPENDENCIES.txt"
     [ -e "$lib" ] || continue
     printf '  %-24s %s\n' "$(basename "$lib")" "$(shasum -a 256 "$lib" | awk '{print $1}')"
   done
+  echo
+  echo "Vendored sources:"
+  echo "  argon2 reference implementation, P-H-C/phc-winner-argon2 @ f57e61e (Sources/CArgon2)"
   echo
   echo "Homebrew formula versions at build time:"
   for formula in libfido2 libcbor openssl@3; do

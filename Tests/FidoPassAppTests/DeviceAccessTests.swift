@@ -1,7 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
 /// When the app is allowed to open a security key.
 ///
@@ -30,7 +30,7 @@ final class DeviceAccessTests: XCTestCase {
     /// anything.
     func testAKeyAppearingIsNeverOpened() async {
         let (backend, _) = backendWithOneKey()
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
 
         await store.devices.refresh()
 
@@ -42,7 +42,7 @@ final class DeviceAccessTests: XCTestCase {
     /// Plug, unplug, plug again — a realistic monitor storm, and still nothing opens the key.
     func testRepeatedMonitorEventsNeverOpenTheKey() async {
         let (backend, device) = backendWithOneKey()
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
 
         await store.devices.refresh()
         backend.devices = []
@@ -57,7 +57,7 @@ final class DeviceAccessTests: XCTestCase {
     /// key has a PIN, and the attempts left have to be visible before one is spent.
     func testOpeningThePanelReadsTheStatusOnce() async {
         let (backend, _) = backendWithOneKey()
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
 
         await store.prepareForDisplay()
 
@@ -67,7 +67,7 @@ final class DeviceAccessTests: XCTestCase {
     /// An unlocked key demonstrably has a PIN and its state is already known, so opening the
     /// panel on one buys nothing and costs a seizure.
     func testOpeningThePanelOnAnUnlockedKeyReadsNothing() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
         let before = backend.statusCallCount
 
         await store.prepareForDisplay()
@@ -83,11 +83,41 @@ final class DeviceAccessTests: XCTestCase {
                                                          hasPIN: true,
                                                          supportsHmacSecret: true,
                                                          remainingResidentKeys: 20)
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
 
         await store.prepareForDisplay()
 
         XCTAssertEqual(store.devices.state(for: device.path)?.pinRetriesRemaining, 3)
         XCTAssertEqual(store.devices.state(for: device.path)?.hasPIN, true)
+    }
+
+    /// A key that appears while the panel is already open has never been asked. Typing a PIN
+    /// is asking: the first character reads the attempts left, later ones do not.
+    func testTypingAPinReadsTheStatusOfAKeyNobodyAskedYet() async {
+        let (backend, _) = backendWithOneKey()
+        let store = AppTestFactory.makeStore(backend: backend)
+        await store.devices.refresh()   // the hot-plug path: listed, never opened
+        XCTAssertEqual(backend.statusCallCount, 0)
+
+        store.pinDraft = "1"
+        await store.pinDraftDidChange()
+        XCTAssertEqual(backend.statusCallCount, 1)
+
+        store.pinDraft = "12"
+        await store.pinDraftDidChange()
+        XCTAssertEqual(backend.statusCallCount, 1, "one read per PIN being typed")
+    }
+
+    /// Once the panel has opened normally the key's state is known, and typing must not open
+    /// it a second time for the same answer.
+    func testTypingAPinAfterThePanelOpenedReadsNothingMore() async {
+        let (backend, _) = backendWithOneKey()
+        let store = AppTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
+        XCTAssertEqual(backend.statusCallCount, 1)
+
+        store.pinDraft = "1"
+        await store.pinDraftDidChange()
+        XCTAssertEqual(backend.statusCallCount, 1)
     }
 }

@@ -1,0 +1,77 @@
+import Foundation
+import CLibfido2
+
+/// The key's large-blob store, per credential — where a v2 account keeps its record.
+///
+/// CTAP keeps one array of encrypted entries for the whole key. Each entry is sealed under
+/// one credential's `largeBlobKey`, which is why the store is addressed by that key here:
+/// libfido2 fetches the array, finds the entry the key opens, and inflates it (raw DEFLATE,
+/// the same framing a browser uses, so a record written here reads there and back).
+///
+/// Reading needs neither PIN nor touch: the array is public and the key does the opening.
+/// Writing and removing rewrite the array and need the PIN. The key itself never leaves the
+/// core: it is read from a credential and used on the spot.
+enum LargeBlobStore {
+
+    /// The entry sealed under `key`, or `nil` when the store holds none for it.
+    static func read(device: OpaquePointer, key: Data) throws -> Data? {
+        var buffer: UnsafeMutablePointer<UInt8>?
+        var length: size_t = 0
+        let rc = key.withUnsafeBytes { pointer in
+            fido_dev_largeblob_get(device,
+                                   pointer.bindMemory(to: UInt8.self).baseAddress,
+                                   key.count,
+                                   &buffer,
+                                   &length)
+        }
+        // Allocated by libfido2 on success; ours to release.
+        defer { if let buffer { free(buffer) } }
+        if rc == FIDO_ERR_NOTFOUND { return nil }
+        try Libfido2Context.check(rc, operation: "largeblob_get")
+        guard let buffer else { return Data() }
+        return Data(bytes: buffer, count: length)
+    }
+
+    /// Writes `blob` as the entry for `key`, replacing any existing one. PIN, no touch.
+    static func write(device: OpaquePointer, key: Data, blob: Data, pin: String?) throws {
+        let rc = PinScope.withPIN(pin) { pinCString in
+            key.withUnsafeBytes { keyPointer in
+                blob.withUnsafeBytes { blobPointer in
+                    fido_dev_largeblob_set(device,
+                                           keyPointer.bindMemory(to: UInt8.self).baseAddress,
+                                           key.count,
+                                           blobPointer.bindMemory(to: UInt8.self).baseAddress,
+                                           blob.count,
+                                           pinCString)
+                }
+            }
+        }
+        if rc == FIDO_ERR_LARGEBLOB_STORAGE_FULL {
+            throw FidoPassError.unsupported("The key's large-blob store is full — delete an account you no longer use")
+        }
+        try Libfido2Context.check(rc, operation: "largeblob_set")
+    }
+
+    /// Removes the entry for `key`. Nothing to remove is not an error: the record is gone
+    /// either way, and this runs ahead of deleting the credential itself.
+    static func remove(device: OpaquePointer, key: Data, pin: String?) throws {
+        let rc = PinScope.withPIN(pin) { pinCString in
+            key.withUnsafeBytes { pointer in
+                fido_dev_largeblob_remove(device,
+                                          pointer.bindMemory(to: UInt8.self).baseAddress,
+                                          key.count,
+                                          pinCString)
+            }
+        }
+        if rc == FIDO_ERR_NOTFOUND { return }
+        try Libfido2Context.check(rc, operation: "largeblob_remove")
+    }
+
+    /// The large-blob key of an open credential object — from `makeCredential` or from
+    /// credential management — or `nil` when it has none.
+    static func key(of credential: OpaquePointer) -> Data? {
+        let length = fido_cred_largeblob_key_len(credential)
+        guard length > 0, let pointer = fido_cred_largeblob_key_ptr(credential) else { return nil }
+        return Data(bytes: pointer, count: length)
+    }
+}

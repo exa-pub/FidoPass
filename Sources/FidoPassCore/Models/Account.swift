@@ -1,53 +1,59 @@
 import Foundation
 
-public struct Account: Codable, Hashable, Identifiable {
-    /// User-chosen identifier, unique per authenticator. Feeds salt derivation.
+/// What the key holds for one FidoPass account — and nothing that it does not.
+///
+/// Where the account was read from is session state and lives in `AccountHandle`; what the
+/// derivation is parameterised by is `DerivationParameters`, because the authenticator
+/// stores no metadata for it. Which layout it is in is `format`, and the fields say where
+/// each value came from: for v2, the identity is `user.id` and the mask comes from the
+/// account's record; for v1, the identity is derived (local) or absent (portable) and the
+/// mask is what `user.name` held.
+public struct Account: Codable, Hashable, Identifiable, Sendable {
+    /// The account's name: `user.name` for v2, `user.id` as UTF-8 for v1. Unique per key.
+    /// Feeds salt derivation for v1 local accounts only.
     public var id: String
     public var kind: AccountKind
-    /// Human-readable name shown in the UI. Not part of derivation.
-    public var displayName: String
+    public var format: AccountFormat
     public var credentialIdB64: String
-    public var revision: Int
-    public var policy: PasswordPolicy
-    /// Session handle of the authenticator this account was read from.
-    ///
-    /// Device paths change on every reconnect, so this is never a stable identity — it is
-    /// only valid for as long as the device stays plugged in.
-    public var devicePath: String?
-    /// Present exactly when `kind == .portable`.
-    public var portable: PortablePayload?
+    /// Sixteen bytes that tell this account apart from another one with the same id — see
+    /// `AccountIdentity`. Stored for v2, derived for v1 local, and `nil` only for a portable
+    /// v1 account, which has none until it is migrated.
+    public var identity: AccountIdentity?
+    /// A portable account's masked master key, 32 bytes: the master key XOR-ed with a
+    /// component only this credential derives, so it is useless without the key it lives on.
+    /// `nil` for a local account.
+    public var mask: Data?
+    public var integrity: AccountIntegrity
 
-    public var rpId: String { kind.rpId }
+    public var rpId: String { format.rpId(for: kind) }
 
     public init(id: String,
                 kind: AccountKind,
-                displayName: String = "",
+                format: AccountFormat,
                 credentialIdB64: String,
-                revision: Int = 1,
-                policy: PasswordPolicy = PasswordPolicy(),
-                devicePath: String?,
-                portable: PortablePayload? = nil) {
+                identity: AccountIdentity?,
+                mask: Data? = nil,
+                integrity: AccountIntegrity = .ok) {
         self.id = id
         self.kind = kind
-        self.displayName = displayName
+        self.format = format
         self.credentialIdB64 = credentialIdB64
-        self.revision = revision
-        self.policy = policy
-        self.devicePath = devicePath
-        self.portable = portable
+        self.identity = identity
+        self.mask = mask.map { Data($0) }
+        self.integrity = integrity
     }
 
-    /// Identity is the pair (account id, device), not the id alone.
+    /// Whether anything may be derived from this account. A credential without a usable
+    /// record is not an account; nothing reads it, and the only action offered is deletion.
+    public var canDerive: Bool { integrity == .ok }
+
+    /// A portable account in the v1 layout: key material in `user.name`, no identity, not
+    /// reachable from a browser. It derives what it always did — migration reproduces the
+    /// same master key under a v2 credential and then deletes this one.
     ///
-    /// The same account id legitimately exists on several authenticators — that is exactly
-    /// what a portable backup key looks like. Comparing ids alone made those entries
-    /// indistinguishable to `List(selection:)`, so selecting one selected both.
-    public static func == (lhs: Account, rhs: Account) -> Bool {
-        lhs.id == rhs.id && lhs.devicePath == rhs.devicePath
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(devicePath)
+    /// A local v1 account is not in this set: its material cannot be moved to a new
+    /// credential, so it stays as it is, for good.
+    public var needsMigration: Bool {
+        format == .v1 && kind == .portable && integrity == .ok
     }
 }

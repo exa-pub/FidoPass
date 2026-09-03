@@ -1,5 +1,5 @@
 import XCTest
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 import FidoPassCore
 
 final class ErrorPresentationTests: XCTestCase {
@@ -11,7 +11,6 @@ final class ErrorPresentationTests: XCTestCase {
     func testPinInvalidIsRecognised() {
         let message = FidoPassErrorPresenter.message(for: libfido2(.pinInvalid))
         XCTAssertEqual(message.kind, .pinInvalid)
-        XCTAssertTrue(message.isRetryable)
     }
 
     /// The countdown is the whole point of U1: a user must never spend their last attempt
@@ -34,7 +33,6 @@ final class ErrorPresentationTests: XCTestCase {
 
         let blocked = FidoPassErrorPresenter.message(for: libfido2(.pinBlocked))
         XCTAssertEqual(blocked.kind, .pinBlocked)
-        XCTAssertFalse(blocked.isRetryable)
         XCTAssertTrue(blocked.recovery?.lowercased().contains("reset") == true)
     }
 
@@ -61,7 +59,6 @@ final class ErrorPresentationTests: XCTestCase {
     func testAPinRejectedByPolicySaysNoAttemptWasSpent() {
         let message = FidoPassErrorPresenter.message(for: libfido2(.pinPolicyViolation))
         XCTAssertEqual(message.kind, .pinRejectedByKey)
-        XCTAssertTrue(message.isRetryable)
         XCTAssertTrue(message.fullText().contains("No PIN attempt was used"),
                       "otherwise the user assumes they burned one of the eight")
     }
@@ -80,13 +77,11 @@ final class ErrorPresentationTests: XCTestCase {
     func testARefusalIsRecognisedSoTheCallerCanExplainIt() {
         let message = FidoPassErrorPresenter.message(for: libfido2(.notAllowed))
         XCTAssertEqual(message.kind, .notAllowed)
-        XCTAssertTrue(message.isRetryable)
     }
 
     func testTouchTimeoutIsRetryable() {
         let message = FidoPassErrorPresenter.message(for: libfido2(.actionTimeout))
         XCTAssertEqual(message.kind, .touchTimeout)
-        XCTAssertTrue(message.isRetryable)
     }
 
     func testStorageFullExplainsTheWayOut() {

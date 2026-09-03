@@ -1,18 +1,20 @@
 import Foundation
 import CLibfido2
 
-final class HmacSecretService {
-    private let deviceRepository: DeviceRepositoryProtocol
+final class HmacSecretService: Sendable {
+    private let deviceRepository: DeviceAccessing
 
-    init(deviceRepository: DeviceRepositoryProtocol) {
+    init(deviceRepository: DeviceAccessing) {
         self.deviceRepository = deviceRepository
     }
 
-    func perform(account: Account,
+    /// One `hmac-secret` assertion against the account's credential. User verification is
+    /// always demanded: a password derived without the PIN would be a password anyone holding
+    /// the key could derive.
+    func perform(_ handle: AccountHandle,
                  salt: Data,
-                 requireUV: Bool,
-                 pinProvider: (() -> String?)?) throws -> Data {
-        try deviceRepository.withOpenedDevice(path: account.devicePath) { device, _ in
+                 pinProvider: (@Sendable () -> String?)?) throws -> Data {
+        try deviceRepository.withOpenedDevice(path: handle.devicePath) { device, _ in
             try deviceRepository.ensureHmacSecretSupported(device)
             guard let assertion = fido_assert_new() else {
                 throw FidoPassError.invalidState("assert_new")
@@ -20,9 +22,9 @@ final class HmacSecretService {
             var assert: OpaquePointer? = assertion
             defer { fido_assert_free(&assert) }
 
-            try Libfido2Context.check(fido_assert_set_rp(assertion, account.rpId), operation: "assert_set_rp")
+            try Libfido2Context.check(fido_assert_set_rp(assertion, handle.account.rpId), operation: "assert_set_rp")
 
-            guard let credentialId = Data(base64Encoded: account.credentialIdB64) else {
+            guard let credentialId = Data(base64Encoded: handle.account.credentialIdB64) else {
                 throw FidoPassError.invalidState("Credential ID is not valid base64")
             }
             try credentialId.withUnsafeBytes { pointer in
@@ -43,7 +45,7 @@ final class HmacSecretService {
             }
 
             try Libfido2Context.check(fido_assert_set_up(assertion, FIDO_OPT_TRUE), operation: "assert_set_up")
-            try Libfido2Context.check(fido_assert_set_uv(assertion, requireUV ? FIDO_OPT_TRUE : FIDO_OPT_OMIT), operation: "assert_set_uv")
+            try Libfido2Context.check(fido_assert_set_uv(assertion, FIDO_OPT_TRUE), operation: "assert_set_uv")
 
             let challenge = CryptoHelpers.randomBytes(count: 32)
             try challenge.withUnsafeBytes { pointer in
@@ -54,7 +56,7 @@ final class HmacSecretService {
                     operation: "assert_set_clientdata_hash")
             }
 
-            try PinScope.withPIN(requireUV ? pinProvider?() : nil) { pinCString in
+            try PinScope.withPIN(pinProvider?()) { pinCString in
                 try Libfido2Context.check(fido_dev_get_assert(device, assertion, pinCString), operation: "dev_get_assert")
             }
 

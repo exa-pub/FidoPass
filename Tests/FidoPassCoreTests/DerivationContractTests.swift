@@ -9,19 +9,16 @@ final class DerivationContractTests: XCTestCase {
 
     func testSameInputAlwaysProducesSamePassword() throws {
         let generator = PasswordGenerator(secretDerivationService: Self.secretService())
-        var account = Account.fixture(id: "acct")
-        account.policy = PasswordPolicy()
+        let account = AccountHandle.fixture(id: "acct")
 
-        let first = try generator.generatePassword(account: account,
+        let first = try generator.generatePassword(account,
                                                    label: "vault",
-                                                   policy: nil,
-                                                   requireUV: true,
+                                                   parameters: .v1,
                                                    pinProvider: nil)
         for _ in 0..<200 {
-            let next = try generator.generatePassword(account: account,
+            let next = try generator.generatePassword(account,
                                                       label: "vault",
-                                                      policy: nil,
-                                                      requireUV: true,
+                                                      parameters: .v1,
                                                       pinProvider: nil)
             XCTAssertEqual(next, first)
         }
@@ -52,26 +49,71 @@ final class DerivationContractTests: XCTestCase {
 
     func testPolicyChangesProduceDifferentPasswords() throws {
         let generator = PasswordGenerator(secretDerivationService: Self.secretService())
-        var account = Account.fixture(id: "acct")
-        account.policy = PasswordPolicy()
+        let account = AccountHandle.fixture(id: "acct")
 
-        let standard = try generator.generatePassword(account: account,
+        let standard = try generator.generatePassword(account,
                                                       label: "vault",
-                                                      policy: nil,
-                                                      requireUV: true,
+                                                      parameters: .v1,
                                                       pinProvider: nil)
-        let noSymbols = try generator.generatePassword(account: account,
+        let noSymbols = try generator.generatePassword(account,
                                                        label: "vault",
-                                                       policy: PasswordPolicy(length: 20, useSymbols: false),
-                                                       requireUV: true,
+                                                       parameters: DerivationParameters(revision: 1, policy: PasswordPolicy(length: 20, useSymbols: false)),
                                                        pinProvider: nil)
-        let otherVersion = try generator.generatePassword(account: account,
+        let otherVersion = try generator.generatePassword(account,
                                                           label: "vault",
-                                                          policy: PasswordPolicy(length: 20, version: 2),
-                                                          requireUV: true,
+                                                          parameters: DerivationParameters(revision: 1, policy: PasswordPolicy(length: 20, version: 2)),
                                                           pinProvider: nil)
         XCTAssertNotEqual(standard, noSymbols)
         XCTAssertNotEqual(standard, otherVersion, "policy.version feeds HKDF info and must change the output")
+    }
+
+    /// The identity names the account and takes no part in deriving from it: accounts with
+    /// the same mask and different identities produce the same password and issue the same
+    /// message key. This is what lets the identity be chosen freely at creation, and what
+    /// makes a migrated copy — new identity, same mask arithmetic — derive what the original
+    /// did.
+    func testIdentityDoesNotAffectDerivation() throws {
+        let secret = Self.secretService()
+        let generator = PasswordGenerator(secretDerivationService: secret)
+        let messageKeys = MessageKeyService(secretDerivationService: secret)
+        let mask = Data(repeating: 0x3C, count: 32)
+        let identities = [
+            AccountIdentity(hex: "00000000000000000000000000000000")!,
+            AccountIdentity(hex: "ffffffffffffffffffffffffffffffff")!,
+            AccountIdentity.random()
+        ]
+        let handles = identities.map { AccountHandle.v2Fixture(id: "vault", kind: .portable, identity: $0, mask: mask) }
+            + [AccountHandle.fixture(id: "vault", kind: .portable, portable: PortablePayload(external: mask))]
+
+        let passwords = try handles.map {
+            try generator.generatePassword($0, label: "vault", parameters: .v1, pinProvider: nil)
+        }
+        XCTAssertEqual(Set(passwords).count, 1, "every identity, and the v1 account with none, derives the same password")
+
+        // Message keys need an identity for the locator, so the v1 account is out; the
+        // other three — every identity — share one public key.
+        let nonce = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 3 &+ 1) })
+        let publicKeys = try handles.dropLast().map {
+            try messageKeys.deriveMessageKey($0, nonce: nonce, pinProvider: nil).url.publicKey
+        }
+        XCTAssertEqual(Set(publicKeys).count, 1, "every identity issues the same message key")
+    }
+
+    /// A v2 local account is asked under a different salt from a v1 one: the format is part
+    /// of what the key is asked, and the name is not.
+    func testFormatChangesTheLocalSaltAndTheNameDoesNot() throws {
+        let secret = MockSecretDerivationService()
+        nonisolated(unsafe) var seen: [AccountFormat] = []
+        secret.deriveSecretClosure = { handle, _, _, _ in
+            seen.append(handle.account.format)
+            return Data(repeating: 1, count: 32)
+        }
+        let generator = PasswordGenerator(secretDerivationService: secret)
+        _ = try generator.generatePassword(AccountHandle.fixture(id: "a"), label: "l", parameters: .v1, pinProvider: nil)
+        _ = try generator.generatePassword(AccountHandle.v2Fixture(id: "a"), label: "l", parameters: .v1, pinProvider: nil)
+        XCTAssertEqual(seen, [.v1, .v2])
+        XCTAssertNotEqual(SaltFactory.localPasswordSalt(label: "l", revision: 1),
+                          SaltFactory.residentSalt(label: "l", rpId: "fidopass.local", accountId: "a", revision: 1))
     }
 
     func testPortableLabelIsolation() {
@@ -85,7 +127,7 @@ final class DerivationContractTests: XCTestCase {
     private static func secretService() -> MockSecretDerivationService {
         let service = MockSecretDerivationService()
         service.deriveSecretClosure = { _, _, _, _ in Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 11 &+ 5) }) }
-        service.deriveFixedClosure = { _, _, _ in Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 1) }) }
+        service.deriveFixedClosure = { _, _ in Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 1) }) }
         return service
     }
 }

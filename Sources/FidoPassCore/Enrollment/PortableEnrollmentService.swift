@@ -1,82 +1,71 @@
 import Foundation
 
-final class PortableEnrollmentService: PortableEnrollmentServiceProtocol {
-    private let enrollmentService: EnrollmentServiceProtocol
-    private let secretDerivationService: SecretDerivationServiceProtocol
+final class PortableEnrollmentService: PortableEnrolling, Sendable {
+    private let enrollmentService: Enrolling
+    private let secretDerivationService: SecretDeriving
 
-    init(enrollmentService: EnrollmentServiceProtocol,
-         secretDerivationService: SecretDerivationServiceProtocol) {
+    init(enrollmentService: Enrolling,
+         secretDerivationService: SecretDeriving) {
         self.enrollmentService = enrollmentService
         self.secretDerivationService = secretDerivationService
     }
 
     /// Creates a portable account and returns it together with the freshly generated
-    /// master key, if one was generated rather than supplied.
+    /// backup, if the master key was generated rather than supplied.
     ///
     /// Requires two touches of the authenticator: one for `makeCredential`, one for the
-    /// assertion that derives this device's fixed component. Callers must say so, or the
-    /// second prompt looks like the app hanging.
+    /// assertion that derives this credential's fixed component. Callers must say so, or
+    /// the second prompt looks like the app hanging. The record — kind and mask — is
+    /// written last, under the PIN; until it is, the credential is not an account, and a
+    /// failure on the way takes the credential back off the key.
     func enrollPortable(accountId: String,
-                        requireUV: Bool,
-                        devicePath: String?,
-                        askPIN: (() -> String?)?,
-                        importedKeyB64: String?,
-                        onStep: ((PortableEnrollmentStep) -> Void)?) throws -> (Account, String?) {
+                        identity: AccountIdentity,
+                        devicePath: String,
+                        askPIN: (@Sendable () -> String?)?,
+                        imported: PortableBackup?,
+                        onStep: (@Sendable (PortableEnrollmentStep) -> Void)?) throws -> (AccountHandle, PortableBackup?) {
         onStep?(.creatingCredential)
-        var account = try enrollmentService.enroll(accountId: accountId,
-                                                   kind: .portable,
-                                                   displayName: "",
-                                                   requireUV: requireUV,
-                                                   devicePath: devicePath,
-                                                   askPIN: askPIN)
+        var handle = try enrollmentService.enroll(accountId: accountId,
+                                                  kind: .portable,
+                                                  identity: identity,
+                                                  devicePath: devicePath,
+                                                  askPIN: askPIN,
+                                                  namesakePolicy: .refuse)
+        do {
+            onStep?(.derivingBackupKey)
+            let fixed = try PortableMasterKey.fixedComponent(handle, using: secretDerivationService, pinProvider: askPIN)
+            let masterKey = imported?.masterKey ?? CryptoHelpers.randomBytes(count: PortableBackup.masterKeyByteCount)
+            handle.account.mask = PortableMasterKey.combine(masterKey, fixed)
 
-        onStep?(.derivingBackupKey)
-        let fixed = try secretDerivationService.deriveFixedComponent(account: account,
-                                                                     requireUV: requireUV,
-                                                                     pinProvider: askPIN)
-        guard fixed.count == PortablePayload.externalByteCount else {
-            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
+            onStep?(.savingRecord)
+            try enrollmentService.writeRecord(for: handle, pinProvider: askPIN)
+            handle.account.integrity = .ok
+
+            let generated = imported == nil ? PortableBackup(masterKey: masterKey, identity: identity) : nil
+            return (handle, generated)
+        } catch {
+            // A credential without a record is not an account. Best effort: if the key is
+            // gone, the credential stays and shows up as incomplete, with Delete as its
+            // one action.
+            try? enrollmentService.deleteAccount(handle, pin: askPIN?())
+            throw error
         }
-
-        let importedKey: Data
-        if let importedKeyB64 {
-            guard let data = Data(base64Encoded: importedKeyB64),
-                  data.count == PortablePayload.externalByteCount else {
-                throw FidoPassError.invalidState("Imported key must be \(PortablePayload.externalByteCount) base64-encoded bytes")
-            }
-            importedKey = data
-        } else {
-            importedKey = CryptoHelpers.randomBytes(count: PortablePayload.externalByteCount)
-        }
-
-        guard let payload = PortablePayload(external: Data(zip(importedKey, fixed).map { $0 ^ $1 })) else {
-            throw FidoPassError.invalidState("Failed to build portable payload")
-        }
-        account.portable = payload
-
-        onStep?(.savingPayload)
-        try enrollmentService.updateCredentialUserInfo(account: account,
-                                                       requireUV: requireUV,
-                                                       pinProvider: askPIN)
-
-        return (account, importedKeyB64 == nil ? importedKey.base64EncodedString() : nil)
     }
 
-    func exportImportedKey(_ account: Account,
-                           requireUV: Bool,
-                           pinProvider: (() -> String?)?) throws -> String {
-        guard account.kind == .portable else {
+    func exportBackup(_ handle: AccountHandle,
+                      pinProvider: (@Sendable () -> String?)?) throws -> PortableBackup {
+        guard handle.account.kind == .portable else {
             throw FidoPassError.invalidState("Account is not portable")
         }
-        guard let payload = account.portable else {
-            throw FidoPassError.invalidState("Portable account is missing its key material")
+        if let problem = handle.account.integrity.problem {
+            throw FidoPassError.invalidState(problem)
         }
-        let fixed = try secretDerivationService.deriveFixedComponent(account: account,
-                                                                     requireUV: requireUV,
-                                                                     pinProvider: pinProvider)
-        guard fixed.count == PortablePayload.externalByteCount else {
-            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
+        let masterKey = try PortableMasterKey.recover(handle, using: secretDerivationService, pinProvider: pinProvider)
+        // A v1 account has no identity and yields a backup without one — the 32 bytes
+        // earlier versions printed, byte for byte. Export must not wait for migration.
+        guard let backup = PortableBackup(masterKey: masterKey, identity: handle.account.identity) else {
+            throw FidoPassError.invalidState("Failed to build the backup")
         }
-        return Data(zip(fixed, payload.external).map { $0 ^ $1 }).base64EncodedString()
+        return backup
     }
 }

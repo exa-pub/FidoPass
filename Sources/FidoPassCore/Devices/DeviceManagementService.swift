@@ -5,11 +5,11 @@ import CLibfido2
 ///
 /// Every method is one libfido2 call plus the handling around it. What is worth reading here
 /// is the handling: the PIN wiping, and the timeout on reset.
-final class DeviceManagementService: DeviceManaging, @unchecked Sendable {
+final class DeviceManagementService: DeviceManaging, Sendable {
 
-    private let deviceRepository: DeviceRepositoryProtocol
+    private let deviceRepository: DeviceAccessing
 
-    init(deviceRepository: DeviceRepositoryProtocol) {
+    init(deviceRepository: DeviceAccessing) {
         self.deviceRepository = deviceRepository
     }
 

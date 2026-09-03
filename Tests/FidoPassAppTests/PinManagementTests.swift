@@ -1,18 +1,18 @@
 import XCTest
 import FidoPassCore
 import TestSupport
-@testable import FidoPassApp
+@testable import FidoPassAppKit
 
-/// Giving a key its first PIN, changing it, and erasing the key.
+/// Giving a key its first PIN — the one PIN operation the panel does itself.
 ///
-/// The three operations that act on the authenticator itself rather than on what is stored on
-/// it. What is asserted here is mostly what must *not* happen: attempts not spent, vault
-/// tokens not replaced, state not left behind.
+/// What is asserted here is mostly what must *not* happen: attempts not spent, a PIN not
+/// left in the form, a doubled keypress not doubled on the key. Changing the PIN and erasing
+/// the key live in the manager; see `ManagerStoreTests` and `ResetCoordinatorTests`.
 @MainActor
 final class PinManagementTests: XCTestCase {
 
     /// A key straight out of its packet: present, no PIN, nothing on it.
-    private func freshKeyStore() async -> (HUDStore, MockKeyBackend, FidoDevice) {
+    private func freshKeyStore() async -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()
         let device = MockKeyBackend.device()
         backend.devices = [device]
@@ -21,7 +21,7 @@ final class PinManagementTests: XCTestCase {
                                                          supportsHmacSecret: true,
                                                          remainingResidentKeys: 25,
                                                          aaguid: backend.aaguid)
-        let store = HUDTestFactory.makeStore(backend: backend)
+        let store = AppTestFactory.makeStore(backend: backend)
         await store.prepareForDisplay()
         return (store, backend, device)
     }
@@ -48,7 +48,7 @@ final class PinManagementTests: XCTestCase {
                       "choosing the PIN is proof of knowing it; asking for it again reads as 'it did not hear me'")
         XCTAssertEqual(store.devices.state(for: device.path)?.hasPIN, true)
         XCTAssertEqual(store.route, .accounts)
-        XCTAssertEqual(store.pinForm, HUDStore.PinForm(), "the PIN must not be left in the form")
+        XCTAssertTrue(store.pinForm.isEmpty, "the PIN must not be left in the form")
     }
 
     /// Return arrives from the field and from the default button both, and this screen is where
@@ -71,7 +71,7 @@ final class PinManagementTests: XCTestCase {
         store.pinForm.new = "246813"
         store.pinForm.confirm = "246812"
 
-        XCTAssertFalse(store.canSubmitPinForm(forChange: false))
+        XCTAssertFalse(store.pinForm.canSubmit)
         await store.setInitialPIN()
         XCTAssertTrue(backend.setInitialPINCalls.isEmpty,
                       "a typo here would produce a key whose PIN nobody knows")
@@ -82,242 +82,23 @@ final class PinManagementTests: XCTestCase {
         store.pinForm.new = "123"
         store.pinForm.confirm = "123"
 
-        XCTAssertNotNil(store.pinFormIssue(forChange: false))
+        XCTAssertNotNil(store.pinForm.issue)
         await store.setInitialPIN()
         XCTAssertTrue(backend.setInitialPINCalls.isEmpty)
     }
 
-    // MARK: - Change
+    /// The key said no — it already has a PIN, say. The panel explains rather than repeating
+    /// the key's bare status.
+    func testARefusedFirstPinIsExplained() async {
+        let (store, backend, _) = await freshKeyStore()
+        backend.setInitialPINError = FidoPassError.libfido2(operation: "dev_set_pin", status: .notAllowed, message: "not allowed")
+        store.pinForm.new = "246813"
+        store.pinForm.confirm = "246813"
 
-    func testChangingThePinAdoptsTheNewOne() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        store.pinForm.current = "1234"
-        store.pinForm.new = "567890"
-        store.pinForm.confirm = "567890"
+        await store.setInitialPIN()
 
-        await store.changePIN()
-
-        XCTAssertEqual(backend.changePINCalls.count, 1)
-        XCTAssertEqual(backend.pins[device.path], "567890")
-        XCTAssertEqual(store.devices.pin(for: device.path), "567890",
-                       "the vault must hold the PIN that now opens the key, not the one that does not")
-        XCTAssertTrue(store.isSelectedKeyUnlocked)
-        XCTAssertEqual(store.pinForm, HUDStore.PinForm())
-    }
-
-    /// A typo in this form must not cost access that the old PIN still grants.
-    func testAWrongCurrentPinLeavesTheVaultAlone() async {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        store.pinForm.current = "9999"
-        store.pinForm.new = "567890"
-        store.pinForm.confirm = "567890"
-
-        await store.changePIN()
-
-        XCTAssertEqual(backend.pins[device.path], "1234", "the key's PIN is unchanged")
-        XCTAssertEqual(store.devices.pin(for: device.path), "1234")
-        XCTAssertTrue(store.isSelectedKeyUnlocked, "the old PIN still works, so access is not lost")
-        XCTAssertNotNil(store.errorText)
-        XCTAssertEqual(store.pinForm.new, "567890", "retyping a new PIN that was fine is busywork")
-    }
-
-    /// The point of validating locally: an attempt spent on a new PIN that was never going to
-    /// be accepted is an attempt spent for nothing, and there are only eight.
-    func testAnInvalidNewPinCostsNoAttempt() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        store.pinForm.current = "1234"
-        store.pinForm.new = "12"
-        store.pinForm.confirm = "12"
-
-        await store.changePIN()
-
-        XCTAssertTrue(backend.changePINCalls.isEmpty)
-    }
-
-    func testChangingToTheSamePinIsRefusedBeforeTheKeySeesIt() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        store.pinForm.current = "123456"
-        store.pinForm.new = "123456"
-        store.pinForm.confirm = "123456"
-
-        XCTAssertEqual(store.pinFormIssue(forChange: true), PinPolicy.Issue.sameAsOld.message)
-        XCTAssertFalse(store.canSubmitPinForm(forChange: true))
-    }
-
-    /// A key demanding a PIN change refuses everything else, and a silent refusal cannot be
-    /// explained to anyone.
-    func testAKeyDemandingAChangeGetsThatScreen() async {
-        let backend = MockKeyBackend()
-        let device = MockKeyBackend.device()
-        backend.devices = [device]
-        backend.pins[device.path] = "1234"
-        backend.statusByPath[device.path] = DeviceStatus(pinRetriesRemaining: 8,
-                                                         hasPIN: true,
-                                                         supportsHmacSecret: true,
-                                                         remainingResidentKeys: 20,
-                                                         forcePINChange: true)
-        let store = HUDTestFactory.makeStore(backend: backend)
-        await store.prepareForDisplay()
-
-        XCTAssertEqual(store.effectiveRoute, .changePIN)
-        // Not a screen the user can navigate away from: the key would refuse whatever they
-        // navigated to, and an unexplained refusal is worse than a screen they did not ask for.
-        store.backToAccounts()
-        XCTAssertEqual(store.effectiveRoute, .changePIN)
-    }
-
-    // MARK: - Reset
-
-    private func armedResetStore() async -> (HUDStore, MockKeyBackend, FidoDevice) {
-        let (store, backend, device) = await HUDTestFactory.unlockedStore()
-        HUDTestFactory.seedLabels(store, ["work"])
-        await store.beginReset()
-        store.resetFlow?.acknowledged = true
-        store.resetFlow?.typed = "RESET"
-        store.armReset()
-        return (store, backend, device)
-    }
-
-    /// After the reconnect the path is different and a vendor signature only names a model.
-    /// With two keys present there is no way left to tell which one came back.
-    func testResetRefusesToStartWithTwoKeysConnected() async {
-        let (store, backend, _) = await HUDTestFactory.unlockedStore()
-        backend.devices.append(MockKeyBackend.device(path: "/dev/two"))
-        await store.devices.refresh()
-
-        await store.beginReset()
-
-        XCTAssertNil(store.resetFlow)
-        XCTAssertNotNil(store.errorText)
-    }
-
-    /// A local account cannot be recovered by any means, so a checkbox is not enough.
-    func testAKeyHoldingALocalAccountAsksForTheWordToBeTyped() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        await store.beginReset()
-        store.resetFlow?.acknowledged = true
-
-        XCTAssertEqual(store.resetFlow?.requiresTypedConfirmation, true)
-        XCTAssertEqual(store.resetFlow?.canProceed, false)
-        store.resetFlow?.typed = "RESET"
-        XCTAssertEqual(store.resetFlow?.canProceed, true)
-    }
-
-    func testTheKeyComingBackRunsTheResetAndLandsInBootstrap() async {
-        let (store, backend, device) = await armedResetStore()
-
-        backend.devices = []
-        await store.devices.refresh()
-        XCTAssertEqual(store.resetFlow?.stage, .replug)
-
-        backend.devices = [device]
-        await store.devices.refresh()
-        await store.resetTask?.value
-
-        XCTAssertEqual(backend.resetCalls, [device.path])
-        XCTAssertNil(store.resetFlow)
-        XCTAssertEqual(store.devices.state(for: device.path)?.hasPIN, false)
-        XCTAssertEqual(store.effectiveRoute, .setPIN,
-                       "a key with no PIN is unusable, and an empty account list would be the old dead end")
-    }
-
-    /// The credential ids these histories are keyed by will never exist again.
-    func testResetForgetsWhatCanNeverBeAskedForAgain() async {
-        let (store, backend, device) = await armedResetStore()
-        XCTAssertFalse(store.labels.histories.isEmpty)
-
-        backend.devices = []
-        await store.devices.refresh()
-        backend.devices = [device]
-        await store.devices.refresh()
-        await store.resetTask?.value
-
-        XCTAssertTrue(store.labels.histories.isEmpty)
-        XCTAssertNil(store.preferences.lastUsed)
-        XCTAssertTrue(store.accounts.accounts.isEmpty)
-    }
-
-    /// A matching AAGUID proves nothing, but a differing one proves the key is not the same —
-    /// and erasing the wrong key is not a recoverable mistake.
-    func testADifferentKeyComingBackIsNotErased() async {
-        let (store, backend, device) = await armedResetStore()
-
-        backend.devices = []
-        await store.devices.refresh()
-        backend.aaguid = "ff" + String(repeating: "00", count: 15)
-        backend.devices = [device]
-        await store.devices.refresh()
-        await store.resetTask?.value
-
-        XCTAssertNotNil(store.errorText)
-        XCTAssertEqual(store.resetFlow?.stage, .replug, "the flow waits rather than pretending it worked")
-        XCTAssertEqual(backend.pins[device.path], "1234", "the key still has its PIN, so nothing was erased")
-        XCTAssertFalse(backend.accountsByPath[device.path, default: []].isEmpty)
-    }
-
-    /// Fetching a backup key is the one legitimate detour out of this wizard — it is the last
-    /// moment that value can be had. Coming back must return to the wizard rather than drop
-    /// the user on the account list with a reset still armed behind it.
-    func testLeavingForABackupKeyReturnsToTheWizard() async {
-        let (store, _, _) = await HUDTestFactory.unlockedStore()
-        await store.beginReset()
-        guard let portable = store.resetFlow?.doomed.first(where: { $0.kind == .portable }) else {
-            return XCTFail("the fixture is supposed to have a portable account")
-        }
-
-        await store.showBackupKey(for: portable.ref)
-        XCTAssertEqual(store.route, .backupKey(portable.ref))
-
-        store.backToAccounts()
-        XCTAssertEqual(store.route, .resetKey)
-        XCTAssertNotNil(store.resetFlow)
-    }
-
-    /// A user who unplugged the key and then thought better of it must not be held in the
-    /// wizard. Only the erase itself is past the point of cancelling.
-    func testTheWizardCanBeCancelledUntilTheKeyIsBeingErased() async {
-        let (store, backend, device) = await armedResetStore()
-
-        backend.devices = []
-        await store.devices.refresh()
-        XCTAssertEqual(store.resetFlow?.stage, .replug)
-
-        XCTAssertTrue(store.handleEscape())
-        XCTAssertNil(store.resetFlow)
-        XCTAssertNil(store.devices.armedReset)
-
-        backend.devices = [device]
-        await store.devices.refresh()
-        await store.resetTask?.value
-        XCTAssertTrue(backend.resetCalls.isEmpty, "a cancelled wizard must not still fire")
-    }
-
-    /// The wizard tells the user to unplug the key. When they do, it must still be the thing
-    /// on screen — it used to fall through to "No security key connected", which made it look
-    /// as though the operation had been forgotten.
-    func testTheWizardStaysOnScreenWhileTheKeyIsOut() async {
-        let (store, backend, _) = await armedResetStore()
-
-        backend.devices = []
-        await store.devices.refresh()
-
-        XCTAssertEqual(store.effectiveRoute, .resetKey)
-        XCTAssertEqual(store.resetFlow?.stage, .replug)
-    }
-
-    /// The panel stays open under a wizard, and — this is the part that broke — stops staying
-    /// open the moment the wizard is gone. Pinning used to be remembered from the last
-    /// `show(_:)`, so a route nobody could see kept the HUD on screen with no way to explain it.
-    func testPinningFollowsWhatIsOnScreen() async {
-        let (store, backend, _) = await armedResetStore()
-        XCTAssertTrue(store.isPinnedOpen)
-
-        backend.devices = []
-        await store.devices.refresh()
-        XCTAssertTrue(store.isPinnedOpen, "the wizard is still up, waiting for the key")
-
-        store.cancelReset()
-        XCTAssertFalse(store.isPinnedOpen, "nothing is left to protect — clicking away must close it")
+        XCTAssertEqual(store.error?.kind, .notAllowed)
+        XCTAssertEqual(store.error?.fullText().contains("already has a PIN"), true)
     }
 
     /// The bootstrap screen appears on its own, just by plugging in a new key. It may not
@@ -331,19 +112,29 @@ final class PinManagementTests: XCTestCase {
         XCTAssertTrue(store.isPinnedOpen, "half a PIN is something the user cannot get back")
     }
 
-    /// An arming that outlived its screen would fire on the next key plugged in, whatever it
-    /// was brought out for.
-    func testClosingThePanelDisarmsTheReset() async {
-        let (store, backend, device) = await armedResetStore()
+    // MARK: - A key demanding a change
 
-        store.panelDidClose()
-        backend.devices = []
-        await store.devices.refresh()
+    /// A key demanding a PIN change refuses everything else, and a silent refusal cannot be
+    /// explained to anyone.
+    func testAKeyDemandingAChangeGetsThatScreen() async {
+        let backend = MockKeyBackend()
+        let device = MockKeyBackend.device()
         backend.devices = [device]
-        await store.devices.refresh()
-        await store.resetTask?.value
+        backend.pins[device.path] = "1234"
+        backend.statusByPath[device.path] = DeviceStatus(pinRetriesRemaining: 8,
+                                                         hasPIN: true,
+                                                         supportsHmacSecret: true,
+                                                         remainingResidentKeys: 20,
+                                                         forcePINChange: true)
+        let store = AppTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
 
-        XCTAssertTrue(backend.resetCalls.isEmpty)
-        XCTAssertNil(store.devices.armedReset)
+        // Changing the PIN lives in the manager window, so the panel's job is to say so
+        // and offer the way there.
+        XCTAssertEqual(store.effectiveRoute, .pinChangeRequired)
+        // Not a screen the user can navigate away from: the key would refuse whatever they
+        // navigated to, and an unexplained refusal is worse than a screen they did not ask for.
+        store.backToAccounts()
+        XCTAssertEqual(store.effectiveRoute, .pinChangeRequired)
     }
 }

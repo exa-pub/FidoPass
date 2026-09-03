@@ -1,50 +1,39 @@
 import Foundation
 import CryptoKit
 
-final class PasswordGenerator: PasswordGenerating {
-    private let secretDerivationService: SecretDerivationServiceProtocol
+final class PasswordGenerator: PasswordGenerating, Sendable {
+    private let secretDerivationService: SecretDeriving
 
-    init(secretDerivationService: SecretDerivationServiceProtocol) {
+    init(secretDerivationService: SecretDeriving) {
         self.secretDerivationService = secretDerivationService
     }
 
-    func generatePassword(account: Account,
+    func generatePassword(_ handle: AccountHandle,
                           label: String,
-                          policy override: PasswordPolicy?,
-                          requireUV: Bool,
-                          pinProvider: (() -> String?)?) throws -> String {
-        let policy = override ?? account.policy
+                          parameters: DerivationParameters,
+                          pinProvider: (@Sendable () -> String?)?) throws -> String {
+        // A credential without a usable record is not an account; nothing is derived from it.
+        if let problem = handle.account.integrity.problem {
+            throw FidoPassError.invalidState(problem)
+        }
         let secret: Data
-        if account.kind == .portable {
-            secret = try portableSecret(account: account,
-                                        label: label,
-                                        requireUV: requireUV,
-                                        pinProvider: pinProvider)
+        if handle.account.kind == .portable {
+            secret = try portableSecret(handle, label: label, pinProvider: pinProvider)
         } else {
-            secret = try secretDerivationService.deriveSecret(account: account,
+            secret = try secretDerivationService.deriveSecret(handle,
                                                               label: label,
-                                                              requireUV: requireUV,
+                                                              revision: parameters.revision,
                                                               pinProvider: pinProvider)
         }
 
-        let material = deriveMaterial(from: secret, policy: policy)
-        return PasswordEngine.mapToPassword(material, policy: policy)
+        let material = deriveMaterial(from: secret, policy: parameters.policy)
+        return PasswordEngine.mapToPassword(material, policy: parameters.policy)
     }
 
-    private func portableSecret(account: Account,
-                                 label: String,
-                                 requireUV: Bool,
-                                 pinProvider: (() -> String?)?) throws -> Data {
-        guard let payload = account.portable else {
-            throw FidoPassError.invalidState("Portable account is missing its key material")
-        }
-        let fixed = try secretDerivationService.deriveFixedComponent(account: account,
-                                                                     requireUV: requireUV,
-                                                                     pinProvider: pinProvider)
-        guard fixed.count == PortablePayload.externalByteCount else {
-            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
-        }
-        let imported = Data(zip(fixed, payload.external).map { $0 ^ $1 })
+    private func portableSecret(_ handle: AccountHandle,
+                                label: String,
+                                pinProvider: (@Sendable () -> String?)?) throws -> Data {
+        let imported = try PortableMasterKey.recover(handle, using: secretDerivationService, pinProvider: pinProvider)
         let salt = SaltFactory.portableLabelSalt(label)
         let mac = HMAC<SHA256>.authenticationCode(for: salt, using: SymmetricKey(data: imported))
         return Data(mac)
