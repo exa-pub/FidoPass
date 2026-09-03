@@ -2,15 +2,15 @@
 
 The 256 emoji a FidoPass encryption key's fingerprint is spelled in — one per byte value,
 in this order. The table is [`andrew-d/emoji256`](https://github.com/andrew-d/emoji256), row by
-row, and is part of the `keyv1` format: it never changes.
+row, and is part of the `hpkev1` format: it never changes.
 
 To check a key link without FidoPass:
 
 ```bash
-printf '%s' '<the link, up to but not including the #>' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r
+printf '%s' '<after the #, from hpkev1? up to but not including &keyfp=>' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r
 ```
 
-prints twelve hex digits — the `keyfp` in the link's fragment — and each pair of digits is
+prints twelve hex digits — the `keyfp` at the end of the link — and each pair of digits is
 one row below. `brew install argon2` provides the tool.
 
 | Byte | Emoji | Byte | Emoji | Byte | Emoji | Byte | Emoji |

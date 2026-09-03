@@ -8,13 +8,13 @@ import Foundation
 /// spent finding it.
 ///
 /// The identity, not the account's name, goes in: names are words like `vault` that a
-/// dictionary would recover from a salted hash, while the identity is 96 random bits — and
+/// dictionary would recover from a salted hash, while the identity is 128 random bits — and
 /// it is the same on a second key that imported the account's backup, whatever that copy
 /// was named. argon2id rather than a plain hash, at the owner's request, for the delay.
 /// Nothing about the account can be read back out of a locator.
 public struct AccountLocator: Hashable, Sendable {
     public static let byteCount = 16
-    static let domain = Data("fidopass|ecies|idfp|v1".utf8)
+    static let domain = Data("fidopass|hpke|idfp|v1".utf8)
 
     public let bytes: Data
 

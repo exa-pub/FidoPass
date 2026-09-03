@@ -10,20 +10,21 @@ import CryptoKit
 /// through that extension, gets the same 32 bytes back that this app does. That wrapping
 /// is the one thing the app and a browser could disagree on silently, and it is pinned by
 /// vector in `SaltFactoryTests`.
+///
+/// Messages have one salt for both formats: nothing about them is frozen the way v1
+/// passwords are, and a v1 account cannot be reached from a browser in any case.
 enum SaltFactory {
     private static let residentPrefix = Data("fidopass|salt|".utf8)
     private static let fixedChallenge = Data("fidopass|fixed-challenge|v1".utf8)
     private static let portableLabelPrefix = Data("fidopass|portable|".utf8)
-    // Message keys live in their own domain: nothing derived for a message shares a salt
-    // with anything derived for a password.
-    private static let messageKeyPrefix = Data("fidopass|ecies|salt|v1".utf8)
-    private static let portableMessagePrefix = Data("fidopass|ecies|portable|v1".utf8)
 
     // v2: the inputs a browser would pass to `prf.eval`, before the PRF wrapping.
     private static let prfPrefix = Data("WebAuthn PRF".utf8) + Data([0x00])
     private static let localPasswordPrefixV2 = Data("fidopass|pw|v2|".utf8)
-    private static let messageKeyPrefixV2 = Data("fidopass|ecies|v2|".utf8)
     private static let fixedChallengeV2 = Data("fidopass|fixed|v2".utf8)
+    // Message keys live in their own domain: nothing derived for a message shares a salt
+    // with anything derived for a password.
+    private static let messagePrefix = Data("fidopass|hpke|secret|v1|".utf8)
 
     // MARK: - v1
 
@@ -44,14 +45,6 @@ enum SaltFactory {
         Data(SHA256.hash(data: fixedChallenge))
     }
 
-    /// The hmac-secret salt a v1 local account's message key is derived under.
-    static func messageKeySalt(nonce: Data) -> Data {
-        var hasher = SHA256()
-        hasher.update(data: messageKeyPrefix)
-        hasher.update(data: nonce)
-        return Data(hasher.finalize())
-    }
-
     // MARK: - Portable, both formats
 
     /// The HMAC message a portable account's password is derived under, keyed by the master
@@ -60,16 +53,6 @@ enum SaltFactory {
         var hasher = SHA256()
         hasher.update(data: portableLabelPrefix)
         hasher.update(data: Data(label.utf8))
-        return Data(hasher.finalize())
-    }
-
-    /// The HMAC message a portable account's message key is derived under, keyed by the
-    /// master key — the counterpart of `portableLabelSalt` for messages. Format-independent
-    /// for the same reason.
-    static func portableMessageSalt(nonce: Data) -> Data {
-        var hasher = SHA256()
-        hasher.update(data: portableMessagePrefix)
-        hasher.update(data: nonce)
         return Data(hasher.finalize())
     }
 
@@ -95,14 +78,19 @@ enum SaltFactory {
         return prfSalt(input: input)
     }
 
-    /// The v2 local message-key salt.
-    static func messageKeySaltV2(nonce: Data) -> Data {
-        prfSalt(input: messageKeyPrefixV2 + nonce)
-    }
-
     /// The v2 fixed-component salt: a constant, so one touch recovers the mask's other half.
     static func fixedComponentSaltV2() -> Data {
         prfSalt(input: fixedChallengeV2)
+    }
+
+    // MARK: - Messages, both formats and both kinds
+
+    /// The salt a message key's secret is asked under, for a nonce. For a local account it
+    /// is the `hmac-secret` salt; for a portable one, the HMAC message under the master key
+    /// — format-independent like `portableLabelSalt`, so a key issued before a migration
+    /// keeps opening messages after it, and a backup on a second key issues the same one.
+    static func messageSalt(nonce: Data) -> Data {
+        prfSalt(input: messagePrefix + nonce)
     }
 
     // MARK: - By format
@@ -111,13 +99,6 @@ enum SaltFactory {
         switch format {
         case .v1: return fixedComponentSalt()
         case .v2: return fixedComponentSaltV2()
-        }
-    }
-
-    static func messageKeySalt(nonce: Data, format: AccountFormat) -> Data {
-        switch format {
-        case .v1: return messageKeySalt(nonce: nonce)
-        case .v2: return messageKeySaltV2(nonce: nonce)
         }
     }
 }

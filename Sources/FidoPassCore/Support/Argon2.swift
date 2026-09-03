@@ -6,9 +6,9 @@ import CArgon2
 /// The one file allowed to `import CArgon2`. Everything above it sees `Data` in and `Data`
 /// out, exactly as `CLibfido2` never crosses out of `Devices/`.
 ///
-/// The parameters are part of the `keyv1` format: a key URL's fingerprint, the locator that
-/// names its account and the X25519 scalar behind its public key are all argon2id outputs,
-/// and the same input has to give the same bytes on every machine, for ever. They were
+/// The parameters are part of the `hpkev1` format: a key link's fingerprint, the locator that
+/// names its account and the key material its X25519 pair is derived from are all argon2id
+/// outputs, and the same input has to give the same bytes on every machine, for ever. They were
 /// chosen once, by measuring the reference implementation on an Apple M3 Max (~11 ms at
 /// 32 MiB, one pass), and are **never calibrated at run time** — a faster or slower machine
 /// simply waits a different number of milliseconds for the same answer.
@@ -23,7 +23,7 @@ enum Argon2 {
         /// actually run; the vendored build has no threads at all.
         let lanes: UInt32
 
-        /// The set `keyv1` is defined with, for all three uses. Frozen — see the type comment.
+        /// The set `hpkev1` is defined with, for all three uses. Frozen — see the type comment.
         static let v1 = Parameters(timeCost: 1, memoryKiB: 32_768, lanes: 1)
     }
 

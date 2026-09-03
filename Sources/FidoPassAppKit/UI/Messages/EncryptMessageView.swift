@@ -30,12 +30,12 @@ struct EncryptMessageView: View {
             HStack(spacing: 8) {
                 Image(systemName: "key.horizontal.fill")
                     .foregroundStyle(Color.accentColor)
-                    .help("The encryption key — a fidopass://keyv1 link")
-                TextField("Paste a fidopass://keyv1 link", text: $store.keyText)
+                    .help("The encryption key — a fidopass.org/link or fidopass:// link")
+                TextField("Paste an encryption-key link", text: $store.keyText)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
                     .autocorrectionDisabled()
-                    .help(store.key?.canonical ?? "The link someone gave you, or the one the panel just issued")
+                    .help(store.key?.payload ?? "The link someone gave you, or the one the panel just issued")
                 Button("Paste") {
                     if let text = NSPasteboard.general.string(forType: .string) { store.keyText = text }
                 }
@@ -131,7 +131,7 @@ struct EncryptMessageView: View {
             HStack(spacing: 8) {
                 Image(systemName: "envelope.badge.shield.half.filled")
                     .foregroundStyle(store.sealed.isEmpty ? Color.secondary : Color.accentColor)
-                    .help("The sealed message — a fidopass://blobv1 link")
+                    .help("The sealed message — a fidopass.org/link or fidopass:// link")
                 Text(store.sealed.isEmpty ? "The sealed message appears here" : store.sealed)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(store.sealed.isEmpty ? .tertiary : .primary)

@@ -63,7 +63,7 @@ final class MessageDecryptStoreTests: XCTestCase {
     func testAKeyLinkIsNamedAsSuch() async throws {
         let setup = await setUpStore()
         setup.store.sealedText = try setup.backend.encryptionKey(for: try setup.account("vault")).absoluteString
-        XCTAssertEqual(setup.store.status, .invalid(.unexpectedKind("keyv1")))
+        XCTAssertEqual(setup.store.status, .invalid(.unexpectedKind("hpkev1")))
     }
 
     func testAMessageForAnotherKeyFindsNoAccount() async throws {

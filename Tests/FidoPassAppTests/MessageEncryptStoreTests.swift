@@ -41,12 +41,13 @@ final class MessageEncryptStoreTests: XCTestCase {
         XCTAssertNil(store.key)
     }
 
-    func testAKeyWithoutItsFragmentIsNamed() async throws {
+    /// The checksum is required, but a link cut off before it is a prefix like any other.
+    func testAKeyWithoutItsChecksumIsIncomplete() async throws {
         let store = makeStore()
-        store.keyText = try backend.encryptionKey(for: vault).canonical
+        store.keyText = LinkCarrier.web.prefix + (try backend.encryptionKey(for: vault).payload)
         try await settle()
 
-        XCTAssertEqual(store.keyStatus, .invalid(.checksumMissing))
+        XCTAssertEqual(store.keyStatus, .incomplete)
     }
 
     func testAMessageInTheKeyFieldIsNamed() async throws {
@@ -54,7 +55,7 @@ final class MessageEncryptStoreTests: XCTestCase {
         store.keyText = try backend.sealedMessage("hi", for: vault).absoluteString
         try await settle()
 
-        XCTAssertEqual(store.keyStatus, .invalid(.unexpectedKind("blobv1")))
+        XCTAssertEqual(store.keyStatus, .invalid(.unexpectedKind("hpkeblobv1")))
     }
 
     func testClearingTheKeyClearsTheMessage() async throws {
@@ -153,7 +154,7 @@ final class MessageEncryptStoreTests: XCTestCase {
     func testEditingTheKeyDropsTheIssuedAccount() async throws {
         let store = makeStore()
         store.adopt(try backend.encryptionKey(for: vault), issuedFor: vault.account)
-        store.keyText = "fidopass://keyv1?nonce="
+        store.keyText = "https://fidopass.org/link#hpkev1?nonce="
 
         XCTAssertNil(store.issuedFor)
         XCTAssertNil(store.key)

@@ -195,35 +195,48 @@ read as broken.
 
 ### Message encryption
 
-Two links, both public, both a frozen format — `keyv1`/`blobv1` change the way `policy.version`
-does: never; new behaviour ships as `keyv2`/`blobv2`. `EncryptionKeyURLTests`,
-`SealedMessageURLTests`, `MessageSealerTests`, `MessageKeyServiceTests`, `Argon2Tests` and
-`EmojiAlphabetTests` pin the vectors; if one fails, someone's messages have become unreadable.
+Two links, both public, both a frozen format — `hpkev1`/`hpkeblobv1` change the way
+`policy.version` does: never; new behaviour ships as `hpkev2`/`hpkeblobv2`. `DHKEMTests`,
+`EncryptionKeyURLTests`, `SealedMessageURLTests`, `MessageSealerTests`,
+`MessageKeyServiceTests`, `Argon2Tests` and `EmojiAlphabetTests` pin the vectors; if one
+fails, someone's messages have become unreadable.
 
 ```
-fidopass://keyv1?nonce=<32 B>&pubkey=<32 B>&idfp=<16 B>#keyfp=<6 B hex>      (164 chars)
-fidopass://blobv1?nonce=<32 B>&idfp=<16 B>&content=<enc 32 B ‖ ciphertext ‖ tag 16 B>
+https://fidopass.org/link#hpkev1?nonce=<32 B>&pubkey=<32 B>&idfp=<16 B>&keyfp=<6 B hex>    (180 chars)
+https://fidopass.org/link#hpkeblobv1?nonce=<32 B>&idfp=<16 B>&content=<enc 32 B ‖ ciphertext ‖ tag 16 B>
 ```
 
+- **One payload, two carriers** (`LinkCarrier`). The app writes `https://fidopass.org/link#…`
+  and reads that and `fidopass://…` alike; the system delivers only the custom scheme
+  (`CFBundleURLTypes`), which is what the link page on that domain will redirect to. The
+  payload rides in the fragment and nowhere else: a fragment never reaches the server, so
+  `fidopass.org` sees neither keys nor messages nor locators — a rule for the page as much
+  as for the app.
 - **`secret` is the authenticator's raw answer**, never a password: local — `hmac-secret`
-  under `SaltFactory.messageKeySalt(nonce:)`; portable — HMAC under the master key. Both live
-  in the `fidopass|ecies|…` domain, so no password is computable from a message key or the
-  reverse. The X25519 scalar is argon2id over it (`MessageKeyService`), the locator `idfp` is
-  argon2id over the account's **identity** (not its name — names are guessable, identities
-  are not, and a backup on a second key has the same one), and the fingerprint `keyfp` is
-  argon2id over the canonical link text, 6 bytes, spelled as six emoji from
-  `EmojiAlphabet` (`docs/emoji-alphabet.md`). All three use `Argon2.Parameters.v1`
-  (`t=1, m=32 MiB, p=1`, ~11 ms on an M3), **frozen, never calibrated at run time** — a link
-  has to spell the same emoji on every machine.
-- **Messages are HPKE** (RFC 9180 base mode, X25519/HKDF-SHA256/ChaCha20-Poly1305, CryptoKit,
-  which is why the deployment target is macOS 14). `info` and `aad` bind the message to the
-  nonce and the locator. Anyone with the link can seal; the recipient cannot tell who did.
-- **A link is either canonical or not ours.** `FidoPassLinkParser` strips whitespace and
-  then demands exact order, base64url without padding, lower case; every prefix of a valid
-  link reads as `.incomplete`, never as an error, because that is what a field being typed
-  into looks like. A key link without its `#keyfp=` fragment is refused
-  (`.checksumMissing`), not accepted without its checksum.
-- **The fragment is a checksum, not a signature.** Whoever substitutes the public key can
+  under `SaltFactory.messageSalt(nonce:)`; portable — HMAC under the master key with the
+  same salt as message; one salt for both account formats. Everything lives in the
+  `fidopass|hpke|…` domain, so no password is computable from a message key or the reverse.
+  The key material `ikm` is argon2id over the secret (`MessageKeyService`), and the X25519
+  pair is RFC 9180's own `DeriveKeyPair` over `ikm` (`DHKEM`) — the one construction every
+  HPKE library reproduces. The locator `idfp` is argon2id over the account's **identity**
+  (not its name — names are guessable, identities are not, and a backup on a second key has
+  the same one), and the fingerprint `keyfp` is argon2id over the link's *payload* — the
+  same in both carriers, so a key spells the same six emoji whichever way it travels — 6
+  bytes, spelled from `EmojiAlphabet` (`docs/emoji-alphabet.md`). All three use
+  `Argon2.Parameters.v1` (`t=1, m=32 MiB, p=1`, ~11 ms on an M3), **frozen, never calibrated
+  at run time** — a link has to spell the same emoji on every machine.
+- **Messages are HPKE** (RFC 9180 base mode, X25519/HKDF-SHA256/AES-128-GCM — Appendix A.1
+  — CryptoKit, which is why the deployment target is macOS 14). `info` binds the message to
+  the nonce and the locator; `aad` is empty — one binding, in the key schedule. One context
+  per message, so the AEAD nonce never repeats. Anyone with the link can seal; the recipient
+  cannot tell who did.
+- **A link is either canonical or not ours.** `FidoPassLinkParser` strips whitespace,
+  matches the carrier without regard to case (schemes and hosts are case-insensitive) and
+  then demands the payload exactly: order, base64url without padding, lower case. Every
+  prefix of a valid link reads as `.incomplete`, never as an error, because that is what a
+  field being typed into looks like — a key link cut off before `&keyfp=` included: the
+  checksum is required, but its absence is indistinguishable from an unfinished paste.
+- **`keyfp` is a checksum, not a signature.** Whoever substitutes the public key can
   recompute it. The emoji comparison with the key's owner is the whole defence, and the UI
   says so.
 - **`fidopass://` links open in the app** (`CFBundleURLTypes` in `build_app.sh`,
@@ -326,7 +339,7 @@ Sources/FidoPassCore/
                 DerivationParameters,
                 PasswordPolicy, PinPolicy, FidoDevice, AuthenticatorInfo, CredentialInventory,
                 ResidentCredential, EncryptionKeyURL, SealedMessageURL, AccountLocator,
-                MessageKeyFingerprint, EmojiAlphabet
+                MessageKeyFingerprint, EmojiAlphabet, LinkCarrier
   Protocols/    DI seams used by tests — one gerund per protocol: Enrolling, SecretDeriving, …
   Devices/      libfido2 device access, capability probing, PIN set/change and reset,
                 wide inspection, authenticator configuration, the large-blob store
@@ -334,7 +347,7 @@ Sources/FidoPassCore/
   Secrets/      hmac-secret, HKDF, password mapping, message keys (MessageKeyService,
                 MessageKey, PortableMasterKey) and HPKE sealing (MessageSealer)
   Support/      salts, crypto helpers, libfido2 context, CborInfo, PinScope, Argon2,
-                Base64URL, FidoPassLinkParser
+                DHKEM, Base64URL, FidoPassLinkParser
 
 Sources/FidoPassAppKit/
   App/          AppDelegate — assembles the application, main menu, activation policy

@@ -1095,7 +1095,7 @@ final class PanelMessageTests: XCTestCase {
         XCTAssertEqual(router.openedEncryptors.first?.key, key)
         XCTAssertNil(router.openedEncryptors.first?.account, "a clicked key was issued by someone else")
 
-        store.handleLink(.unrecognised(.checksumMissing))
+        store.handleLink(.unrecognised(.notFidoPassURL))
         XCTAssertEqual(router.panelOpened, 1, "a broken link is explained in the panel")
         XCTAssertNotNil(store.statusText)
 

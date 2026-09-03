@@ -80,14 +80,22 @@ final class SaltFactoryTests: XCTestCase {
     func testV2DomainsAreDistinct() {
         let nonce = Data(repeating: 0x42, count: 32)
         let password = SaltFactory.localPasswordSalt(label: "vault", revision: 1)
-        let message = SaltFactory.messageKeySaltV2(nonce: nonce)
+        let message = SaltFactory.messageSalt(nonce: nonce)
         let fixed = SaltFactory.fixedComponentSaltV2()
         XCTAssertNotEqual(password, message)
         XCTAssertNotEqual(password, fixed)
         XCTAssertNotEqual(message, fixed)
-        XCTAssertEqual(SaltFactory.messageKeySalt(nonce: nonce, format: .v2), message)
-        XCTAssertNotEqual(SaltFactory.messageKeySalt(nonce: nonce, format: .v1), message)
-        XCTAssertNotEqual(message, SaltFactory.messageKeySaltV2(nonce: Data(repeating: 0x43, count: 32)))
+        XCTAssertNotEqual(message, SaltFactory.messageSalt(nonce: Data(repeating: 0x43, count: 32)))
+    }
+
+    /// Frozen: the message salt is `prf` over `fidopass|hpke|secret|v1|` followed by the
+    /// nonce — one salt for both account formats. Computed independently with `hashlib`.
+    func testMessageSaltIsPrfWrapped() {
+        let nonce = Data(repeating: 0x42, count: 32)
+        XCTAssertEqual(SaltFactory.messageSalt(nonce: nonce),
+                       SaltFactory.prfSalt(input: Data("fidopass|hpke|secret|v1|".utf8) + nonce))
+        XCTAssertEqual(SaltFactory.messageSalt(nonce: nonce).hexString,
+                       "86fd9f523121d9d4703554ed7a4c8421d777b29584009be85a187dd224b89589")
     }
 
     /// The v1 salts are not wrapped and the v2 ones are: a v1 account keeps deriving with

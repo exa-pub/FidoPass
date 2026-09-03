@@ -70,13 +70,15 @@ after 8 wrong PINs** — there is no reset.
 
 ## Encrypted messages
 
-Any account can issue an **encryption key**: a `fidopass://keyv1?…` link (right-click the
-account → *Encryption key…*, or ⌘E; one touch). The link is public — send it to anyone.
-Whoever has it can encrypt a message for you in *Encrypt a message…* (right-click the
-menu-bar icon), on any Mac, with no security key at all: paste the link, type the text, copy
-the `fidopass://blobv1?…` link it produces. Only your security key opens it: *Decrypt a
-message…* (⌘D), paste, press Decrypt, touch. Both kinds of link are clickable and open in
-FidoPass; clicking one never touches the key by itself.
+Any account can issue an **encryption key**: an `https://fidopass.org/link#hpkev1?…` link
+(right-click the account → *Encryption key…*, or ⌘E; one touch). The link is public — send
+it to anyone. Whoever has it can encrypt a message for you in *Encrypt a message…*
+(right-click the menu-bar icon), on any Mac, with no security key at all: paste the link,
+type the text, copy the `…#hpkeblobv1?…` link it produces. Only your security key opens it:
+*Decrypt a message…* (⌘D), paste, press Decrypt, touch. Everything in a link sits after the
+`#`, which a browser never sends to the server — `fidopass.org` sees none of it. The same
+links written as `fidopass://hpkev1?…` and `fidopass://hpkeblobv1?…` open in FidoPass when
+clicked; clicking one never touches the key by itself.
 
 Each key shows a fingerprint — six emoji and twelve hex digits. **Compare them with the
 key's owner over another channel before encrypting**: the link carries a checksum against
@@ -84,7 +86,7 @@ damage in transit, but only that comparison protects against a substituted link.
 link without FidoPass:
 
 ```bash
-printf '%s' '<the link, up to the #>' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r
+printf '%s' '<after the #, up to but not including &keyfp=>' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r
 ```
 
 prints the twelve hex digits; the six emoji are the same six bytes through the
@@ -142,10 +144,11 @@ user id; the backup key carries it too.
 
 An encryption key is derived from the account and a random nonce carried in the link: the
 `hmac-secret` answer for that nonce (for a portable account, an HMAC under the master key)
-goes through argon2id into an X25519 private key, whose public half is the link. Messages
-are sealed with HPKE (RFC 9180 — X25519, HKDF-SHA256, ChaCha20-Poly1305); the recipient
-re-derives the private key from the nonce, which is why nothing has to be stored. The
-fingerprint is argon2id over the link text, deliberately slow, so that six emoji are enough.
+goes through argon2id and then through HPKE's own key derivation into an X25519 key pair,
+whose public half is the link. Messages are sealed with HPKE (RFC 9180 — X25519,
+HKDF-SHA256, AES-128-GCM); the recipient re-derives the private key from the nonce, which
+is why nothing has to be stored. The fingerprint is argon2id over the link's payload,
+deliberately slow, so that six emoji are enough.
 
 ## Accounts from earlier versions
 

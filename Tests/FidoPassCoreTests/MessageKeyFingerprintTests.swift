@@ -6,7 +6,7 @@ final class MessageKeyFingerprintTests: XCTestCase {
     /// The same computation `Argon2Tests` checks against the command-line tool, through the
     /// type that owns the salt and the length.
     func testComputeMatchesTheReferenceTool() throws {
-        let fingerprint = try MessageKeyFingerprint.compute(canonical: "fidopass://keyv1?nonce=abc&pubkey=def&idfp=ghi")
+        let fingerprint = try MessageKeyFingerprint.compute(payload: "fidopass://keyv1?nonce=abc&pubkey=def&idfp=ghi")
         XCTAssertEqual(fingerprint.hex, "1c6704c8a388")
         XCTAssertEqual(fingerprint.bytes.count, MessageKeyFingerprint.byteCount)
     }

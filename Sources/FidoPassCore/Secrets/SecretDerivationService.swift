@@ -32,11 +32,13 @@ final class SecretDerivationService: SecretDeriving, Sendable {
                                       pinProvider: pinProvider)
     }
 
+    /// The message salt is the same in both formats: nothing about messages is frozen the
+    /// way v1 passwords are, and a v1 account cannot be reached from a browser anyway.
     func deriveMessageSecret(_ handle: AccountHandle,
                              nonce: Data,
                              pinProvider: (@Sendable () -> String?)?) throws -> Data {
         try hmacSecretService.perform(handle,
-                                      salt: SaltFactory.messageKeySalt(nonce: nonce, format: handle.account.format),
+                                      salt: SaltFactory.messageSalt(nonce: nonce),
                                       pinProvider: pinProvider)
     }
 }

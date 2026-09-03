@@ -22,11 +22,13 @@ final class AccountLocatorTests: XCTestCase {
                        "deterministic — the receiving side recomputes it")
     }
 
-    /// The locator and the private scalar share the nonce as their salt; the domain prefix
-    /// in the password is what keeps them apart.
-    func testDomainIsDistinctFromTheKeyDerivationDomain() {
-        XCTAssertEqual(String(decoding: AccountLocator.domain, as: UTF8.self), "fidopass|ecies|idfp|v1")
-        XCTAssertNotEqual(AccountLocator.domain, MessageKeyService.scalarDomain)
+    /// The locator and the key material share the nonce as their salt; the domain prefix
+    /// in the password is what keeps them apart — and apart from the HPKE `info`.
+    func testDomainIsDistinctFromTheOtherMessageDomains() {
+        XCTAssertEqual(String(decoding: AccountLocator.domain, as: UTF8.self), "fidopass|hpke|idfp|v1")
+        XCTAssertNotEqual(AccountLocator.domain, MessageKeyService.ikmDomain)
+        XCTAssertNotEqual(AccountLocator.domain, MessageSealer.domain)
+        XCTAssertFalse(SaltFactory.messageSalt(nonce: MessageFixtures.nonce).starts(with: AccountLocator.domain))
     }
 
     func testWrongNonceLengthIsRefused() {
@@ -35,5 +37,5 @@ final class AccountLocatorTests: XCTestCase {
         XCTAssertNil(AccountLocator(bytes: Data(repeating: 1, count: 32)))
     }
 
-    static let frozenHex = "54c384ad213011cabd45f9eeac83bd39"
+    static let frozenHex = "1597dcc1ca95f46445e632916017cfc9"
 }

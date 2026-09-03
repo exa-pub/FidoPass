@@ -3,9 +3,9 @@ import CryptoKit
 @testable import FidoPassCore
 
 /// Messages outlive the build that sealed them: whatever is written today has to open years
-/// from now. The construction is therefore pinned three ways — against RFC 9180's own vector
-/// for the ciphersuite, against a message frozen here, and by the properties every AEAD
-/// has to have.
+/// from now. The construction is therefore pinned four ways — against RFC 9180's own vector
+/// for the ciphersuite, against a message sealed by plain HPKE with the documented inputs,
+/// against a message frozen here, and by the properties every AEAD has to have.
 final class MessageSealerTests: XCTestCase {
 
     private let sealer = MessageSealer()
@@ -43,8 +43,8 @@ final class MessageSealerTests: XCTestCase {
 
     func testWrongKeyIsRejected() throws {
         let sealed = try sealer.seal("secret", for: try MessageFixtures.url())
-        let otherScalar = try MessageFixtures.key(scalar: Data(repeating: 0x42, count: 32))
-        XCTAssertThrowsError(try sealer.open(sealed, with: otherScalar)) { error in
+        let otherKey = try MessageFixtures.key(privateKey: Data(repeating: 0x42, count: 32))
+        XCTAssertThrowsError(try sealer.open(sealed, with: otherKey)) { error in
             XCTAssertEqual(error as? MessageCryptoError, .authenticationFailed)
         }
         let otherNonce = try MessageFixtures.key(nonce: MessageFixtures.otherNonce)
@@ -92,17 +92,19 @@ final class MessageSealerTests: XCTestCase {
 
     // MARK: - The construction itself
 
-    /// RFC 9180 Appendix A.2 — DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20Poly1305,
-    /// base mode, encryption 0. Pins that `MessageSealer.ciphersuite` is exactly that suite.
+    /// RFC 9180 Appendix A.1 — DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM, base
+    /// mode, encryption 0 — end to end: the recipient's key pair from the RFC's `ikmR`
+    /// through `DHKEM`, then the RFC's ciphertext through `MessageSealer.ciphersuite`. Pins
+    /// that the suite is exactly that one and that the key pair is the RFC's.
     func testRecipientMatchesTheRFC9180Vector() throws {
-        let recipientKey = try Curve25519.KeyAgreement.PrivateKey(
-            rawRepresentation: Data(hexString: "8057991eef8f1f1af18f4a9491d16a1ce333f695d4db8e38da75975c4478e0fb"))
-        let enc = Data(hexString: "1afa08d3dec047a643885163f1180476fa7ddb54c6a8029ea33f95796bf2ac4a")
+        let pair = try DHKEM.deriveKeyPair(ikm: Data(hexString: "6db9df30aa07dd42ee5e8181afdb977e538f5e1fec8a06223f33f7013e525037"))
+        XCTAssertEqual(pair.publicKey.hexString, "3948cfe0ad1ddb695d780e59077195da6c56506b027329794ab02bca80815c4d")
+        let enc = Data(hexString: "37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431")
         let info = Data(hexString: "4f6465206f6e2061204772656369616e2055726e")
         let aad = Data(hexString: "436f756e742d30")
-        let ciphertext = Data(hexString: "1c5250d8034ec2b784ba2cfd69dbdb8af406cfe3ff938e131f0def8c8b60b4db21993c62ce81883d2dd1b51a28")
+        let ciphertext = Data(hexString: "f938558b5d72f1a23810b4be2ab4f84331acc02fc97babc53a52ae8218a355a96d8770ac83d07bea87e13c512a")
 
-        var recipient = try HPKE.Recipient(privateKey: recipientKey,
+        var recipient = try HPKE.Recipient(privateKey: Curve25519.KeyAgreement.PrivateKey(rawRepresentation: pair.privateKey),
                                            ciphersuite: MessageSealer.ciphersuite,
                                            info: info,
                                            encapsulatedKey: enc)
@@ -110,21 +112,55 @@ final class MessageSealerTests: XCTestCase {
         XCTAssertEqual(String(decoding: plaintext, as: UTF8.self), "Beauty is truth, truth beauty")
     }
 
+    /// What another implementation has to do to seal for us: HPKE base mode under the link's
+    /// public key, `info` as documented, no `aad`, `enc ‖ ct` as content. Driven through
+    /// CryptoKit directly rather than through `MessageSealer`, so that the inputs are the
+    /// documented ones and nothing else.
+    func testAMessageSealedWithPlainHPKEOpens() throws {
+        let key = try MessageFixtures.key()
+        let recipient = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: key.url.publicKey)
+        let info = MessageSealer.domain + key.url.nonce + key.url.locator.bytes
+        var sender = try HPKE.Sender(recipientKey: recipient, ciphersuite: MessageSealer.ciphersuite, info: info)
+        let ciphertext = try sender.seal(Data("from elsewhere".utf8))
+
+        let message = try SealedMessageURL(nonce: key.url.nonce,
+                                           locator: key.url.locator,
+                                           content: sender.encapsulatedKey + ciphertext)
+        XCTAssertEqual(try sealer.open(message, with: key), "from elsewhere")
+        XCTAssertEqual(message.content.count, 32 + "from elsewhere".utf8.count + 16)
+    }
+
     /// A message sealed by this build, frozen. If it stops opening, messages in the wild
-    /// have become unreadable — and the change is wrong unless it ships as `blobv2`.
+    /// have become unreadable — and the change is wrong unless it ships as `hpkeblobv2`.
     func testFrozenMessageOpens() throws {
         let key = try MessageFixtures.key()
         let sealed = try SealedMessageURL(parsing: Self.frozenMessage)
-        XCTAssertEqual(try sealer.open(sealed, with: key), "frozen on 2026-09-03 — do not thaw")
+        XCTAssertEqual(try sealer.open(sealed, with: key), "frozen on 2026-09-04 — do not thaw")
     }
 
+    /// `info` is the one binding of a message to its key: the nonce and the locator, behind
+    /// the domain. A message sealed under an `info` for another locator does not open even
+    /// when the link's own fields say it should.
     func testInfoBindsTheKeyToTheMessage() throws {
-        let url = try MessageFixtures.url()
-        let info = MessageSealer.info(nonce: url.nonce, locator: url.locator)
+        let key = try MessageFixtures.key()
+        let info = MessageSealer.info(nonce: key.url.nonce, locator: key.url.locator)
         XCTAssertEqual(info.prefix(MessageSealer.domain.count), MessageSealer.domain)
         XCTAssertEqual(info.count, MessageSealer.domain.count + 32 + 16)
-        XCTAssertEqual(String(decoding: MessageSealer.domain, as: UTF8.self), "fidopass|ecies|blob|v1")
+        XCTAssertEqual(String(decoding: MessageSealer.domain, as: UTF8.self), "fidopass|hpke|info|v1")
+
+        let otherLocator = try MessageFixtures.locator(nonce: MessageFixtures.otherNonce)
+        let recipient = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: key.url.publicKey)
+        var sender = try HPKE.Sender(recipientKey: recipient,
+                                     ciphersuite: MessageSealer.ciphersuite,
+                                     info: MessageSealer.info(nonce: key.url.nonce, locator: otherLocator))
+        let ciphertext = try sender.seal(Data("misbound".utf8))
+        let message = try SealedMessageURL(nonce: key.url.nonce,
+                                           locator: key.url.locator,
+                                           content: sender.encapsulatedKey + ciphertext)
+        XCTAssertThrowsError(try sealer.open(message, with: key)) { error in
+            XCTAssertEqual(error as? MessageCryptoError, .authenticationFailed)
+        }
     }
 
-    static let frozenMessage = "fidopass://blobv1?nonce=AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw&idfp=VMOErSEwEcq9RfnurIO9OQ&content=dQOxHmQ_BtE6JsKQb8VGv1VbVTgc-1exDIyFB0pawCGvz-n_xc2AWBoFfXnqQmbTShRU2TyLIc92fCpNjesPDXxU2kQLfj0czSy1C2eRlAiZpIhj"
+    static let frozenMessage = "https://fidopass.org/link#hpkeblobv1?nonce=AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw&idfp=FZfcwcqV9GRF5jKRYBfPyQ&content=UYQyuFMtbgrHGFOfKywBJdW0z8Poem_7fLpZcrF_n1DqYOqz824Nv5Uj96quFjlFG3VolME-CFC1oSmUd3bODFIuEkauS815AMQgCEvaIbiNCKJR"
 }

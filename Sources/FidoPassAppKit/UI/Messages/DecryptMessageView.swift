@@ -35,8 +35,8 @@ struct DecryptMessageView: View {
             HStack(spacing: 8) {
                 Image(systemName: "envelope.badge.shield.half.filled")
                     .foregroundStyle(Color.accentColor)
-                    .help("The sealed message — a fidopass://blobv1 link")
-                TextField("Paste a fidopass://blobv1 link", text: $store.sealedText)
+                    .help("The sealed message — a fidopass.org/link or fidopass:// link")
+                TextField("Paste a message link", text: $store.sealedText)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
                     .autocorrectionDisabled()

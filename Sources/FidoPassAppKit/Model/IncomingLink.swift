@@ -2,7 +2,9 @@ import Foundation
 import FidoPassCore
 
 /// A `fidopass://` link handed to the app by the system — clicked in a browser, a chat, a
-/// mail — sorted into what it is.
+/// mail — sorted into what it is. The `https://fidopass.org/link#…` form is what the app
+/// writes and what people paste; the system delivers only the custom scheme, which is what
+/// the link page on that domain will redirect to.
 ///
 /// Untrusted input: any web page can put such a link in front of the user. It goes through
 /// exactly the strict readers a pasted link goes through, and the outcome only ever opens a

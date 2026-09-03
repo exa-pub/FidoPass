@@ -7,18 +7,16 @@ import Foundation
 /// normal editing look broken — and the states that really are wrong say what to do about
 /// them: ask for the link again, migrate the account, plug in the other key.
 public enum MessageCryptoError: Error, Equatable, LocalizedError, Sendable {
-    /// Not a whole link yet. The ordinary state of a field being typed into.
+    /// Not a whole link yet. The ordinary state of a field being typed into — and of a key
+    /// link cut off before its checksum, which is required but looks exactly like that.
     case incomplete
     /// A link, but not one of ours — or one of ours that is not in canonical form.
     case notFidoPassURL
     /// One of ours, of the other kind: a key where a message was expected, or the reverse.
     case unexpectedKind(String)
-    /// One of ours, written by a format this build does not know (`keyv2`, say).
+    /// One of ours, written by a format this build does not know (`hpkev2`, say).
     case unsupportedVersion(String)
-    /// A key link without its `#keyfp=` fragment. Some channels drop fragments; the key is
-    /// refused rather than accepted without its checksum.
-    case checksumMissing
-    /// The fingerprint in the fragment does not match the link — damaged in transit.
+    /// The fingerprint in `keyfp` does not match the link — damaged in transit.
     case checksumMismatch
     /// The public key is not a usable X25519 point.
     case invalidPublicKey
@@ -38,11 +36,9 @@ public enum MessageCryptoError: Error, Equatable, LocalizedError, Sendable {
         case .notFidoPassURL:
             return "Not a FidoPass link"
         case .unexpectedKind(let host):
-            return host.hasPrefix("key") ? "This is an encryption key, not a message" : "This is a message, not an encryption key"
+            return host == EncryptionKeyURL.host ? "This is an encryption key, not a message" : "This is a message, not an encryption key"
         case .unsupportedVersion(let host):
             return "Written by a newer version of FidoPass (\(host))"
-        case .checksumMissing:
-            return "The link is incomplete — ask for it again, with everything after the # sign"
         case .checksumMismatch:
             return "The link was damaged in transit — ask for it again"
         case .invalidPublicKey:

@@ -65,25 +65,25 @@ final class V2DerivationVectorsTests: XCTestCase {
         let nonce = MessageFixtures.nonce
         let v2 = AccountHandle.v2Fixture(id: "vault", kind: .portable, identity: identity, mask: mask)
         let key = try service.deriveMessageKey(v2, nonce: nonce, pinProvider: nil)
-        XCTAssertEqual(key.url.publicKey.hexString, "e4c6931b28f0d300327ca79084a8b49a4aa2fa15ce3432c1ab0dc5fd1c063601")
+        XCTAssertEqual(key.url.publicKey.hexString, "f5bfd00d18b227928b82e0405e45e8dd16a51a795935fce03d962ad81831db77")
 
-        // The v1 account has no identity — no locator — so only the scalar can be compared.
+        // The v1 account has no identity — no locator — so only the key pair can be compared.
         let v1Master = PortableMasterKey.combine(fixed, mask)
-        let v1Secret = Data(HMAC<SHA256>.authenticationCode(for: SaltFactory.portableMessageSalt(nonce: nonce), using: SymmetricKey(data: v1Master)))
-        let v1Scalar = try Argon2.id(password: MessageKeyService.scalarDomain + v1Secret, salt: nonce, parameters: .v1, outputByteCount: 32)
-        XCTAssertEqual(key.url.publicKey, try MessageKey.publicKey(for: v1Scalar))
+        let v1Secret = Data(HMAC<SHA256>.authenticationCode(for: SaltFactory.messageSalt(nonce: nonce), using: SymmetricKey(data: v1Master)))
+        let v1Ikm = try Argon2.id(password: MessageKeyService.ikmDomain + v1Secret, salt: nonce, parameters: .v1, outputByteCount: 32)
+        XCTAssertEqual(key.url.publicKey, try DHKEM.deriveKeyPair(ikm: v1Ikm).publicKey)
     }
 
-    /// The v2 local message key: the raw answer under the v2 message salt, then the frozen
-    /// ECIES tail.
+    /// The v2 local message key: the raw answer under the message salt, then the frozen
+    /// HPKE tail — argon2id and `DeriveKeyPair`.
     func testLocalMessageKeyIsPinned() throws {
         let mock = derivation()
         let service = MessageKeyService(secretDerivationService: mock)
         let account = AccountHandle.v2Fixture(id: "disk", kind: .local, identity: identity)
         let key = try service.deriveMessageKey(account, nonce: MessageFixtures.nonce, pinProvider: nil)
         XCTAssertEqual(mock.deriveMessageSecretCalls.count, 1)
-        XCTAssertEqual(key.url.publicKey.hexString, "75fc03ea2a26573484f1ee9741dc13e1c0aa3c7687a719569b9e33600e2b8634")
-        XCTAssertEqual(key.url.locator.bytes.hexString, "b814e04b9547c8312875060df40e72f2")
+        XCTAssertEqual(key.url.publicKey.hexString, "8c2338937e539280959bfaa628c3c0c97f0a9e8785a1da7605311eb063aa3a37")
+        XCTAssertEqual(key.url.locator.bytes.hexString, "39d755fabbbb7d6ec99a54ff043bf9ab")
     }
 
     /// The salts the real derivation service would send to the key for these accounts.
@@ -92,7 +92,7 @@ final class V2DerivationVectorsTests: XCTestCase {
                        "346ef5e42fd931efdcfedc85cdbd31b3d1b5289e337c17a2dc604f8954419a7f")
         XCTAssertEqual(SaltFactory.fixedComponentSaltV2().hexString,
                        "5d267585fe91a12df6e27959f2be9e38fc12c0f55b4077826211f36b161af4fd")
-        XCTAssertEqual(SaltFactory.messageKeySaltV2(nonce: MessageFixtures.nonce).hexString, "fb1e3c2519783de1acd465c95c29d81ca422f30483df53ceb8a02d78f723968d")
+        XCTAssertEqual(SaltFactory.messageSalt(nonce: MessageFixtures.nonce).hexString, "7e7abd979da6b556e7187e5fef573407579a800aaf4268c39c25dd33cb3a6ae3")
     }
 
     /// Nothing is derived from a credential without a usable record.

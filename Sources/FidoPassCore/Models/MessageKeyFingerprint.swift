@@ -1,20 +1,23 @@
 import Foundation
 
 /// Six bytes that stand for an encryption key: shown as six emoji, written as twelve hex
-/// digits after `#keyfp=` in the key's link.
+/// digits in the key link's `&keyfp=` parameter.
 ///
-/// argon2id over the canonical link text, deliberately slow: 48 bits is short enough to
-/// compare by eye and, at ~10 ms and 32 MiB per attempt, long enough that nobody forges a
-/// key with the same six emoji. The same trick as Signal's safety numbers.
+/// argon2id over the link's payload — `hpkev1?…` up to `&keyfp=`, without the carrier —
+/// deliberately slow: 48 bits is short enough to compare by eye and, at ~10 ms and 32 MiB per
+/// attempt, long enough that nobody forges a key with the same six emoji. The same trick as
+/// Signal's safety numbers. Over the payload rather than the whole link so that the same key
+/// spells the same emoji whether it travels as `https://fidopass.org/link#…` or as
+/// `fidopass://…`.
 ///
-/// The fragment is a checksum, not a signature — whoever replaces the public key can
-/// recompute it. What protects against substitution is the person comparing the emoji with
-/// the key's owner over another channel, and the UI says so.
+/// `keyfp` is a checksum, not a signature — whoever replaces the public key can recompute
+/// it. What protects against substitution is the person comparing the emoji with the key's
+/// owner over another channel, and the UI says so.
 public struct MessageKeyFingerprint: Hashable, Sendable {
     public static let byteCount = 6
     /// Fixed and printable, so the fingerprint can be checked with the `argon2` command-line
     /// tool without decoding anything:
-    /// `printf '%s' '<link before #>' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r`
+    /// `printf '%s' 'hpkev1?nonce=…&pubkey=…&idfp=…' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r`
     static let salt = Data("fidopass-keyfp-v1".utf8)
 
     public let bytes: Data
@@ -38,9 +41,9 @@ public struct MessageKeyFingerprint: Hashable, Sendable {
         self.init(bytes: bytes)
     }
 
-    /// The fingerprint of a link in canonical form — everything before the `#`.
-    static func compute(canonical: String) throws -> MessageKeyFingerprint {
-        let tag = try Argon2.id(password: Data(canonical.utf8),
+    /// The fingerprint of a link's payload — everything after the carrier, up to `&keyfp=`.
+    static func compute(payload: String) throws -> MessageKeyFingerprint {
+        let tag = try Argon2.id(password: Data(payload.utf8),
                                 salt: salt,
                                 parameters: .v1,
                                 outputByteCount: byteCount)
