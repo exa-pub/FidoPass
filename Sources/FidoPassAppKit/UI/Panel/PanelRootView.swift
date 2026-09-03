@@ -35,7 +35,8 @@ struct PanelRootView: View {
                 Divider()
                 content
                 // One strip at the bottom: what just happened, or — when nothing did — what
-                // the keyboard can do here.
+                // the keyboard can do here. Both are `PanelMetrics.footerHeight` tall, so a
+                // status expiring does not resize the panel; `PanelFooterTests` pins it.
                 if store.statusText != nil || store.error != nil {
                     PanelFooterView(status: store.statusText,
                                     error: store.error,

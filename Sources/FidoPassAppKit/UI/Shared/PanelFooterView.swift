@@ -2,6 +2,10 @@ import SwiftUI
 import AppKit
 
 /// One line of feedback under the content: what just happened, or what went wrong.
+///
+/// Takes the same height as `PanelHintsView`, which it replaces for a few seconds: the
+/// panel must not resize when the status expires. A message long enough to wrap still
+/// grows the strip — that beats truncating it.
 struct PanelFooterView: View {
     let status: String?
     let error: PresentedError?
@@ -28,6 +32,7 @@ struct PanelFooterView: View {
         .font(.caption)
         .padding(.horizontal, PanelMetrics.padding)
         .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: PanelMetrics.footerHeight)
         .background(.quaternary.opacity(0.4))
     }
 }

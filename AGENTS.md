@@ -208,7 +208,7 @@ https://fidopass.org/link#hpkeblobv1?nonce=<32 B>&idfp=<16 B>&content=<enc 32 B 
 
 - **One payload, two carriers** (`LinkCarrier`). The app writes `https://fidopass.org/link#…`
   and reads that and `fidopass://…` alike; the system delivers only the custom scheme
-  (`CFBundleURLTypes`), which is what the link page on that domain will redirect to. The
+  (`CFBundleURLTypes`), which is what the link page on that domain redirects to. The
   payload rides in the fragment and nowhere else: a fragment never reaches the server, so
   `fidopass.org` sees neither keys nor messages nor locators — a rule for the page as much
   as for the app.
@@ -367,6 +367,8 @@ Sources/FidoPassAppKit/
 
 Sources/FidoPassApp/   FidoPassMain.swift, the app icon for build_app.sh
 Sources/CArgon2/       the Argon2 reference implementation, vendored (see its README.md)
+fe/link/index.html     fidopass.org/link — hands the fragment on to fidopass:// and loads
+                       nothing else, so the payload never leaves the browser
 ```
 
 The stores are separate observable objects on purpose: a clipboard countdown ticking once a

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<!-- The payload after the # is an encryption key or a sealed message. A fragment is never
+     sent to the server, and this policy makes sure nothing loaded by the page can see it
+     either: no external scripts, styles, images or requests of any kind. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>FidoPass link</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: #f5f5f7; color: #1d1d1f;
+  }
+  main { max-width: 28em; padding: 2em 1.5em; text-align: center; }
+  h1 { font-size: 1.5em; margin: 0 0 .5em; }
+  p { margin: .5em 0; }
+  a { color: #0071e3; }
+  .button {
+    display: inline-block; margin: 1em 0; padding: .6em 1.4em; border-radius: .6em;
+    background: #0071e3; color: #fff; text-decoration: none; font-weight: 600;
+  }
+  .muted { opacity: .65; font-size: .9em; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1c1c1e; color: #f5f5f7; }
+    a { color: #2997ff; }
+    .button { background: #2997ff; color: #000; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>FidoPass</h1>
+  <p id="status">Opening in FidoPass…</p>
+  <p><a id="open" class="button" hidden>Open in FidoPass</a></p>
+  <p id="hint" class="muted" hidden>
+    Nothing happened? FidoPass is a macOS app —
+    <a href="https://github.com/exa-pub/FidoPass/releases/latest">download it</a>,
+    then open this link again.
+  </p>
+</main>
+<script>
+(function () {
+  // https://fidopass.org/link#{X}  ->  fidopass://{X}
+  // The payload is passed on verbatim; the app is the one that validates it.
+  var payload = location.hash.slice(1);
+  var status = document.getElementById("status");
+  var open = document.getElementById("open");
+  var hint = document.getElementById("hint");
+
+  if (!payload) {
+    status.textContent = "This page opens FidoPass links — an encryption key or a sealed " +
+      "message — in the app. There is nothing after the # in this address.";
+    return;
+  }
+
+  var kind = payload.split("?")[0];
+  var what = kind === "hpkev1" ? "an encryption key"
+           : kind === "hpkeblobv1" ? "a sealed message"
+           : "a link";
+  var target = "fidopass://" + payload;
+
+  // The button is the fallback: browsers may ask before opening an app from a page load,
+  // and a click is what reliably triggers that prompt.
+  open.href = target;
+  open.hidden = false;
+  hint.hidden = false;
+  status.textContent = "This is " + what + " for FidoPass. Opening in the app…";
+
+  location.replace(target);
+})();
+</script>
+</body>
+</html>

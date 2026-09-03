@@ -4,8 +4,8 @@ import Foundation
 /// same in both; the carrier is what comes before it.
 ///
 /// `.web` is what the app writes: an `https://` link is made clickable everywhere, says what
-/// it is, and someone without the app lands on a page that explains — and, once that page
-/// exists, hands the payload on to `fidopass://`. `.app` is what the system delivers to the
+/// it is, and someone without the app lands on a page that explains and hands the payload
+/// on to `fidopass://` (`fe/link/index.html`). `.app` is what the system delivers to the
 /// app on a click (`CFBundleURLTypes`), so it has to stay readable for that redirect to
 /// work. Both are read; the app never has to guess which one it was given.
 ///
