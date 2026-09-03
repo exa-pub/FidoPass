@@ -172,6 +172,9 @@ public final class MockSecretDerivationService: SecretDeriving, @unchecked Senda
     public var deriveFixedClosure: ((AccountHandle, (@Sendable () -> String?)?) throws -> Data)?
     public private(set) var deriveFixedCalls: [AccountHandle] = []
 
+    public var deriveMessageSecretClosure: ((AccountHandle, Data, (@Sendable () -> String?)?) throws -> Data)?
+    public private(set) var deriveMessageSecretCalls: [(AccountHandle, Data)] = []
+
     public func deriveSecret(_ handle: AccountHandle,
                              label: String,
                              revision: Int,
@@ -188,6 +191,16 @@ public final class MockSecretDerivationService: SecretDeriving, @unchecked Senda
         deriveFixedCalls.append(handle)
         if let closure = deriveFixedClosure {
             return try closure(handle, pinProvider)
+        }
+        return Data()
+    }
+
+    public func deriveMessageSecret(_ handle: AccountHandle,
+                                    nonce: Data,
+                                    pinProvider: (@Sendable () -> String?)?) throws -> Data {
+        deriveMessageSecretCalls.append((handle, nonce))
+        if let closure = deriveMessageSecretClosure {
+            return try closure(handle, nonce, pinProvider)
         }
         return Data()
     }

@@ -69,12 +69,12 @@ final class DerivationContractTests: XCTestCase {
 
     /// The identity names the account and takes no part in deriving from it: payloads with
     /// the same material and different identities — or none at all — produce the same
-    /// password and open each other's encrypted text. This is what makes migrating an
-    /// account a rename of a field on the key rather than a change of key.
+    /// password, and the ones with an identity issue the same message key. This is what
+    /// makes migrating an account a rename of a field on the key rather than a change of key.
     func testIdentityDoesNotAffectDerivation() throws {
         let secret = Self.secretService()
         let generator = PasswordGenerator(secretDerivationService: secret)
-        let encryption = SecretEncryptionService(secretDerivationService: secret)
+        let messageKeys = MessageKeyService(secretDerivationService: secret)
         let external = Data(repeating: 0x3C, count: 32)
         let variants = [
             PortablePayload(external: external)!,
@@ -89,14 +89,13 @@ final class DerivationContractTests: XCTestCase {
         }
         XCTAssertEqual(Set(passwords).count, 1, "every identity, and no identity, derives the same password")
 
-        let keys = try handles.map {
-            try encryption.deriveEncryptionKey($0, label: "vault", parameters: .v1, pinProvider: nil)
+        // Message keys need an identity for the locator, so the legacy payload is out; the
+        // other three — every identity — share one public key.
+        let nonce = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 3 &+ 1) })
+        let publicKeys = try handles.dropFirst().map {
+            try messageKeys.deriveMessageKey($0, nonce: nonce, pinProvider: nil).url.publicKey
         }
-        let sealed = try encryption.seal("plain", with: keys[0])
-        for key in keys.dropFirst() {
-            XCTAssertEqual(try encryption.open(sealed, with: key), "plain",
-                           "text sealed before migration opens after it")
-        }
+        XCTAssertEqual(Set(publicKeys).count, 1, "every identity issues the same message key")
     }
 
     func testPortableLabelIsolation() {

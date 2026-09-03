@@ -7,7 +7,7 @@ import FidoPassCore
 /// Everything that used to be assembled inside the panel's store lives here: one key worker,
 /// the stores, the coordinators, and the reactions that cross store boundaries — a key
 /// going away has to reach the account list, the generated result, the manager's inventory
-/// and the editor window, and none of those belongs to the panel.
+/// and the receiving window, and none of those belongs to the panel.
 @MainActor
 final class AppContainer {
 
@@ -20,7 +20,7 @@ final class AppContainer {
     let labels: LabelStore
     let clipboard: ClipboardService
     let touchGate: TouchGate
-    let editor: EditorCoordinator
+    let decryptor: DecryptorCoordinator
     let router: WindowRouter
     let reset: ResetCoordinator
     /// The menu-bar panel's store.
@@ -57,7 +57,7 @@ final class AppContainer {
                                             pin: { [weak deviceStore] path in deviceStore?.pin(for: path) })
         let labelStore = labels ?? LabelStore()
         let touchGate = TouchGate()
-        let editor = EditorCoordinator(router: router)
+        let decryptor = DecryptorCoordinator(router: router)
         let reset = ResetCoordinator(devices: deviceStore,
                                      accounts: accountStore,
                                      labels: labelStore,
@@ -72,7 +72,7 @@ final class AppContainer {
         self.labels = labelStore
         self.clipboard = clipboard
         self.touchGate = touchGate
-        self.editor = editor
+        self.decryptor = decryptor
         self.router = router
         self.reset = reset
         self.manager = ManagerStore(devices: deviceStore,
@@ -87,7 +87,7 @@ final class AppContainer {
                               labels: labelStore,
                               preferences: settings,
                               touchGate: touchGate,
-                              editor: editor,
+                              decryptor: decryptor,
                               router: router)
 
         settings.$lockTimeout
@@ -109,10 +109,10 @@ final class AppContainer {
     private func keyDidClose(_ path: String) {
         // The wizard first: it is waiting for exactly this.
         reset.keyDidClose(path)
-        // An open editor holds a derived key for one of this key's accounts. Locking has to
-        // take that with it, or "locked" would describe the account list while the secrets
-        // stayed reachable in another window.
-        editor.close(ifBoundTo: path)
+        // An open receiving window holds derived keys for this key's accounts. Locking has
+        // to take that with it, or "locked" would describe the account list while the
+        // messages stayed readable in another window.
+        decryptor.close(ifBoundTo: path)
         accounts.drop(devicePath: path)
         generation.dropEverything(forDevicePath: path)
         // A key that merely locked keeps what it said about *itself* — that is public
@@ -127,15 +127,29 @@ final class AppContainer {
         panel.keyDidClose(path)
     }
 
-    /// The user walked away: an editing session left open would keep both the key and the
-    /// plaintext on screen behind the lock screen, and a copied password would still be on
-    /// the clipboard.
+    /// The user walked away: a receiving window left open would keep live keys and decrypted
+    /// text around behind the lock screen, and a copied password would still be on the
+    /// clipboard. The sending window stays — it holds no key material, and closing it would
+    /// throw away what was being written.
     private func sessionDidLock() {
-        editor.close(ifBoundTo: nil)
+        decryptor.close(ifBoundTo: nil)
         generation.clearClipboard()
         generation.dropEverything()
         accounts.dropAll()
         inventory.dropAll()
         panel.sessionDidLock()
+    }
+
+    // MARK: - Links from the system
+
+    /// A `fidopass://` link the user clicked somewhere. Read off the main actor — a key link
+    /// costs an argon2id — then handed to the panel, which opens a window with it and
+    /// touches nothing. See `IncomingLink`.
+    func openLink(_ url: URL) {
+        let sealer = accounts.messages
+        Task { [weak self] in
+            let link = await IncomingLink.classify(url.absoluteString, sealer: sealer)
+            self?.panel.handleLink(link)
+        }
     }
 }

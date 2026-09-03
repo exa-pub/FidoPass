@@ -27,8 +27,8 @@ final class AccountStore: ObservableObject {
         self.pinProviderFor = pinProvider
     }
 
-    /// Seals and opens text under a derived key — what the editor needs, and nothing else.
-    var cipher: SecretCipher { worker.backend.cipher }
+    /// Seals and opens messages — what the message windows need, and nothing else.
+    var messages: MessageSealing { worker.backend.messages }
 
     func accounts(onDevice path: String) -> [AccountHandle] {
         accounts.filter { $0.devicePath == path }
@@ -162,8 +162,25 @@ final class AccountStore: ObservableObject {
         return try await worker.accounts { try $0.exportBackup(handle, pinProvider: provider) }
     }
 
-    func deriveEncryptionKey(for handle: AccountHandle, label: String) async throws -> EncryptionKey {
+    /// The account's message key for a nonce. One touch.
+    func deriveMessageKey(for handle: AccountHandle, nonce: Data) async throws -> MessageKey {
         guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
-        return try await worker.accounts { try $0.deriveEncryptionKey(handle, label: label, pinProvider: provider) }
+        return try await worker.accounts { try $0.deriveMessageKey(handle, nonce: nonce, pinProvider: provider) }
+    }
+
+    /// The account on a key that a message is for, found by its locator.
+    ///
+    /// Nothing on the key is asked: the locators come from the identities already read. One
+    /// argon2id per account, which is why this is async and runs off the main actor. An
+    /// account from before identities has no locator and cannot match.
+    func accountMatching(locator: AccountLocator, nonce: Data, onDevice path: String) async throws -> AccountHandle? {
+        let candidates = accounts(onDevice: path).filter { $0.account.identity != nil }
+        let sealer = messages
+        return try await Task.detached {
+            try candidates.first { candidate in
+                guard let identity = candidate.account.identity else { return false }
+                return try sealer.locator(nonce: nonce, identity: identity) == locator
+            }
+        }.value
     }
 }

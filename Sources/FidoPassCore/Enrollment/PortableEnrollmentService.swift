@@ -28,7 +28,7 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
                                                   askPIN: askPIN)
 
         onStep?(.derivingBackupKey)
-        let fixed = try fixedComponent(handle, pinProvider: askPIN)
+        let fixed = try PortableMasterKey.fixedComponent(handle, using: secretDerivationService, pinProvider: askPIN)
 
         let masterKey = imported?.masterKey ?? CryptoHelpers.randomBytes(count: PortableBackup.masterKeyByteCount)
         // The payload written is always the current layout. A fresh account gets a random
@@ -37,7 +37,7 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
         // than to a payload that would need migrating the moment it was created.
         let identity = imported?.identity ?? .random()
 
-        guard let payload = PortablePayload(external: Data(zip(masterKey, fixed).map { $0 ^ $1 }),
+        guard let payload = PortablePayload(external: PortableMasterKey.combine(masterKey, fixed),
                                             identity: identity) else {
             throw FidoPassError.invalidState("Failed to build portable payload")
         }
@@ -53,12 +53,11 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
     func exportBackup(_ handle: AccountHandle,
                       pinProvider: (@Sendable () -> String?)?) throws -> PortableBackup {
         let payload = try portablePayload(of: handle)
-        let fixed = try fixedComponent(handle, pinProvider: pinProvider)
+        let masterKey = try PortableMasterKey.recover(handle, using: secretDerivationService, pinProvider: pinProvider)
         // A payload without an identity yields a backup without one — the 32 bytes earlier
         // versions printed, byte for byte. Migration is what adds the identity, and it is
         // the user's to do; export must not depend on it.
-        guard let backup = PortableBackup(masterKey: Data(zip(fixed, payload.external).map { $0 ^ $1 }),
-                                          identity: payload.identity) else {
+        guard let backup = PortableBackup(masterKey: masterKey, identity: payload.identity) else {
             throw FidoPassError.invalidState("Failed to build the backup")
         }
         return backup
@@ -89,14 +88,5 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
             throw FidoPassError.invalidState("Portable account is missing its key material")
         }
         return payload
-    }
-
-    private func fixedComponent(_ handle: AccountHandle,
-                                pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        let fixed = try secretDerivationService.deriveFixedComponent(handle, pinProvider: pinProvider)
-        guard fixed.count == PortablePayload.externalByteCount else {
-            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
-        }
-        return fixed
     }
 }

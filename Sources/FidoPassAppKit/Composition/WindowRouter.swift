@@ -1,4 +1,5 @@
 import Foundation
+import FidoPassCore
 
 /// The windows, as the stores see them.
 ///
@@ -12,8 +13,14 @@ protocol WindowRouter: AnyObject {
     func closePanel()
     func openManager()
     func openPreferences()
-    func openEditor(_ session: CryptoEditorSession)
-    func closeEditor()
+    /// The sending window, optionally with a key already in it — the one the panel just
+    /// issued for `account`, or one clicked as a link. One window; a second call fills the
+    /// one that is open.
+    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?)
+    /// The receiving window, over the store that binds it to a key. One window; a store
+    /// that is already on screen is brought to the front.
+    func openDecryptor(_ store: MessageDecryptStore)
+    func closeDecryptor()
     /// Runs the save dialog. The outcome comes back through `PanelStore.recoverySheetFinished`.
     func saveRecoverySheet(_ sheet: RecoverySheet)
     func quit()

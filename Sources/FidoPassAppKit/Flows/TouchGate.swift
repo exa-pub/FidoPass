@@ -30,6 +30,8 @@ final class TouchGate: ObservableObject {
     var panelPrompt: TouchPrompt? { surface == .panel ? prompt : nil }
     /// The prompt the manager draws.
     var managerPrompt: TouchPrompt? { surface == .manager ? prompt : nil }
+    /// The prompt the receiving window draws.
+    var decryptorPrompt: TouchPrompt? { surface == .decryptor ? prompt : nil }
     var panelBusyTitle: String? { surface == .panel ? busyTitle : nil }
     /// Whether the panel is in the middle of something — the reason it refuses to close.
     var isPanelBusy: Bool { isWorking && surface == .panel }

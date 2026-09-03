@@ -29,14 +29,7 @@ final class PasswordGenerator: PasswordGenerating, Sendable {
     private func portableSecret(_ handle: AccountHandle,
                                 label: String,
                                 pinProvider: (@Sendable () -> String?)?) throws -> Data {
-        guard let payload = handle.account.portable else {
-            throw FidoPassError.invalidState("Portable account is missing its key material")
-        }
-        let fixed = try secretDerivationService.deriveFixedComponent(handle, pinProvider: pinProvider)
-        guard fixed.count == PortablePayload.externalByteCount else {
-            throw FidoPassError.invalidState("Fixed component must be \(PortablePayload.externalByteCount) bytes")
-        }
-        let imported = Data(zip(fixed, payload.external).map { $0 ^ $1 })
+        let imported = try PortableMasterKey.recover(handle, using: secretDerivationService, pinProvider: pinProvider)
         let salt = SaltFactory.portableLabelSalt(label)
         let mac = HMAC<SHA256>.authenticationCode(for: salt, using: SymmetricKey(data: imported))
         return Data(mac)

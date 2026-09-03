@@ -407,7 +407,7 @@ struct AccountActionsMenu: View {
             Button("Copy password") { Task { await store.copyPassword(for: ref) } }
             Button("Reveal password") { Task { await store.revealPassword(for: ref) } }
             Divider()
-            Button("Encrypt text…") { Task { await store.openEncryptEditor(for: ref) } }
+            Button("Encryption key…") { Task { await store.issueEncryptionKey(for: ref) } }
             Button("Save recovery sheet…") { store.saveRecoverySheet(for: ref) }
             if account.kind == .portable {
                 Button("Backup key…") { Task { await store.showBackupKey(for: ref) } }

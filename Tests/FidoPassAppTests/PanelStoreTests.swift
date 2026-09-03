@@ -342,14 +342,14 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertNotNil(store.migrationDraft.identity, "a random identity is offered")
     }
 
-    func testEncryptingWithALegacyAccountRoutesToMigration() async {
-        let (store, _, _, old) = await Self.legacyStore()
-        store.setLabel("notes")
-        await store.openEncryptEditor(for: old)
+    func testIssuingAKeyForALegacyAccountRoutesToMigration() async {
+        let (store, backend, _, old) = await Self.legacyStore()
+        await store.issueEncryptionKey(for: old)
 
         XCTAssertEqual(store.route, .migrate(old))
         let router = AppTestFactory.container(for: store).router as? RecordingWindowRouter
-        XCTAssertEqual(router?.openedEditors.count, 0, "no editor opens on an account without an identity")
+        XCTAssertEqual(router?.openedEncryptors.count, 0, "no key is issued for an account without an identity")
+        XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty, "and no touch is spent on it")
     }
 
     /// Rule 7 on real store state: with a legacy account selected, `⏎` migrates; with the
@@ -757,42 +757,147 @@ final class PanelStoreTests: XCTestCase {
     }
 }
 
-/// The editor holds a derived key for as long as its window is open, so every path that
-/// revokes access to an account has to take that window with it — otherwise "locked"
-/// describes the account list while the secrets stay reachable elsewhere.
+/// The receiving window holds derived keys for as long as it is open, so every path that
+/// revokes access to the key has to take that window with it — otherwise "locked" describes
+/// the account list while the messages stay readable elsewhere.
 @MainActor
-final class PanelEditorLifetimeTests: XCTestCase {
+final class PanelDecryptorLifetimeTests: XCTestCase {
 
-    func testLockingTheKeyClosesTheEditor() async {
+    func testLockingTheKeyClosesTheDecryptor() async {
         let (store, _, device) = await AppTestFactory.unlockedStore()
         let router = store.router as! RecordingWindowRouter
 
-        await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
-        XCTAssertEqual(store.editor.boundDevicePath, device.path)
-        XCTAssertEqual(router.openedEditors.count, 1)
+        store.openDecryptor()
+        XCTAssertEqual(store.decryptor.boundDevicePath, device.path)
+        XCTAssertEqual(router.openedDecryptors.count, 1)
+        XCTAssertEqual(router.panelClosed, 1, "the window takes over from the panel")
 
         store.lockSelectedKey()
-        XCTAssertEqual(router.editorClosed, 1, "locking must not leave a live key in an open window")
-        XCTAssertNil(store.editor.boundDevicePath)
+        XCTAssertEqual(router.decryptorClosed, 1, "locking must not leave live keys in an open window")
+        XCTAssertNil(store.decryptor.boundDevicePath)
+        XCTAssertNil(store.decryptor.store)
     }
 
-    func testUnpluggingTheKeyClosesTheEditor() async {
-        let (store, backend, device) = await AppTestFactory.unlockedStore()
+    func testUnpluggingTheKeyClosesTheDecryptor() async {
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
         let router = store.router as! RecordingWindowRouter
-        await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
+        store.openDecryptor()
 
         backend.devices = []
         await store.refresh()
-        XCTAssertEqual(router.editorClosed, 1)
+        XCTAssertEqual(router.decryptorClosed, 1)
     }
 
-    func testAnEmptyLabelIsRefusedBeforeTheKeyIsTouched() async {
-        let (store, backend, device) = await AppTestFactory.unlockedStore()
-        store.setLabel("   ")
-        await store.openEncryptEditor(for: AccountRef(accountId: "vault", devicePath: device.path))
+    /// Opening the window is not a request to the key; only its button is.
+    func testOpeningTheDecryptorTouchesNothing() async {
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        store.openDecryptor()
+        XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty)
+        XCTAssertNil(store.touch)
+    }
 
-        XCTAssertNotNil(store.error)
-        XCTAssertNil(store.editor.boundDevicePath)
+    /// A second request for the same key goes to the window that is open, message included.
+    func testASecondMessageLandsInTheOpenWindow() async throws {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        store.openDecryptor()
+        let first = try XCTUnwrap(store.decryptor.store)
+
+        let vault = try XCTUnwrap(store.accounts.account(AccountRef(accountId: "vault", devicePath: device.path)))
+        let message = try backend.sealedMessage("hi", for: vault)
+        store.openDecryptor(prefilled: message)
+
+        XCTAssertTrue(store.decryptor.store === first, "one receiving window per key")
+        XCTAssertEqual(router.openedDecryptors.count, 2, "brought to the front again")
+        XCTAssertEqual(first.message, message)
+    }
+}
+
+/// Issuing keys and receiving messages from the panel's side: what touches the key, what
+/// opens which window, and what a clicked link may do.
+@MainActor
+final class PanelMessageTests: XCTestCase {
+
+    func testIssuingAKeyIsOneTouchAndOpensTheSendingWindowWithIt() async throws {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        let vault = AccountRef(accountId: "vault", devicePath: device.path)
+
+        await store.issueEncryptionKey(for: vault)
+
+        XCTAssertEqual(backend.deriveMessageKeyCalls.map(\.accountId), ["vault"], "one touch")
+        XCTAssertEqual(router.openedEncryptors.count, 1)
+        XCTAssertEqual(router.openedEncryptors.first?.account?.id, "vault")
+        let key = try XCTUnwrap(router.openedEncryptors.first?.key)
+        XCTAssertEqual(key.nonce, backend.deriveMessageKeyCalls.first?.nonce, "the link carries the nonce the key was derived for")
+        XCTAssertEqual(router.panelClosed, 1, "the window takes over from the panel")
+        XCTAssertNil(store.touch)
+        XCTAssertNotNil(store.statusText)
+    }
+
+    /// Every press is a new nonce, hence a new key; the old one keeps working, because a
+    /// message carries its nonce.
+    func testEveryIssueMintsANewKey() async throws {
+        let (store, _, device) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        let vault = AccountRef(accountId: "vault", devicePath: device.path)
+
+        await store.issueEncryptionKey(for: vault)
+        await store.issueEncryptionKey(for: vault)
+
+        let keys = router.openedEncryptors.compactMap(\.key)
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertNotEqual(keys[0].nonce, keys[1].nonce)
+        XCTAssertNotEqual(keys[0].publicKey, keys[1].publicKey)
+    }
+
+    func testDecryptingWhileLockedWaitsForThePin() async throws {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        let vault = try XCTUnwrap(store.accounts.account(AccountRef(accountId: "vault", devicePath: device.path)))
+        let message = try backend.sealedMessage("hi", for: vault)
+
+        store.lockSelectedKey()
+        store.openDecryptor(prefilled: message)
+
+        XCTAssertEqual(store.route, .unlock)
+        XCTAssertEqual(store.pendingSummary, "Unlock to decrypt a message.")
+        XCTAssertEqual(router.panelOpened, 1, "the panel comes up for the PIN")
+        XCTAssertTrue(router.openedDecryptors.isEmpty)
+
+        store.pinDraft = "1234"
+        await store.submitPin()
+
+        XCTAssertEqual(router.openedDecryptors.count, 1, "unlocking continues what was asked for")
+        XCTAssertEqual(store.decryptor.store?.message, message)
+        XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty, "opening the window is not a request to the key")
+    }
+
+    /// A link from the system opens a window with its content, and that is all: no touch, no
+    /// PIN, nothing read from the key.
+    func testALinkOpensAWindowAndTouchesNothing() async throws {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        let vault = try XCTUnwrap(store.accounts.account(AccountRef(accountId: "vault", devicePath: device.path)))
+        let sealer = backend.messages
+        let readsBefore = backend.enumerateCallCount
+
+        let message = try backend.sealedMessage("hi", for: vault)
+        store.handleLink(await IncomingLink.classify(message.absoluteString, sealer: sealer))
+        XCTAssertEqual(router.openedDecryptors.count, 1)
+        XCTAssertEqual(store.decryptor.store?.message, message)
+
+        let key = try backend.encryptionKey(for: vault)
+        store.handleLink(await IncomingLink.classify(key.absoluteString, sealer: sealer))
+        XCTAssertEqual(router.openedEncryptors.first?.key, key)
+        XCTAssertNil(router.openedEncryptors.first?.account, "a clicked key was issued by someone else")
+
+        store.handleLink(.unrecognised(.checksumMissing))
+        XCTAssertEqual(router.panelOpened, 1, "a broken link is explained in the panel")
+        XCTAssertNotNil(store.statusText)
+
+        XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty)
         XCTAssertTrue(backend.generateCalls.isEmpty)
+        XCTAssertEqual(backend.enumerateCallCount, readsBefore, "nothing was read from the key for a link")
     }
 }

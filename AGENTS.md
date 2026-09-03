@@ -41,7 +41,7 @@ Three modules, one direction of dependency:
 
 ```
 FidoPassApp (entry point only) ──▶ FidoPassAppKit (AppKit shell + SwiftUI + stores)
-                                          └──▶ FidoPassCore ──▶ CLibfido2 (system)
+                                          └──▶ FidoPassCore ──▶ CLibfido2 (system), CArgon2 (vendored)
 ```
 
 - `FidoPassCore` — domain logic. No AppKit, no SwiftUI, no UI state.
@@ -49,6 +49,8 @@ FidoPassApp (entry point only) ──▶ FidoPassAppKit (AppKit shell + SwiftUI 
   place assembles it. Talks to the core through `KeyBackend`, never directly.
 - `FidoPassApp` — `@main` and nothing else.
 - `CLibfido2` — system-library shim.
+- `CArgon2` — the Argon2 reference implementation, vendored unmodified
+  (`Sources/CArgon2/README.md`). Its parameters are part of the message-key format.
 
 Release bundles are signed with a Developer ID and notarised. `build_app.sh` and
 `create_dmg.sh` sign whatever they produce when `FIDOPASS_SIGN_IDENTITY` names an identity,
@@ -64,11 +66,13 @@ AppDelegate ─▶ AppContainer (composition root, one per process)
                  │  LabelStore · Preferences · ClipboardService
                  ├─ TouchGate            the one door to the key: prompt / busy, per surface
                  ├─ ResetCoordinator     the reset wizard, arming and hot-plug included
-                 ├─ EditorCoordinator    which key the open editor is bound to
+                 ├─ DecryptorCoordinator which key the open receiving window is bound to
                  ├─ PanelStore           the menu-bar panel: route, selection, intent
                  │    ├─ PinFormModel    bootstrap form (the manager has its own)
                  │    └─ LabelEditor     the label row and its draft
                  ├─ ManagerStore         the manager window
+                 │  MessageEncryptStore  the sending window — made by AuxiliaryWindows, bound to no key
+                 │  MessageDecryptStore  the receiving window — made by PanelStore, bound to one key
                  └─ WindowRouter ◀─ AppWindows (PanelController + AuxiliaryWindows)
 ```
 
@@ -78,7 +82,8 @@ kept open across a save panel or a key touch, and does not give the PIN field fo
 Three shapes that the layout enforces:
 
 - **Every window has its own store.** `PanelStore` for the panel, `ManagerStore` for the
-  manager, `CryptoEditorSession` for the editor. What they share are the stores underneath
+  manager, `MessageEncryptStore` and `MessageDecryptStore` for the two message windows. What
+  they share are the stores underneath
   and `TouchGate`. The change-PIN form used to live on the panel's store and be edited by the
   manager's sheet; closing the panel wiped what was being typed in the other window.
 - **Stores do not know about windows.** Anything that opens or closes one is a method on
@@ -90,7 +95,8 @@ Three shapes that the layout enforces:
 ## Hard rules
 
 1. **`import CLibfido2` only inside `FidoPassCore`.** No raw C type — no `OpaquePointer` —
-   in any `public` signature.
+   in any `public` signature. The same for `CArgon2`: it is imported in exactly one file,
+   `Support/Argon2.swift`, and nothing above it sees anything but `Data`.
 2. **Views never call `FidoPassCore` or a store's key operation directly.** Everything that
    makes the authenticator wait for a finger goes through `TouchGate.withTouchPrompt`, and
    every silent wait through `TouchGate.withBusy`, each saying which surface it belongs to.
@@ -161,7 +167,11 @@ Three consequences worth knowing:
   forgotten one from firing on the next key plugged in. `ResetCoordinatorTests` and
   `WindowIsolationTests` pin both halves.
 - **A reset's touch prompt is drawn in the manager**, where the wizard is; the panel neither
-  shows it nor is held open by it. `TouchGate` carries the surface with the prompt.
+  shows it nor is held open by it. `TouchGate` carries the surface with the prompt. The
+  receiving window's touch — deriving a message key — is drawn there too (`.decryptor`).
+- **Issuing an encryption key is the panel's** (one touch, then the sending window opens with
+  the link). Sealing a message touches nothing and needs no key at all. Opening one is the
+  receiving window's: a touch per nonce, behind its own button — see "Message encryption".
 
 ### Authenticator settings
 
@@ -182,6 +192,52 @@ the only way back is a full reset, which erases every credential. The control th
 the current value as a fact and asks separately for a new, larger one. It used to be a stepper
 whose lower bound *was* the current value, so pressing "down" did nothing and the whole thing
 read as broken.
+
+### Message encryption
+
+Two links, both public, both a frozen format — `keyv1`/`blobv1` change the way `policy.version`
+does: never; new behaviour ships as `keyv2`/`blobv2`. `EncryptionKeyURLTests`,
+`SealedMessageURLTests`, `MessageSealerTests`, `MessageKeyServiceTests`, `Argon2Tests` and
+`EmojiAlphabetTests` pin the vectors; if one fails, someone's messages have become unreadable.
+
+```
+fidopass://keyv1?nonce=<32 B>&pubkey=<32 B>&idfp=<16 B>#keyfp=<6 B hex>      (164 chars)
+fidopass://blobv1?nonce=<32 B>&idfp=<16 B>&content=<enc 32 B ‖ ciphertext ‖ tag 16 B>
+```
+
+- **`secret` is the authenticator's raw answer**, never a password: local — `hmac-secret`
+  under `SaltFactory.messageKeySalt(nonce:)`; portable — HMAC under the master key. Both live
+  in the `fidopass|ecies|…` domain, so no password is computable from a message key or the
+  reverse. The X25519 scalar is argon2id over it (`MessageKeyService`), the locator `idfp` is
+  argon2id over the account's **identity** (not its name — names are guessable, identities
+  are not, and a backup on a second key has the same one), and the fingerprint `keyfp` is
+  argon2id over the canonical link text, 6 bytes, spelled as six emoji from
+  `EmojiAlphabet` (`docs/emoji-alphabet.md`). All three use `Argon2.Parameters.v1`
+  (`t=1, m=32 MiB, p=1`, ~11 ms on an M3), **frozen, never calibrated at run time** — a link
+  has to spell the same emoji on every machine.
+- **Messages are HPKE** (RFC 9180 base mode, X25519/HKDF-SHA256/ChaCha20-Poly1305, CryptoKit,
+  which is why the deployment target is macOS 14). `info` and `aad` bind the message to the
+  nonce and the locator. Anyone with the link can seal; the recipient cannot tell who did.
+- **A link is either canonical or not ours.** `FidoPassLinkParser` strips whitespace and
+  then demands exact order, base64url without padding, lower case; every prefix of a valid
+  link reads as `.incomplete`, never as an error, because that is what a field being typed
+  into looks like. A key link without its `#keyfp=` fragment is refused
+  (`.checksumMissing`), not accepted without its checksum.
+- **The fragment is a checksum, not a signature.** Whoever substitutes the public key can
+  recompute it. The emoji comparison with the key's owner is the whole defence, and the UI
+  says so.
+- **`fidopass://` links open in the app** (`CFBundleURLTypes` in `build_app.sh`,
+  `AppDelegate.application(_:open:)`, `IncomingLink`). A link is untrusted input from any web
+  page: it goes through the strict readers and opens a window with its text, and **nothing
+  about a link ever touches the key** — no touch, no PIN, no read. Decrypting is the window's
+  own button. `PanelMessageTests` pins the zero-call property.
+- **The receiving window closes with its key** (`DecryptorCoordinator`, like the old editor);
+  **the sending window does not close on a session lock** — it holds no key material, the
+  lock screen hides it, and closing it would throw away what was being written. A decision,
+  not an omission; `WindowIsolationTests` pins the first half.
+- An account from before identities has no locator and cannot issue or receive: the same
+  `needsMigration` gate as passwords, in the core (`MessageCryptoError.accountNeedsMigration`)
+  and in the panel.
 
 ### Account identity
 
@@ -238,13 +294,16 @@ Sources/FidoPassCore/
   Models/       Account (what the key holds), AccountHandle (account + connected key),
                 AccountIdentity, PortablePayload, PortableBackup, DerivationParameters,
                 PasswordPolicy, PinPolicy, FidoDevice, AuthenticatorInfo, CredentialInventory,
-                ResidentCredential
+                ResidentCredential, EncryptionKeyURL, SealedMessageURL, AccountLocator,
+                MessageKeyFingerprint, EmojiAlphabet
   Protocols/    DI seams used by tests — one gerund per protocol: Enrolling, SecretDeriving, …
   Devices/      libfido2 device access, capability probing, PIN set/change and reset,
                 wide inspection, authenticator configuration
   Enrollment/   credential creation, enumeration, deletion
-  Secrets/      hmac-secret, HKDF, password mapping
-  Support/      salts, crypto helpers, libfido2 context, CborInfo, PinScope
+  Secrets/      hmac-secret, HKDF, password mapping, message keys (MessageKeyService,
+                MessageKey, PortableMasterKey) and HPKE sealing (MessageSealer)
+  Support/      salts, crypto helpers, libfido2 context, CborInfo, PinScope, Argon2,
+                Base64URL, FidoPassLinkParser
 
 Sources/FidoPassAppKit/
   App/          AppDelegate — assembles the application, main menu, activation policy
@@ -252,17 +311,18 @@ Sources/FidoPassAppKit/
   Backend/      KeyBackend facets, LiveKeyBackend, KeyWorker, KeyAccessQueue
   Stores/       DeviceStore, AccountStore, GenerationStore, InventoryStore, LabelStore, Preferences
   Flows/        PanelStore, ManagerStore, TouchGate, PinFormModel, ResetCoordinator,
-                LabelEditor, EditorCoordinator
+                LabelEditor, DecryptorCoordinator, MessageEncryptStore, MessageDecryptStore
   Reducers/     PanelReducer (pure), PanelSnapshot, PanelPrimaryAction
-  Model/        AccountRef, LabelScope, PresentedError, ResetFlow, TouchPrompt, …
+  Model/        AccountRef, LabelScope, PresentedError, ResetFlow, TouchPrompt, IncomingLink, …
   Services/     system integrations: clipboard, hot-plug and session-lock monitors, PIN vault,
                 hotkey registration, launch at login, error presentation, recovery sheet
   Windows/      PanelController, PanelWindow, StatusItemIcon, AuxiliaryWindows, AppWindows
   UI/Panel/     the panel's screens        UI/Manager/   the FIDO manager window
-  UI/Editor/    the text editor            UI/Preferences/, UI/Onboarding/
+  UI/Messages/  the sending and receiving windows   UI/Preferences/, UI/Onboarding/
   UI/Shared/    components used by more than one window
 
 Sources/FidoPassApp/   FidoPassMain.swift, the app icon for build_app.sh
+Sources/CArgon2/       the Argon2 reference implementation, vendored (see its README.md)
 ```
 
 The stores are separate observable objects on purpose: a clipboard countdown ticking once a
@@ -341,7 +401,9 @@ second must not redraw the whole panel. Keep new state in the store that owns it
 - **Credential management never needs a touch, only the PIN** — listing, renaming, deleting
   and migrating a credential (`assignIdentity` is a rename of `user.name`) all come back
   without one. Only `makeCredential`, `getAssertion` and `reset` make the key wait for a
-  finger, so only they go through `withTouchPrompt`.
+  finger, so only they go through `withTouchPrompt`. Deriving a message key is a
+  `getAssertion` (`hmac-secret`), so it is a touch: once to issue a key, once per nonce to
+  open messages.
 - **A key does not refuse a duplicate credential — it replaces one.** `makeCredential` with
   the same `rp.id` and the same `user.id` overwrites the existing resident credential and
   the slot count does not move. That is what the duplicate check in `EnrollmentService.enroll`

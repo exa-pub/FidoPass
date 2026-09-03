@@ -32,12 +32,16 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         let secret = MockSecretDerivationService()
         let passwordGenerator = MockPasswordGenerator()
         passwordGenerator.generateClosure = { _, _, _, _ in "secret-password" }
+        let messageKeys = RecordingMessageKeyService()
+        let sealer = MessageSealer()
 
         let core = FidoPassCore(deviceLister: deviceLister,
                                 enrollmentService: enrollment,
                                 portableEnrollmentService: portable,
                                 secretDerivationService: secret,
-                                passwordGenerator: passwordGenerator)
+                                passwordGenerator: passwordGenerator,
+                                messageKeyService: messageKeys,
+                                messageSealer: sealer)
 
         let devices = try core.listDevices()
         XCTAssertEqual(devices, [expectedDevice])
@@ -79,7 +83,24 @@ final class FidoPassCoreFacadeTests: XCTestCase {
         XCTAssertEqual(migrated.account.identity, identity)
         XCTAssertEqual(portable.assignIdentityCalls.count, 1)
 
+        let messageKey = try core.deriveMessageKey(enrolled, nonce: MessageFixtures.nonce, pinProvider: nil)
+        XCTAssertEqual(messageKey.url, try MessageFixtures.url())
+        XCTAssertEqual(messageKeys.calls.map(\.0.id), ["acct"])
+        XCTAssertEqual(messageKeys.calls.first?.1, MessageFixtures.nonce)
+        XCTAssertTrue(core.messages is MessageSealer)
+
         try core.deleteAccount(enrolled, pin: "1234")
         XCTAssertEqual(enrollment.deleteCalls.count, 1)
+    }
+}
+
+/// `MessageKey` is only constructible inside the core, so this mock lives here, with
+/// `@testable` access, rather than in `TestSupport`.
+private final class RecordingMessageKeyService: MessageKeyDeriving, @unchecked Sendable {
+    private(set) var calls: [(AccountHandle, Data)] = []
+
+    func deriveMessageKey(_ handle: AccountHandle, nonce: Data, pinProvider: (@Sendable () -> String?)?) throws -> MessageKey {
+        calls.append((handle, nonce))
+        return try MessageFixtures.key(nonce: nonce)
     }
 }

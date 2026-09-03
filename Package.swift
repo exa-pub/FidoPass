@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "FidoPass",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "FidoPassCore", targets: ["FidoPassCore"]),
@@ -18,9 +18,15 @@ let package = Package(
                 .brew(["libfido2"])
             ]
         ),
+        // Argon2 reference implementation, vendored — see Sources/CArgon2/README.md.
+        .target(
+            name: "CArgon2",
+            exclude: ["LICENSE", "README.md"],
+            cSettings: [.define("ARGON2_NO_THREADS")]
+        ),
         .target(
             name: "FidoPassCore",
-            dependencies: ["CLibfido2"],
+            dependencies: ["CLibfido2", "CArgon2"],
             swiftSettings: [.swiftLanguageMode(.v6)],
             linkerSettings: [
                 .linkedFramework("IOKit"),

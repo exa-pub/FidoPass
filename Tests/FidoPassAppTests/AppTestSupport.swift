@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 import FidoPassCore
@@ -271,22 +272,49 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         return updated
     }
 
-    /// `EncryptionKey` is only constructible inside the core, so the mock borrows a core
-    /// wired to a stub derivation service rather than faking the type — and the same core's
-    /// cipher, so what it seals can be opened.
+    /// `MessageKey` is only constructible inside the core, so the mock borrows a core wired
+    /// to stub derivation rather than faking the type — and the same core's sealer, so what
+    /// it seals can be opened. The stub answers per credential and nonce, so different
+    /// accounts issue different keys and the same account always the same one; the fixed
+    /// component is constant, so a portable account and its backup share a master key.
     private static let cryptoCore: FidoPassCore = {
         let derivation = MockSecretDerivationService()
-        derivation.deriveSecretClosure = { _, _, _, _ in Data(repeating: 0x11, count: 32) }
+        derivation.deriveMessageSecretClosure = { handle, nonce, _ in
+            Data(SHA256.hash(data: nonce + Data(handle.credentialIdB64.utf8)))
+        }
+        derivation.deriveFixedClosure = { _, _ in Data(repeating: 0x33, count: 32) }
         return FidoPassCore(deviceLister: MockDeviceLister(),
                             enrollmentService: MockEnrollmentService(),
                             portableEnrollmentService: MockPortableEnrollmentService(),
                             secretDerivationService: derivation)
     }()
 
-    var cipher: SecretCipher { Self.cryptoCore.cipher }
+    var messages: MessageSealing { Self.cryptoCore.messages }
 
-    func deriveEncryptionKey(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
-        try Self.cryptoCore.deriveEncryptionKey(handle, label: label, parameters: .v1, pinProvider: nil)
+    private(set) var deriveMessageKeyCalls: [(accountId: String, nonce: Data)] = []
+    var deriveMessageKeyError: Error?
+    /// When set, `deriveMessageKey` blocks until the gate is opened — the key waiting for a touch.
+    var deriveMessageKeyGate: BlockingGate?
+
+    func deriveMessageKey(_ handle: AccountHandle, nonce: Data, pinProvider: @escaping @Sendable () -> String?) throws -> MessageKey {
+        deriveMessageKeyGate?.wait()
+        deriveMessageKeyCalls.append((handle.id, nonce))
+        if let deriveMessageKeyError { throw deriveMessageKeyError }
+        return try Self.cryptoCore.deriveMessageKey(handle, nonce: nonce, pinProvider: nil)
+    }
+
+    /// The nonce every test message is sealed under, unless a test says otherwise.
+    static let testNonce = Data(repeating: 0x5A, count: 32)
+
+    /// What a sender would hold: the link for an account. Not counted as a touch — it stands
+    /// for a link the user was given earlier.
+    func encryptionKey(for handle: AccountHandle, nonce: Data = MockKeyBackend.testNonce) throws -> EncryptionKeyURL {
+        try Self.cryptoCore.deriveMessageKey(handle, nonce: nonce, pinProvider: nil).url
+    }
+
+    /// A message someone sealed for an account, as it would arrive.
+    func sealedMessage(_ text: String, for handle: AccountHandle, nonce: Data = MockKeyBackend.testNonce) throws -> SealedMessageURL {
+        try messages.seal(text, for: try encryptionKey(for: handle, nonce: nonce))
     }
 
     func deleteAccount(_ handle: AccountHandle, pin: String) throws {
@@ -337,17 +365,19 @@ final class RecordingWindowRouter: WindowRouter {
     private(set) var panelClosed = 0
     private(set) var managerOpened = 0
     private(set) var preferencesOpened = 0
-    private(set) var editorClosed = 0
+    private(set) var decryptorClosed = 0
     private(set) var quitRequested = 0
-    private(set) var openedEditors: [CryptoEditorSession] = []
+    private(set) var openedEncryptors: [(key: EncryptionKeyURL?, account: Account?)] = []
+    private(set) var openedDecryptors: [MessageDecryptStore] = []
     private(set) var savedSheets: [RecoverySheet] = []
 
     func openPanel() { panelOpened += 1 }
     func closePanel() { panelClosed += 1 }
     func openManager() { managerOpened += 1 }
     func openPreferences() { preferencesOpened += 1 }
-    func openEditor(_ session: CryptoEditorSession) { openedEditors.append(session) }
-    func closeEditor() { editorClosed += 1 }
+    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?) { openedEncryptors.append((key, account)) }
+    func openDecryptor(_ store: MessageDecryptStore) { openedDecryptors.append(store) }
+    func closeDecryptor() { decryptorClosed += 1 }
     func saveRecoverySheet(_ sheet: RecoverySheet) { savedSheets.append(sheet) }
     func quit() { quitRequested += 1 }
 }

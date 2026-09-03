@@ -44,13 +44,13 @@ struct UnlockView: View {
             pinFocused = true
             KeyboardLayoutService.preferEnglishLayoutIfNeeded()
         }
-        .onChange(of: pinFocused) { focused in
+        .onChange(of: pinFocused) { _, focused in
             if focused { KeyboardLayoutService.preferEnglishLayoutIfNeeded() }
         }
         // Typing is asking: the first character reads the attempts left off a key nobody has
         // asked yet, so the count is on screen before an attempt is spent. See
         // `PanelStore.pinDraftDidChange` for why the screen appearing is not enough.
-        .onChange(of: store.pinDraft) { _ in
+        .onChange(of: store.pinDraft) {
             Task { await store.pinDraftDidChange() }
         }
     }

@@ -8,7 +8,7 @@ import Combine
 /// save panel, or given focus for a PIN field — the three things this app needs most.
 /// The executable target does nothing but hand an instance of this to `NSApplication`.
 @MainActor
-public final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private let windows = AppWindows()
     private lazy var container = AppContainer(router: windows)
@@ -80,6 +80,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         manager.keyEquivalentModifierMask = [.command, .shift]
         manager.target = self
         appMenu.addItem(manager)
+        let encrypt = NSMenuItem(title: "Encrypt a message…", action: #selector(encryptMessage), keyEquivalent: "e")
+        encrypt.keyEquivalentModifierMask = [.command, .shift]
+        encrypt.target = self
+        appMenu.addItem(encrypt)
+        let decrypt = NSMenuItem(title: "Decrypt a message…", action: #selector(decryptMessage), keyEquivalent: "d")
+        decrypt.keyEquivalentModifierMask = [.command, .shift]
+        decrypt.target = self
+        appMenu.addItem(decrypt)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide FidoPass", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit FidoPass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -107,5 +115,32 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showPreferences() {
         auxiliary.showPreferences()
+    }
+
+    @objc private func encryptMessage() {
+        container.panel.openEncryptor()
+    }
+
+    @objc private func decryptMessage() {
+        container.panel.openDecryptor()
+    }
+
+    /// Opening messages needs the selected key unlocked; the item is disabled until then.
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(decryptMessage) {
+            return container.panel.isSelectedKeyUnlocked
+        }
+        return true
+    }
+
+    // MARK: - fidopass:// links
+
+    /// A link clicked in a browser, a chat, a mail. Registered in `Info.plist` by
+    /// `build_app.sh`. The container reads it and opens a window with it; nothing about a
+    /// link ever touches the security key — see `IncomingLink`.
+    public func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            container.openLink(url)
+        }
     }
 }

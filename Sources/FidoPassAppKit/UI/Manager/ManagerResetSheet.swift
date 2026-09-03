@@ -37,7 +37,7 @@ struct ManagerResetSheet: View {
         }
         // The flow ends in the coordinator — the key was erased, or someone cancelled it —
         // and the sheet follows it down rather than lingering on "Done".
-        .onChange(of: reset.flow == nil) { over in
+        .onChange(of: reset.flow == nil) { _, over in
             if over { store.resetSheetFinished() }
         }
         .onReceive(ticker) { now = $0 }

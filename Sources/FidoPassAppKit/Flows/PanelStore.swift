@@ -44,9 +44,9 @@ final class PanelStore: ObservableObject {
     let preferences: Preferences
     /// The one door to the key. Shared with the manager; the panel draws only its own waits.
     let touchGate: TouchGate
-    let editor: EditorCoordinator
+    let decryptor: DecryptorCoordinator
     /// The windows. A window, not a route, for anything that has to survive the panel closing
-    /// behind it — the manager, the editor — and for the panel itself.
+    /// behind it — the manager, the message windows — and for the panel itself.
     let router: WindowRouter
     /// The bootstrap form. Separate from `pinDraft`, which is the unlock field: a half-typed
     /// new PIN must never be submitted as an unlock attempt.
@@ -65,7 +65,7 @@ final class PanelStore: ObservableObject {
          labels: LabelStore,
          preferences: Preferences,
          touchGate: TouchGate,
-         editor: EditorCoordinator,
+         decryptor: DecryptorCoordinator,
          router: WindowRouter) {
         self.devices = devices
         self.accounts = accounts
@@ -74,7 +74,7 @@ final class PanelStore: ObservableObject {
         self.labels = labels
         self.preferences = preferences
         self.touchGate = touchGate
-        self.editor = editor
+        self.decryptor = decryptor
         self.router = router
         self.pinForm = PinFormModel(mode: .bootstrap,
                                     devices: devices,
@@ -122,6 +122,8 @@ final class PanelStore: ObservableObject {
             return "Unlock to show the password for “\(ref.accountId)” · label “\(label)”."
         case .enroll:
             return "Unlock to create a new account on this key."
+        case .decrypt:
+            return "Unlock to decrypt a message."
         case .none:
             return nil
         }
@@ -480,6 +482,8 @@ final class PanelStore: ObservableObject {
             await revealPassword(for: resolved(ref) ?? selection, label: label)
         case .enroll:
             show(.enroll)
+        case .decrypt(let message):
+            openDecryptor(prefilled: message)
         }
     }
 
@@ -736,9 +740,12 @@ final class PanelStore: ObservableObject {
         }
     }
 
-    // MARK: - Text encryption
+    // MARK: - Messages
 
-    func openEncryptEditor(for ref: AccountRef) async {
+    /// Issues an encryption key for an account: one touch, then the sending window opens
+    /// with the link in it. Every press mints a new key — a new nonce — and every key ever
+    /// issued keeps working, because a message carries the nonce it was sealed under.
+    func issueEncryptionKey(for ref: AccountRef) async {
         guard !isWorking else { return }
         guard let account = accounts.account(ref) else { return }
         // Same rule as generating: nothing is derived from an account until it has an
@@ -747,23 +754,71 @@ final class PanelStore: ObservableObject {
             beginMigration(ref)
             return
         }
-        let label = labelEditor.current.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !label.isEmpty else {
-            error = .plain("Enter a label first — the key is derived from it.")
-            return
-        }
         do {
-            let key = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                            message: "Deriving the key for this editing session.",
+            var key = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
+                                                            message: "Issuing an encryption key for “\(ref.accountId)”.",
                                                             deviceName: selectedDevice?.displayName ?? "Security key")) {
-                try await self.accounts.deriveEncryptionKey(for: account, label: label)
+                try await self.accounts.deriveMessageKey(for: account, nonce: EncryptionKeyURL.randomNonce())
             }
-            if let target = labelTarget(for: ref) { labels.use(label, in: target) }
-            let session = CryptoEditorSession(account: account.account, label: label, key: key, cipher: accounts.cipher)
-            editor.open(session, boundTo: ref.devicePath)
+            // Only the link leaves here. The private half is for opening messages, which is
+            // the other window's business and another touch.
+            key.wipe()
+            router.openEncryptor(with: key.url, issuedFor: account.account)
             router.closePanel()
+            setStatus("Encryption key issued — share the link, compare the emoji")
         } catch {
             present(error)
+        }
+    }
+
+    /// The sending window, empty or with a key that was clicked as a link. Needs no security
+    /// key at all.
+    func openEncryptor(with key: EncryptionKeyURL? = nil) {
+        router.openEncryptor(with: key, issuedFor: nil)
+    }
+
+    /// The receiving window for the selected key — after the PIN, if the key is locked.
+    ///
+    /// Opening it never touches the key: the window finds the account by locator from what
+    /// the panel has already read, and waits for its button. A link clicked in a browser
+    /// lands here too, which is why that has to be so.
+    func openDecryptor(prefilled message: SealedMessageURL? = nil) {
+        guard let device = selectedDevice else {
+            setStatus("Plug in the security key this message was encrypted for")
+            router.openPanel()
+            return
+        }
+        guard isSelectedKeyUnlocked else {
+            pendingIntent = .decrypt(message)
+            route = .unlock
+            router.openPanel()
+            return
+        }
+        if let open = decryptor.store, decryptor.boundDevicePath == device.path {
+            if let message { open.adopt(message) }
+            router.openDecryptor(open)
+        } else {
+            let store = MessageDecryptStore(accounts: accounts,
+                                            touchGate: touchGate,
+                                            devicePath: device.path,
+                                            deviceName: device.displayName,
+                                            prefilled: message)
+            decryptor.open(store, boundTo: device.path)
+        }
+        router.closePanel()
+    }
+
+    /// A `fidopass://` link from the system, already read. Opens a window with it, and
+    /// nothing more — see `IncomingLink`.
+    func handleLink(_ link: IncomingLink) {
+        switch link {
+        case .encryptionKey(let key):
+            openEncryptor(with: key)
+        case .sealedMessage(let message):
+            openDecryptor(prefilled: message)
+        case .unrecognised(let reason):
+            setStatus("Not a FidoPass link — \(reason.localizedDescription.lowercased())")
+            router.openPanel()
         }
     }
 

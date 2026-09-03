@@ -40,13 +40,15 @@ protocol KeyAccountBackend: Sendable {
                       pinProvider: @escaping @Sendable () -> String?) throws -> PortableBackup
     /// Writes an identity onto a portable account from before identities. PIN, no touch.
     func assignIdentity(_ handle: AccountHandle, identity: AccountIdentity, pin: String) throws -> AccountHandle
-    func deriveEncryptionKey(_ handle: AccountHandle,
-                             label: String,
-                             pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey
+    /// The account's message key for a nonce — the link others seal under, and the private
+    /// half that opens what they sealed. One touch.
+    func deriveMessageKey(_ handle: AccountHandle,
+                          nonce: Data,
+                          pinProvider: @escaping @Sendable () -> String?) throws -> MessageKey
     func deleteAccount(_ handle: AccountHandle, pin: String) throws
-    /// Seals and opens text under a derived key. Pure computation — no device — which is why
-    /// the editor gets this rather than the whole backend.
-    var cipher: SecretCipher { get }
+    /// Seals and opens messages. Pure computation — no device — which is why the message
+    /// windows get this rather than the whole backend.
+    var messages: MessageSealing { get }
 }
 
 /// The key itself: its PIN, its settings, its erasure.

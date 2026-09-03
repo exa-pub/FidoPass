@@ -8,4 +8,7 @@ import Foundation
 enum TouchSurface: Equatable, Sendable {
     case panel
     case manager
+    /// The receiving window: deriving a message key is its business, and the panel is not
+    /// held open by it.
+    case decryptor
 }

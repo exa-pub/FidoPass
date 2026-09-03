@@ -6,7 +6,7 @@ import Foundation
 struct LiveKeyBackend: KeyBackend {
     let core: FidoPassCore
 
-    var cipher: SecretCipher { core.cipher }
+    var messages: MessageSealing { core.messages }
 
     init(core: FidoPassCore = .shared) {
         self.core = core
@@ -67,10 +67,10 @@ struct LiveKeyBackend: KeyBackend {
         try core.assignIdentity(handle, identity: identity, pinProvider: { pin })
     }
 
-    func deriveEncryptionKey(_ handle: AccountHandle,
-                             label: String,
-                             pinProvider: @escaping @Sendable () -> String?) throws -> EncryptionKey {
-        try core.deriveEncryptionKey(handle, label: label, parameters: .v1, pinProvider: pinProvider)
+    func deriveMessageKey(_ handle: AccountHandle,
+                          nonce: Data,
+                          pinProvider: @escaping @Sendable () -> String?) throws -> MessageKey {
+        try core.deriveMessageKey(handle, nonce: nonce, pinProvider: pinProvider)
     }
 
     func deleteAccount(_ handle: AccountHandle, pin: String) throws {

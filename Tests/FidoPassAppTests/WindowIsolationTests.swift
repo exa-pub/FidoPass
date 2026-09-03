@@ -37,6 +37,44 @@ final class WindowIsolationTests: XCTestCase {
         XCTAssertTrue(store.pinForm.isEmpty)
     }
 
+    // MARK: - Message windows
+
+    /// The session lock closes the receiving window — it holds live keys — and has no way to
+    /// reach the sending one, which holds none and would lose what was being written.
+    func testSessionLockClosesTheReceivingWindowOnly() async {
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        store.openDecryptor()
+        store.openEncryptor()
+        XCTAssertEqual(router.openedDecryptors.count, 1)
+        XCTAssertEqual(router.openedEncryptors.count, 1)
+
+        store.devices.onSessionLocked?()
+
+        XCTAssertEqual(router.decryptorClosed, 1)
+        XCTAssertNil(store.decryptor.store)
+        XCTAssertEqual(store.route, .unlock)
+    }
+
+    /// Locking one key closes a receiving window bound to it, and leaves one bound to another
+    /// key alone.
+    func testLockingAnotherKeyLeavesTheReceivingWindowAlone() async {
+        let (store, backend, device) = await AppTestFactory.unlockedStore()
+        let router = store.router as! RecordingWindowRouter
+        let other = MockKeyBackend.device(path: "/dev/two")
+        backend.devices = [device, other]
+        backend.pins[other.path] = "1234"
+        await store.refresh()
+        store.openDecryptor()
+        XCTAssertEqual(store.decryptor.boundDevicePath, device.path)
+
+        store.devices.lock(path: other.path)
+        XCTAssertEqual(router.decryptorClosed, 0, "the other key has nothing to do with this window")
+
+        store.devices.lock(path: device.path)
+        XCTAssertEqual(router.decryptorClosed, 1)
+    }
+
     // MARK: - Menu-bar icon
 
     /// The icon is the one thing visible while the panel is closed, so its state is derived

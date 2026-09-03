@@ -1,11 +1,12 @@
 import AppKit
+import FidoPassCore
 import SwiftUI
 
 /// The windows that are not the HUD.
 ///
-/// The text editor is a window by nature — its whole point is to sit beside the application
-/// you are pasting into, which a popover cannot do. Preferences and onboarding are rare and
-/// wordy, and would make the HUD something it should not be.
+/// The message windows are windows by nature — their whole point is to sit beside the
+/// application you are pasting into, which a popover cannot do. Preferences and onboarding
+/// are rare and wordy, and would make the HUD something it should not be.
 @MainActor
 final class AuxiliaryWindows {
 
@@ -13,8 +14,10 @@ final class AuxiliaryWindows {
     private let hotkey: HotkeyRegistration
     private let launchAtLogin: LaunchAtLoginService
 
-    private var editorWindow: NSWindow?
-    private var editorSession: CryptoEditorSession?
+    private var encryptorWindow: NSWindow?
+    private var encryptStore: MessageEncryptStore?
+    private var decryptorWindow: NSWindow?
+    private var decryptStore: MessageDecryptStore?
     private var preferencesWindow: NSWindow?
     private var managerWindow: NSWindow?
     private var onboardingWindow: NSWindow?
@@ -26,41 +29,64 @@ final class AuxiliaryWindows {
         self.launchAtLogin = launchAtLogin
     }
 
-    // MARK: - Text editor
+    // MARK: - Messages
 
-    func showEditor(session: CryptoEditorSession, onClosed: @escaping () -> Void = {}) {
-        closeEditor()
-        editorSession = session
-
-        let clipboard = container.clipboard
-        let view = CryptoEditorView(session: session,
-                                    onCopyPlaintext: { text in
-                                        clipboard.copySecret(text)
-                                    },
-                                    onCopyCiphertext: { text in
-                                        // Not a secret, and it exists to be pasted elsewhere:
-                                        // wiping it mid-paste would be a defect, not protection.
-                                        clipboard.copySecret(text, clearAfter: 0)
-                                    })
-        let window = makeWindow(title: "Encrypt text — \(session.accountId) · “\(session.label)”",
+    /// The sending window. One at a time: a key arriving while it is open — issued by the
+    /// panel, or clicked as a link — goes into the window that is there.
+    func showEncryptor(key: EncryptionKeyURL?, issuedFor account: Account?) {
+        if let encryptorWindow, let encryptStore {
+            if let key { encryptStore.adopt(key, issuedFor: account) }
+            present(encryptorWindow)
+            return
+        }
+        let store = MessageEncryptStore(sealer: container.accounts.messages, prefilled: key, issuedFor: account)
+        let view = EncryptMessageView(store: store)
+            .environment(\.clipboard, container.clipboard)
+        let window = makeWindow(title: "Encrypt a message",
                                 content: AnyView(view),
-                                size: NSSize(width: 820, height: 440),
+                                size: NSSize(width: 640, height: 500),
                                 resizable: true)
         onClose(of: window) { [weak self] in
-            self?.editorSession?.close()
-            self?.editorSession = nil
-            self?.editorWindow = nil
-            onClosed()
+            self?.encryptStore?.clear()
+            self?.encryptStore = nil
+            self?.encryptorWindow = nil
         }
-        editorWindow = window
+        encryptStore = store
+        encryptorWindow = window
         present(window)
     }
 
-    func closeEditor() {
-        editorSession?.close()
-        editorSession = nil
-        editorWindow?.close()
-        editorWindow = nil
+    /// The receiving window, over the store that binds it to a key. The coordinator decides
+    /// when it closes; `onClosed` tells it the user did.
+    func showDecryptor(store: MessageDecryptStore, onClosed: @escaping () -> Void) {
+        if let decryptorWindow, decryptStore === store {
+            present(decryptorWindow)
+            return
+        }
+        closeDecryptor()
+        decryptStore = store
+
+        let view = DecryptMessageView(store: store, touchGate: container.touchGate)
+            .environment(\.clipboard, container.clipboard)
+        let window = makeWindow(title: "Decrypt a message — \(store.deviceName)",
+                                content: AnyView(view),
+                                size: NSSize(width: 640, height: 440),
+                                resizable: true)
+        onClose(of: window) { [weak self] in
+            self?.decryptStore?.close()
+            self?.decryptStore = nil
+            self?.decryptorWindow = nil
+            onClosed()
+        }
+        decryptorWindow = window
+        present(window)
+    }
+
+    func closeDecryptor() {
+        decryptStore?.close()
+        decryptStore = nil
+        decryptorWindow?.close()
+        decryptorWindow = nil
     }
 
     // MARK: - Preferences

@@ -33,6 +33,20 @@ final class KeyAccessSerialisationTests: XCTestCase {
             return try super.listDevices()
         }
 
+        override func generatePassword(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
+            enter()
+            defer { leave() }
+            Thread.sleep(forTimeInterval: 0.02)
+            return try super.generatePassword(handle, label: label, pinProvider: pinProvider)
+        }
+
+        override func deriveMessageKey(_ handle: AccountHandle, nonce: Data, pinProvider: @escaping @Sendable () -> String?) throws -> MessageKey {
+            enter()
+            defer { leave() }
+            Thread.sleep(forTimeInterval: 0.02)
+            return try super.deriveMessageKey(handle, nonce: nonce, pinProvider: pinProvider)
+        }
+
         private func enter() {
             lock.lock()
             inFlight += 1
@@ -63,5 +77,27 @@ final class KeyAccessSerialisationTests: XCTestCase {
 
         XCTAssertEqual(backend.maxConcurrent, 1,
                        "two operations reached the key at once; one of them would have failed on real hardware")
+    }
+
+    /// The receiving window derives a key while the panel generates a password from the same
+    /// authenticator — three windows now, still one queue.
+    func testTheReceivingWindowSharesTheQueueWithThePanel() async throws {
+        let backend = OverlapCountingBackend()
+        let device = MockKeyBackend.device()
+        backend.devices = [device]
+        backend.pins[device.path] = "1234"
+        backend.accountsByPath[device.path] = [Account.fixture(id: "disk", kind: .local)]
+        let store = AppTestFactory.makeStore(backend: backend)
+        await store.prepareForDisplay()
+        store.pinDraft = "1234"
+        await store.submitPin()
+        let disk = try XCTUnwrap(store.accounts.account(AccountRef(accountId: "disk", devicePath: device.path)))
+
+        async let key = store.accounts.deriveMessageKey(for: disk, nonce: MockKeyBackend.testNonce)
+        async let password = store.generation.generate(disk, label: "a")
+        async let read: Void = store.inventory.read(device)
+        _ = try await (key, password, read)
+
+        XCTAssertEqual(backend.maxConcurrent, 1)
     }
 }

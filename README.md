@@ -23,7 +23,7 @@ leaves out characters that are easy to confuse: `i l o I L O 0 1`.
 
 ## What you need
 
-- macOS 13 Ventura or newer.
+- macOS 14 Sonoma or newer.
 - A FIDO2 security key with `hmac-secret` support and a PIN set — YubiKey 5, Nitrokey 3,
   SoloKey 2 and most modern keys qualify.
 
@@ -57,14 +57,43 @@ consistent — `vault` and `Vault` are two different passwords.
 ⌘⌥P opens the HUD from anywhere, and it remembers the account and label you used last: with
 the key already unlocked, ⏎ generates and copies in a single keystroke. Inside the HUD,
 **↑↓** pick an account, **←→** move between its labels, **⌘1–⌘3** jump to the first three,
-and **⌘E** encrypts a piece of text with the same key — for notes or recovery codes you have
-to keep somewhere you do not control.
+**⌘E** issues an encryption key for the selected account and **⌘D** opens the window that
+decrypts messages sealed under one — see [Encrypted messages](#encrypted-messages).
 
 The menu-bar icon shows while a secret is still on the clipboard. Copied secrets are marked
 concealed, so clipboard-history apps skip them, and they stay off Universal Clipboard.
 
 The HUD also shows how many PIN attempts remain. **A FIDO2 key locks itself permanently
 after 8 wrong PINs** — there is no reset.
+
+## Encrypted messages
+
+Any account can issue an **encryption key**: a `fidopass://keyv1?…` link (right-click the
+account → *Encryption key…*, or ⌘E; one touch). The link is public — send it to anyone.
+Whoever has it can encrypt a message for you in *Encrypt a message…* (right-click the
+menu-bar icon), on any Mac, with no security key at all: paste the link, type the text, copy
+the `fidopass://blobv1?…` link it produces. Only your security key opens it: *Decrypt a
+message…* (⌘D), paste, press Decrypt, touch. Both kinds of link are clickable and open in
+FidoPass; clicking one never touches the key by itself.
+
+Each key shows a fingerprint — six emoji and twelve hex digits. **Compare them with the
+key's owner over another channel before encrypting**: the link carries a checksum against
+damage in transit, but only that comparison protects against a substituted link. To check a
+link without FidoPass:
+
+```bash
+printf '%s' '<the link, up to the #>' | argon2 fidopass-keyfp-v1 -id -t 1 -m 15 -p 1 -l 6 -r
+```
+
+prints the twelve hex digits; the six emoji are the same six bytes through the
+[emoji table](docs/emoji-alphabet.md).
+
+Worth knowing: every press of *Encryption key…* mints a new key, and every key ever issued
+keeps working. A key issued by a portable account also opens messages on a second security
+key that imported the account's backup; a key issued by a local account dies with that
+security key. Messages sealed under one key are visibly for the same key. Anyone with the
+link can encrypt, and the recipient cannot tell who did. Nothing about a message is stored:
+the text stays in the window until it closes or the key locks.
 
 ## If you lose your key
 
@@ -101,6 +130,13 @@ account on two keys can be recognised by eye, and told from another account with
 name. Local accounts derive it from their credential id; portable accounts keep it on the key
 after the key material and carry it in the backup key.
 
+An encryption key is derived from the account and a random nonce carried in the link: the
+`hmac-secret` answer for that nonce (for a portable account, an HMAC under the master key)
+goes through argon2id into an X25519 private key, whose public half is the link. Messages
+are sealed with HPKE (RFC 9180 — X25519, HKDF-SHA256, ChaCha20-Poly1305); the recipient
+re-derives the private key from the nonce, which is why nothing has to be stored. The
+fingerprint is argon2id over the link text, deliberately slow, so that six emoji are enough.
+
 ## Accounts from earlier versions
 
 A portable account created before identities existed shows grey, marked *needs migration*.
@@ -133,4 +169,5 @@ make sure you can test against real hardware.
 
 ## License
 
-MIT. Embedded `libfido2` remains under the BSD-2-Clause license.
+MIT. Embedded `libfido2` remains under the BSD-2-Clause license; the vendored Argon2 reference
+implementation (`Sources/CArgon2`) is CC0-1.0 / Apache-2.0.

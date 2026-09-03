@@ -38,6 +38,11 @@ struct PanelHeaderView: View {
                     .disabled(devices.devices.isEmpty)
                 Button("Refresh") { Task { await store.refresh() } }
                 Divider()
+                // Sealing needs no key at all; opening needs the selected one, unlocked.
+                Button("Encrypt a message…") { store.openEncryptor() }
+                Button("Decrypt a message…") { store.openDecryptor() }
+                    .disabled(!store.isSelectedKeyUnlocked)
+                Divider()
                 Button("Lock now") { store.lockSelectedKey() }
                     .disabled(!store.isSelectedKeyUnlocked)
                 Divider()

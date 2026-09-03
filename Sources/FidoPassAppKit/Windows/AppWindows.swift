@@ -1,4 +1,5 @@
 import AppKit
+import FidoPassCore
 
 /// The real windows behind `WindowRouter`.
 ///
@@ -19,13 +20,17 @@ final class AppWindows: WindowRouter {
     func openManager() { auxiliary?.showAuthenticatorManager() }
     func openPreferences() { auxiliary?.showPreferences() }
 
-    func openEditor(_ session: CryptoEditorSession) {
-        auxiliary?.showEditor(session: session) { [weak self] in
-            self?.container?.editor.windowClosed()
+    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?) {
+        auxiliary?.showEncryptor(key: key, issuedFor: account)
+    }
+
+    func openDecryptor(_ store: MessageDecryptStore) {
+        auxiliary?.showDecryptor(store: store) { [weak self] in
+            self?.container?.decryptor.windowClosed()
         }
     }
 
-    func closeEditor() { auxiliary?.closeEditor() }
+    func closeDecryptor() { auxiliary?.closeDecryptor() }
     func saveRecoverySheet(_ sheet: RecoverySheet) { panel?.presentSavePanel(for: sheet) }
     func quit() { NSApplication.shared.terminate(nil) }
 }

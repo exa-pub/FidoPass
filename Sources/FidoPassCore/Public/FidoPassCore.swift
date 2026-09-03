@@ -8,7 +8,8 @@ public final class FidoPassCore: Sendable {
     private let enrollmentService: Enrolling
     private let portableEnrollmentService: PortableEnrolling
     private let passwordGenerator: PasswordGenerating
-    private let secretEncryption: SecretEncrypting
+    private let messageKeyService: MessageKeyDeriving
+    private let messageSealer: MessageSealing
     private let deviceManagement: DeviceManaging
     private let inspection: AuthenticatorInspecting
     private let configuration: DeviceConfiguring
@@ -18,7 +19,8 @@ public final class FidoPassCore: Sendable {
                             portableEnrollmentService: PortableEnrolling? = nil,
                             secretDerivationService: SecretDeriving? = nil,
                             passwordGenerator: PasswordGenerating? = nil,
-                            secretEncryption: SecretEncrypting? = nil,
+                            messageKeyService: MessageKeyDeriving? = nil,
+                            messageSealer: MessageSealing? = nil,
                             deviceManagement: DeviceManaging? = nil,
                             inspection: AuthenticatorInspecting? = nil,
                             configuration: DeviceConfiguring? = nil) {
@@ -28,7 +30,8 @@ public final class FidoPassCore: Sendable {
                   portableEnrollmentService: portableEnrollmentService,
                   secretDerivationService: secretDerivationService,
                   passwordGenerator: passwordGenerator,
-                  secretEncryption: secretEncryption,
+                  messageKeyService: messageKeyService,
+                  messageSealer: messageSealer,
                   deviceManagement: deviceManagement,
                   inspection: inspection,
                   configuration: configuration)
@@ -42,7 +45,8 @@ public final class FidoPassCore: Sendable {
          portableEnrollmentService: PortableEnrolling? = nil,
          secretDerivationService: SecretDeriving? = nil,
          passwordGenerator: PasswordGenerating? = nil,
-         secretEncryption: SecretEncrypting? = nil,
+         messageKeyService: MessageKeyDeriving? = nil,
+         messageSealer: MessageSealing? = nil,
          deviceManagement: DeviceManaging? = nil,
          inspection: AuthenticatorInspecting? = nil,
          configuration: DeviceConfiguring? = nil) {
@@ -64,7 +68,8 @@ public final class FidoPassCore: Sendable {
         let resolvedPasswordGenerator = passwordGenerator ?? PasswordGenerator(secretDerivationService: resolvedSecretDerivation)
         self.passwordGenerator = resolvedPasswordGenerator
 
-        self.secretEncryption = secretEncryption ?? SecretEncryptionService(secretDerivationService: resolvedSecretDerivation)
+        self.messageKeyService = messageKeyService ?? MessageKeyService(secretDerivationService: resolvedSecretDerivation)
+        self.messageSealer = messageSealer ?? MessageSealer()
         self.deviceManagement = deviceManagement ?? DeviceManagementService(deviceRepository: resolvedDeviceRepository)
         self.inspection = inspection ?? AuthenticatorInspectionService(deviceRepository: resolvedDeviceRepository)
         self.configuration = configuration ?? DeviceConfigurationService(deviceRepository: resolvedDeviceRepository)
@@ -179,27 +184,16 @@ public final class FidoPassCore: Sendable {
         try portableEnrollmentService.assignIdentity(handle, identity: identity, pinProvider: pinProvider)
     }
 
-    /// Derives the key used by the text editor. Costs one touch of the authenticator.
-    public func deriveEncryptionKey(_ handle: AccountHandle,
-                                    label: String,
-                                    parameters: DerivationParameters = .v1,
-                                    pinProvider: (@Sendable () -> String?)? = nil) throws -> EncryptionKey {
-        try secretEncryption.deriveEncryptionKey(handle,
-                                                 label: label,
-                                                 parameters: parameters,
-                                                 pinProvider: pinProvider)
+    /// The account's message key for a nonce — the link others seal messages under, and the
+    /// private half that opens them. One touch.
+    public func deriveMessageKey(_ handle: AccountHandle,
+                                 nonce: Data,
+                                 pinProvider: (@Sendable () -> String?)? = nil) throws -> MessageKey {
+        try messageKeyService.deriveMessageKey(handle, nonce: nonce, pinProvider: pinProvider)
     }
 
-    /// Seals and opens text under a derived key, without the rest of the facade.
-    public var cipher: SecretCipher { secretEncryption }
-
-    public func seal(_ plaintext: String, with key: EncryptionKey) throws -> String {
-        try secretEncryption.seal(plaintext, with: key)
-    }
-
-    public func open(_ envelopeB64: String, with key: EncryptionKey) throws -> String {
-        try secretEncryption.open(envelopeB64, with: key)
-    }
+    /// Seals and opens messages, without the rest of the facade. No device involved.
+    public var messages: MessageSealing { messageSealer }
 
     public func deleteAccount(_ handle: AccountHandle, pin: String?) throws {
         try enrollmentService.deleteAccount(handle, pin: pin)

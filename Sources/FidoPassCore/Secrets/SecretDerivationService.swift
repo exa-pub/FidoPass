@@ -22,4 +22,10 @@ final class SecretDerivationService: SecretDeriving, Sendable {
                               pinProvider: (@Sendable () -> String?)?) throws -> Data {
         try hmacSecretService.perform(handle, salt: SaltFactory.fixedComponentSalt(), pinProvider: pinProvider)
     }
+
+    func deriveMessageSecret(_ handle: AccountHandle,
+                             nonce: Data,
+                             pinProvider: (@Sendable () -> String?)?) throws -> Data {
+        try hmacSecretService.perform(handle, salt: SaltFactory.messageKeySalt(nonce: nonce), pinProvider: pinProvider)
+    }
 }

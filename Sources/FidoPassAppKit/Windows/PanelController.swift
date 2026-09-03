@@ -73,7 +73,13 @@ final class PanelController: NSObject, NSWindowDelegate {
         menu.addItem(copy)
         menu.addItem(.separator())
         menu.addItem(withTitle: "New account…", action: #selector(menuNewAccount), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Encrypt text…", action: #selector(menuEncrypt), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Encrypt a message…", action: #selector(menuEncryptMessage), keyEquivalent: "").target = self
+        let decrypt = NSMenuItem(title: "Decrypt a message…", action: #selector(menuDecryptMessage), keyEquivalent: "")
+        decrypt.target = self
+        // Opening messages needs the selected key unlocked; a disabled item says so better
+        // than a PIN prompt would.
+        decrypt.isEnabled = store.isSelectedKeyUnlocked
+        menu.addItem(decrypt)
         menu.addItem(withTitle: "Save recovery sheet…", action: #selector(menuRecoverySheet), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Backup key…", action: #selector(menuBackupKey), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -102,11 +108,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         show(intent: .copyPassword(ref, label: store.labelEditor.current))
     }
 
-    @objc private func menuEncrypt() {
-        guard let ref = store.selection else { show(); return }
-        show()
-        Task { await store.openEncryptEditor(for: ref) }
-    }
+    /// Needs no key: the sending window works from a link alone.
+    @objc private func menuEncryptMessage() { store.openEncryptor() }
+
+    /// Only offered while the selected key is unlocked — see `showStatusMenu`.
+    @objc private func menuDecryptMessage() { store.openDecryptor() }
 
     @objc private func menuRecoverySheet() {
         guard let ref = store.selection else { show(); return }

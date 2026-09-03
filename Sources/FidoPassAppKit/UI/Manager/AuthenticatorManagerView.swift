@@ -41,7 +41,7 @@ struct AuthenticatorManagerView: View {
         // Keyed on the device so switching keys reads the one now on screen rather than
         // leaving the other one's answers up.
         .task(id: store.device?.path) { await store.deviceDidAppear() }
-        .onChange(of: store.isUnlocked) { unlocked in
+        .onChange(of: store.isUnlocked) { _, unlocked in
             guard unlocked else { return }
             Task { await store.keyDidUnlock() }
         }

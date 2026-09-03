@@ -110,8 +110,10 @@ struct PanelRootView: View {
             }
             Button("") { store.show(.enroll) }
                 .keyboardShortcut("n", modifiers: [.command])
-            Button("") { if let ref = store.selection { Task { await store.openEncryptEditor(for: ref) } } }
+            Button("") { if let ref = store.selection { Task { await store.issueEncryptionKey(for: ref) } } }
                 .keyboardShortcut("e", modifiers: [.command])
+            Button("") { if store.isSelectedKeyUnlocked { store.openDecryptor() } }
+                .keyboardShortcut("d", modifiers: [.command])
             Button("") { store.lockSelectedKey() }
                 .keyboardShortcut("l", modifiers: [.command])
             Button("") { Task { await store.refresh() } }
