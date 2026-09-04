@@ -13,6 +13,7 @@ final class DeviceStore: ObservableObject {
         let device: FidoDevice
         var unlocked: Bool = false
         var pinToken: SecurePinVault.Token?
+        var pinGeneration = UUID()
         /// Whether the key has a PIN at all.
         ///
         /// `nil` means the key has not been asked yet — which is emphatically not "no PIN".
@@ -36,7 +37,7 @@ final class DeviceStore: ObservableObject {
         var supportsLargeBlobs: Bool?
 
         /// The rules to enforce in a PIN field for this key.
-        var pinPolicy: PinPolicy { PinPolicy(minLengthBytes: minPINLength ?? PinPolicy.ctapFloor) }
+        var pinPolicy: PinPolicy { PinPolicy(minimumCodePoints: minPINLength ?? PinPolicy.ctapFloor) }
     }
 
     @Published private(set) var devices: [FidoDevice] = []
@@ -53,6 +54,15 @@ final class DeviceStore: ObservableObject {
     var onKeyClosed: ((String) -> Void)?
     /// Fired when the machine's session locks; everything derived must go with it.
     var onSessionLocked: (() -> Void)?
+
+    private var leases: [String: OperationLease] = [:]
+    func lease(for path: String) -> OperationLease {
+        if let token = leases[path] { return token }
+        let token = OperationLease()
+        leases[path] = token
+        return token
+    }
+    private func invalidate(_ path: String) { leases.removeValue(forKey: path)?.invalidate() }
 
     private var pendingRefresh = false
     private let worker: KeyWorker
@@ -136,9 +146,7 @@ final class DeviceStore: ObservableObject {
         do {
             listed = try await worker.device { try $0.listDevices() }
         } catch {
-            // "Could not ask" is not "nothing is there". Clearing here would release the PIN
-            // token and drop every account of a key that never went anywhere — which is
-            // exactly what a transient enumeration failure after a touch used to do.
+            // An enumeration error does not prove disconnection; retain sessions and accounts.
             refreshError = PresentedError(error)
             return
         }
@@ -178,6 +186,7 @@ final class DeviceStore: ObservableObject {
             updated[device.path] = KeyState(device: device,
                                             unlocked: old?.unlocked ?? false,
                                             pinToken: old?.pinToken,
+                                            pinGeneration: old?.pinGeneration ?? UUID(),
                                             hasPIN: old?.hasPIN,
                                             pinRetriesRemaining: old?.pinRetriesRemaining,
                                             minPINLength: old?.minPINLength,
@@ -190,6 +199,7 @@ final class DeviceStore: ObservableObject {
         // while the PIN itself stayed in memory until the TTL expired. Release it here.
         let vanished = Set(previous.keys).subtracting(updated.keys)
         for path in vanished {
+            invalidate(path)
             if let token = previous[path]?.pinToken { pinVault.remove(token: token) }
         }
 
@@ -219,19 +229,27 @@ final class DeviceStore: ObservableObject {
     /// Enumerating is the cheapest operation that actually exercises the PIN: it needs no
     /// touch, so a wrong PIN costs the user nothing but the attempt itself.
     func unlock(_ device: FidoDevice, pin: String) async throws {
-        guard !pin.isEmpty else { return }
+        if let issue = PinPolicy.validateExisting(pin) { throw FidoPassError.invalidState(issue.message) }
         let path = device.path
+        let token = lease(for: path)
         do {
-            _ = try await worker.accounts { try $0.enumerateAccounts(devicePath: path, pin: pin) }
+            _ = try await worker.accounts(validity: token) { try $0.enumerateAccounts(devicePath: path, pin: pin) }
         } catch {
-            await recordUnlockFailure(error, for: device)
+            try KeyOperationContext.check(token)
+            await recordUnlockFailure(error, for: device, rejectedPIN: pin)
             throw error
         }
 
-        var state = states[path] ?? KeyState(device: device)
+        try KeyOperationContext.check(token)
+        guard var state = states[path] else { throw CancellationError() }
         if let existing = state.pinToken { pinVault.remove(token: existing) }
+        state.pinGeneration = UUID()
+        let generation = state.pinGeneration
         state.pinToken = pinVault.store(pin: pin, ttl: pinTTL) { [weak self] in
-            Task { @MainActor in self?.handlePinExpiration(for: path) }
+            Task { @MainActor in
+                guard self?.states[path]?.pinGeneration == generation else { return }
+                self?.handlePinExpiration(for: path)
+            }
         }
         state.unlocked = true
         state.hasPIN = true
@@ -247,7 +265,9 @@ final class DeviceStore: ObservableObject {
     /// choosing it, and asking for it again on the next screen reads as "it did not hear me".
     func setInitialPIN(for device: FidoDevice, newPIN: String) async throws {
         let path = device.path
-        try await worker.admin { try $0.setInitialPIN(devicePath: path, newPIN: newPIN) }
+        let token = lease(for: path)
+        try await worker.admin(validity: token) { try $0.setInitialPIN(devicePath: path, newPIN: newPIN) }
+        try KeyOperationContext.check(token)
         adoptChangedPIN(path: path, newPIN: newPIN)
     }
 
@@ -257,19 +277,24 @@ final class DeviceStore: ObservableObject {
     /// old PIN still grants.
     func changePIN(for device: FidoDevice, oldPIN: String, newPIN: String) async throws {
         let path = device.path
+        let token = lease(for: path)
         do {
-            try await worker.admin { try $0.changePIN(devicePath: path, oldPIN: oldPIN, newPIN: newPIN) }
+            try await worker.admin(validity: token) { try $0.changePIN(devicePath: path, oldPIN: oldPIN, newPIN: newPIN) }
         } catch {
-            await recordUnlockFailure(error, for: device)
+            try KeyOperationContext.check(token)
+            await recordUnlockFailure(error, for: device, rejectedPIN: oldPIN)
             throw error
         }
+        try KeyOperationContext.check(token)
         adoptChangedPIN(path: path, newPIN: newPIN)
     }
 
     /// Erases the key. Everything the app knew about it stops being true at this point.
     func resetKey(_ device: FidoDevice, expectedAAGUID: String?) async throws {
         let path = device.path
-        try await worker.admin { try $0.resetDevice(devicePath: path, expectedAAGUID: expectedAAGUID) }
+        let token = lease(for: path)
+        try await worker.admin(validity: token) { try $0.resetDevice(devicePath: path, expectedAAGUID: expectedAAGUID) }
+        try KeyOperationContext.check(token)
         adoptResetKey(path: path)
     }
 
@@ -281,17 +306,29 @@ final class DeviceStore: ObservableObject {
     ///
     /// Two of the four cannot be undone, which is the caller's problem to make plain before
     /// getting here: this layer just performs them.
+    private func authenticatedAdmin<T: Sendable>(path: String, token: OperationLease,
+                                                _ body: @escaping @Sendable (KeyAdminBackend) throws -> T) async throws -> T {
+        do { return try await worker.admin(validity: token, body) }
+        catch {
+            try KeyOperationContext.check(token)
+            if KeyFailurePolicy.invalidatesPINSession(error) { lock(path: path) }
+            throw error
+        }
+    }
+
     @discardableResult
     func toggleAlwaysUV(for device: FidoDevice) async throws -> Bool {
         let path = device.path
+        let token = lease(for: path)
         guard let pin = pin(for: path) else { throw KeyLockedError() }
-        return try await worker.admin { try $0.toggleAlwaysUV(devicePath: path, pin: pin) }
+        return try await authenticatedAdmin(path: path, token: token) { try $0.toggleAlwaysUV(devicePath: path, pin: pin) }
     }
 
     func setMinimumPINLength(for device: FidoDevice, length: Int) async throws {
         let path = device.path
+        let token = lease(for: path)
         guard let pin = pin(for: path) else { throw KeyLockedError() }
-        try await worker.admin { try $0.setMinimumPINLength(devicePath: path, length: length, pin: pin) }
+        try await authenticatedAdmin(path: path, token: token) { try $0.setMinimumPINLength(devicePath: path, length: length, pin: pin) }
         // The key may now consider the PIN in use too short, and it will refuse everything
         // else until that is dealt with. Re-read rather than assume.
         await refreshStatus(for: device)
@@ -299,16 +336,18 @@ final class DeviceStore: ObservableObject {
 
     func forcePINChange(for device: FidoDevice) async throws {
         let path = device.path
+        let token = lease(for: path)
         guard let pin = pin(for: path) else { throw KeyLockedError() }
-        try await worker.admin { try $0.forcePINChange(devicePath: path, pin: pin) }
+        try await authenticatedAdmin(path: path, token: token) { try $0.forcePINChange(devicePath: path, pin: pin) }
         // The key now refuses every other operation, and the HUD routes on exactly this flag.
         await refreshStatus(for: device)
     }
 
     func enableEnterpriseAttestation(for device: FidoDevice) async throws {
         let path = device.path
+        let token = lease(for: path)
         guard let pin = pin(for: path) else { throw KeyLockedError() }
-        try await worker.admin { try $0.enableEnterpriseAttestation(devicePath: path, pin: pin) }
+        try await authenticatedAdmin(path: path, token: token) { try $0.enableEnterpriseAttestation(devicePath: path, pin: pin) }
     }
 
     // MARK: - Armed reset
@@ -328,6 +367,7 @@ final class DeviceStore: ObservableObject {
     /// reset, and the caller has milliseconds to spare, not seconds.
     var onArmedKeyAppeared: ((FidoDevice) -> Void)?
 
+    var onResetArmingExpired: (() -> Void)?
     private var disarmTask: Task<Void, Never>?
 
     /// Arms the reset and starts the window in which a reappearing key will be reset.
@@ -340,7 +380,10 @@ final class DeviceStore: ObservableObject {
         disarmTask = Task { [weak self] in
             try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.disarmReset() }
+            await MainActor.run {
+                self?.disarmReset()
+                self?.onResetArmingExpired?()
+            }
         }
     }
 
@@ -350,17 +393,17 @@ final class DeviceStore: ObservableObject {
         armedReset = nil
     }
 
-    /// Adopts a PIN the key has just accepted as its new one.
-    ///
-    /// Used after a PIN change: proving knowledge of the old PIN is the same proof an unlock
-    /// asks for, so the key stays open rather than demanding the new PIN immediately. The old
-    /// token goes first — leaving it would keep a PIN that no longer opens anything in memory
-    /// until its TTL ran out.
+    /// Replaces the cached PIN after a successful change, keeping the session unlocked.
     func adoptChangedPIN(path: String, newPIN: String) {
         guard var state = states[path] else { return }
         if let existing = state.pinToken { pinVault.remove(token: existing) }
+        state.pinGeneration = UUID()
+        let generation = state.pinGeneration
         state.pinToken = pinVault.store(pin: newPIN, ttl: pinTTL) { [weak self] in
-            Task { @MainActor in self?.handlePinExpiration(for: path) }
+            Task { @MainActor in
+                guard self?.states[path]?.pinGeneration == generation else { return }
+                self?.handlePinExpiration(for: path)
+            }
         }
         state.unlocked = true
         state.hasPIN = true
@@ -374,6 +417,7 @@ final class DeviceStore: ObservableObject {
     /// A reset key has no PIN, no credentials and a full retry budget. Carrying any of the
     /// old state forward would leave the app describing a key that no longer exists.
     func adoptResetKey(path: String) {
+        invalidate(path)
         guard var state = states[path] else { return }
         if let token = state.pinToken { pinVault.remove(token: token) }
         state.pinToken = nil
@@ -385,22 +429,37 @@ final class DeviceStore: ObservableObject {
         onKeyClosed?(path)
     }
 
-    private func recordUnlockFailure(_ error: Error, for device: FidoDevice) async {
+    private func recordUnlockFailure(_ error: Error, for device: FidoDevice, rejectedPIN: String) async {
+        let path = device.path
+        let token = lease(for: path)
         let presented = FidoPassErrorPresenter.message(for: error)
-        var state = states[device.path] ?? KeyState(device: device)
-        switch presented.kind {
-        case .pinInvalid:
-            let path = device.path
-            state.pinRetriesRemaining = (try? await worker.device { try $0.status(devicePath: path).pinRetriesRemaining }) ?? nil
-        case .pinBlocked, .pinAuthBlocked:
-            state.pinRetriesRemaining = 0
-        default:
-            break
+        var remaining: Int?
+        if presented.kind == .pinInvalid {
+            remaining = (try? await worker.device(validity: token) { try $0.status(devicePath: path).pinRetriesRemaining }) ?? nil
         }
-        states[device.path] = state
+        guard token.isValid, var state = states[path] else { return }
+        switch presented.kind {
+        case .pinInvalid: state.pinRetriesRemaining = remaining
+        case .pinBlocked, .pinAuthBlocked: state.pinRetriesRemaining = 0
+        default: return
+        }
+        let rejectedCachedPIN = state.pinToken.flatMap { pinVault.pin(for: $0) }
+            .map { $0.utf8.elementsEqual(rejectedPIN.utf8) } ?? false
+        let blocked = presented.kind == .pinBlocked || presented.kind == .pinAuthBlocked
+        if rejectedCachedPIN || blocked {
+            if let existing = state.pinToken { pinVault.remove(token: existing) }
+            state.pinToken = nil
+            state.unlocked = false
+        }
+        states[path] = state
+        if rejectedCachedPIN || blocked {
+            invalidate(path)
+            onKeyClosed?(path)
+        }
     }
 
     func lock(path: String) {
+        invalidate(path)
         guard var state = states[path] else { return }
         if let token = state.pinToken { pinVault.remove(token: token) }
         state.unlocked = false
@@ -410,7 +469,7 @@ final class DeviceStore: ObservableObject {
     }
 
     func lockAll() {
-        for path in unlockedPaths { lock(path: path) }
+        for path in Array(states.keys) { lock(path: path) }
     }
 
     private func handlePinExpiration(for path: String) {
@@ -443,6 +502,14 @@ final class DeviceStore: ObservableObject {
         return { vault.pin(for: token, extending: ttl) }
     }
 
+    func adoptInfo(_ info: AuthenticatorInfo, for path: String) {
+        guard var state = states[path] else { return }
+        state.minPINLength = info.minPINLength
+        state.forcePINChange = info.forcePINChange
+        state.hasPIN = info.option("clientPin")
+        states[path] = state
+    }
+
     /// Reads what the key says about itself: PIN attempts left, whether it has a PIN at all.
     ///
     /// Costs no PIN and no touch — but it does **open** the device, and on macOS libfido2
@@ -451,7 +518,9 @@ final class DeviceStore: ObservableObject {
     /// reset with an external tool has to stay free. Only a request from the user gets here.
     func refreshStatus(for device: FidoDevice) async {
         let path = device.path
-        guard let status = try? await worker.device({ try $0.status(devicePath: path) }),
+        let token = lease(for: path)
+        guard let status = try? await worker.device(validity: token, { try $0.status(devicePath: path) }),
+              token.isValid, KeyOperationContext.lease?.isValid != false,
               var state = states[path] else { return }
         state.pinRetriesRemaining = status.pinRetriesRemaining
         state.hasPIN = status.hasPIN

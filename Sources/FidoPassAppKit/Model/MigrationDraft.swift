@@ -1,12 +1,7 @@
 import FidoPassCore
 import Foundation
 
-/// The identity the v2 copy of a v1 portable account is about to be created with.
-///
-/// Random when the screen opens, and editable: if the same account was already migrated on
-/// another key, the identity that key shows is the one to enter, so both keys show the same
-/// fingerprint for what is the same account. When an unfinished copy is already on the key,
-/// its identity is the one being finished with, and the field is read-only.
+/// Identity for a portable v1 migration. Editable for a new copy; fixed when resuming one.
 struct MigrationDraft: Equatable {
     var identityHex: String
     /// The identity is the copy's — already in `user.id` on the key — and cannot change here.

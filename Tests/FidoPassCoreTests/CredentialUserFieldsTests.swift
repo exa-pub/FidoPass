@@ -123,3 +123,22 @@ final class CredentialUserFieldsTests: XCTestCase {
         XCTAssertEqual(first.account, second.account, "the record on the key does not know which key")
     }
 }
+
+extension CredentialUserFieldsTests {
+    func testCredentialNameMustRejectNUL() {
+        XCTAssertThrowsError(try EnrollmentService.encodeUserName("vault\0suffix"))
+    }
+}
+
+extension CredentialUserFieldsTests {
+    func testInconsistentAccountCannotDerive() {
+        var account = Account.fixture()
+        account.kind = .portable
+        account.mask = Data([1])
+        XCTAssertFalse(account.canDerive)
+        XCTAssertThrowsError(try account.validateForDerivation())
+        account = Account.fixture()
+        account.credentialIdB64 = "!"
+        XCTAssertFalse(account.canDerive)
+    }
+}

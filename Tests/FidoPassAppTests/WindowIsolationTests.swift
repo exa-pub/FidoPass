@@ -8,7 +8,7 @@ import TestSupport
 /// The panel and the manager are separate windows, and the state each one edits must belong to
 /// it alone. These tests pin that boundary before the stores behind the two windows are split.
 @MainActor
-final class WindowIsolationTests: XCTestCase {
+final class WindowIsolationTests: AppTestCase {
 
     /// The manager's change-PIN sheet and the panel's bootstrap screen used to edit the same
     /// fields. Closing the panel — which happens the moment any other window takes focus —
@@ -98,26 +98,41 @@ final class WindowIsolationTests: XCTestCase {
     }
 
     /// Abandoning a touch hides the prompt at once, whatever the key is still doing.
-    func testAbandoningATouchReturnsTheIconToItsRestingState() async {
+    func testAbandoningATouchReturnsTheIconToItsRestingState() async throws {
         let (store, _, _) = await AppTestFactory.unlockedStore()
         let latch = Latch()
 
         let operation = Task { @MainActor in
-            await store.withTouchPrompt(TouchPrompt(title: "Touch", message: "Now", deviceName: "Key")) {
+            try? await store.withTouchPrompt(TouchPrompt(title: "Touch", message: "Now", deviceName: "Key")) {
                 await withCheckedContinuation { latch.continuation = $0 }
             }
         }
-        for _ in 0..<50 where store.touch == nil { await Task.yield() }
+        defer { latch.continuation?.resume(); latch.continuation = nil }
+        try await waitUntil { latch.continuation != nil }
         XCTAssertEqual(store.iconState, .waitingForTouch)
 
         store.abandonTouch()
 
         XCTAssertEqual(store.iconState, .unlocked)
         latch.continuation?.resume()
+        latch.continuation = nil
         await operation.value
     }
 
-    private final class Latch: @unchecked Sendable {
+    @MainActor
+    private final class Latch {
         var continuation: CheckedContinuation<Void, Never>?
+    }
+}
+
+@MainActor
+extension WindowIsolationTests {
+    func testClosingHUDMustClearImportDraft() async {
+        let (panel, _, _) = await AppTestFactory.unlockedStore()
+        panel.enrollDraft.mode = .import
+        panel.enrollDraft.importText = "synthetic-import-draft"
+        panel.show(.enroll)
+        panel.panelDidClose()
+        XCTAssertTrue(panel.enrollDraft.importText.isEmpty, "Import draft survived closing")
     }
 }

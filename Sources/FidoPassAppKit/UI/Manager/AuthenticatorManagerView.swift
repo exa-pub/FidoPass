@@ -1,15 +1,8 @@
 import SwiftUI
 import FidoPassCore
 
-/// The FIDO manager window: what is on the key, as the key describes it.
-///
-/// Deliberately without product framing. Relying parties are shown as they are — FidoPass's
-/// own two sit in the same list as `github.com` — because the window's purpose is to show
-/// the authenticator, not the app's view of it. The one exception is FidoPass portable key
-/// material, which is withheld in the core; see `CredentialUserName`.
-///
-/// **Opening this window is the request to read** — see `ManagerStore.deviceDidAppear`. The
-/// view only says when it appeared and which key it is looking at; the store decides.
+/// Manager inventory and settings, including all relying parties.
+/// Core redacts portable key material before presentation or export.
 struct AuthenticatorManagerView: View {
     @ObservedObject var store: ManagerStore
     @ObservedObject private var devices: DeviceStore
@@ -40,7 +33,6 @@ struct AuthenticatorManagerView: View {
         .frame(minWidth: 900, minHeight: 560)
         // Keyed on the device so switching keys reads the one now on screen rather than
         // leaving the other one's answers up.
-        .task(id: store.device?.path) { await store.deviceDidAppear() }
         .onChange(of: store.isUnlocked) { _, unlocked in
             guard unlocked else { return }
             Task { await store.keyDidUnlock() }
@@ -67,8 +59,8 @@ struct AuthenticatorManagerView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                if devices.devices.count > 1 {
-                    Picker("", selection: Binding(get: { store.device?.path ?? "" }, set: { store.chosenPath = $0 })) {
+                if !devices.devices.isEmpty {
+                    Picker("", selection: Binding(get: { store.device?.path ?? "" }, set: { path in Task { await store.selectDevice(path: path) } })) {
                         ForEach(devices.devices) { candidate in
                             Text(candidate.displayName).tag(candidate.path)
                         }

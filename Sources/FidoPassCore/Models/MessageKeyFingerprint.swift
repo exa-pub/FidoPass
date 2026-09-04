@@ -1,18 +1,8 @@
 import Foundation
 
-/// Six bytes that stand for an encryption key: shown as six emoji, written as twelve hex
-/// digits in the key link's `&keyfp=` parameter.
-///
-/// argon2id over the link's payload — `hpkev1?…` up to `&keyfp=`, without the carrier —
-/// deliberately slow: 48 bits is short enough to compare by eye and, at ~10 ms and 32 MiB per
-/// attempt, long enough that nobody forges a key with the same six emoji. The same trick as
-/// Signal's safety numbers. Over the payload rather than the whole link so that the same key
-/// spells the same emoji whether it travels as `https://fidopass.org/link#…` or as
-/// `fidopass://…`.
-///
-/// `keyfp` is a checksum, not a signature — whoever replaces the public key can recompute
-/// it. What protects against substitution is the person comparing the emoji with the key's
-/// owner over another channel, and the UI says so.
+/// Six-byte Argon2id checksum of the key-link payload, independent of its carrier.
+/// Shown as six emoji and twelve hex digits. It is not a signature: compare with the
+/// owner over another channel to detect key substitution.
 public struct MessageKeyFingerprint: Hashable, Sendable {
     public static let byteCount = 6
     /// Fixed and printable, so the fingerprint can be checked with the `argon2` command-line

@@ -1,20 +1,8 @@
 import Foundation
 
-/// How an account is laid out on the key. Two layouts exist; only the second is written.
-///
-/// **v1** — the released format. The account's name is its `user.id`; a portable account
-/// keeps its masked master key in `user.name`; the kind is the relying party
-/// (`fidopass.local`, `fidopass.portable`), which also enters a local account's salt.
-///
-/// **v2** — one relying party for both kinds. `user.id` is the identity, `user.name` and
-/// `user.displayName` are the name and nothing else, and what the account *is* — its kind,
-/// and for a portable account its mask — lives in a record in the key's large-blob store
-/// (`AccountRecord`). Laid out so that a browser, which sees a credential only through
-/// WebAuthn, can read everything it needs from one assertion.
-///
-/// The relying-party ids are frozen. They enter every credential, and the v1 ones enter the
-/// salt of every v1 local password; the v2 one is the domain a web page has to be served
-/// from to reach these credentials, and a credential cannot be moved to another.
+/// Read-only v1 uses separate relying parties and stores portable masks in user.name.
+/// V2 uses one relying party, user.id for identity and AccountRecord for kind/mask.
+/// Relying-party IDs and layouts are immutable; see docs/crypto.md §4.
 public enum AccountFormat: String, Codable, Hashable, CaseIterable, Sendable {
     case v1
     case v2

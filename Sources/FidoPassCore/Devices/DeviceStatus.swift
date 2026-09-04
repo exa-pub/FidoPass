@@ -48,6 +48,6 @@ public struct DeviceStatus: Hashable, Sendable {
 
     /// The PIN rules to enforce in the UI for this key.
     public var pinPolicy: PinPolicy {
-        PinPolicy(minLengthBytes: minPINLength ?? PinPolicy.ctapFloor)
+        PinPolicy(minimumCodePoints: minPINLength ?? PinPolicy.ctapFloor)
     }
 }

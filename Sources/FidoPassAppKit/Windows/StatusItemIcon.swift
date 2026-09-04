@@ -1,11 +1,6 @@
 import AppKit
 
-/// The menu-bar icon.
-///
-/// Template images only: the system tints them for light and dark menu bars, and anything
-/// hand-coloured would look foreign in half the setups. The two states worth showing are the
-/// ones the user would otherwise have to go and check — the key is locked, and a secret is
-/// still on the clipboard.
+/// Template menu-bar images for key-lock and secret-clipboard state.
 enum StatusItemIcon {
 
     enum State: Equatable {

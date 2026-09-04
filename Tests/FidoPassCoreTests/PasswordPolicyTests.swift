@@ -1,3 +1,4 @@
+import TestSupport
 import XCTest
 @testable import FidoPassCore
 
@@ -34,7 +35,18 @@ final class PasswordPolicyTests: XCTestCase {
     /// the number of produced characters while topping up character classes.
     func testEngineSurvivesZeroLength() {
         var policy = PasswordPolicy()
-        policy.length = 0 // bypasses the initialiser's clamping
-        XCTAssertEqual(PasswordEngine.mapToPassword(Data(repeating: 0xAB, count: 64), policy: policy), "")
+        policy.length = 0 // Mutations use the same bounds as construction.
+        XCTAssertEqual(PasswordEngine.mapToPassword(Data(repeating: 0xAB, count: 64), policy: policy).count, 8)
+    }
+}
+
+extension PasswordPolicyTests {
+    func testPolicyMutationAndEmptyEntropyDoNotTrap() {
+        var policy = PasswordPolicy()
+        policy.length = Int.max
+        XCTAssertEqual(policy.length, 128)
+        XCTAssertEqual(PasswordEngine.mapToPassword(Data(), policy: policy).count, 128)
+        policy.length = Int.min
+        XCTAssertEqual(policy.length, 8)
     }
 }

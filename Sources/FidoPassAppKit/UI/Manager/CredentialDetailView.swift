@@ -44,7 +44,7 @@ struct CredentialDetailView: View {
             }
 
             if case .portableKeyMaterialWithheld = credential.userName {
-                Label("This is a FidoPass portable account in the v1 layout. Its key material is stored in the credential's user name, which is why this window withholds it — use the panel's backup-key screen, which explains what the value is before revealing it. The panel migrates it to the current layout.",
+                Label("This v1 portable account stores key material in its user name. Use the HUD to export its backup or migrate the account.",
                       systemImage: "lock.shield")
                     .font(.caption)
                     .foregroundStyle(.secondary)

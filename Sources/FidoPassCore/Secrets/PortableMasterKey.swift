@@ -1,19 +1,13 @@
 import Foundation
 
-/// A portable account's master key: the fixed component the key derives, XOR-ed with the
-/// mask stored on the key — in `user.name` for v1, in the account's record for v2. One
-/// touch to recover, and the same arithmetic in both formats, which is what lets a
-/// migrated account keep its passwords.
-///
-/// The XOR used to be written out in three places — enrolment, export and password
-/// derivation — and now message keys need it too. One function, so that "the master key" is
-/// one thing.
+/// Recovers a portable master key as fixed component XOR mask, for both account layouts.
 enum PortableMasterKey {
 
     /// Recovers the master key. One touch, for the fixed component.
     static func recover(_ handle: AccountHandle,
                         using derivation: SecretDeriving,
                         pinProvider: (@Sendable () -> String?)?) throws -> Data {
+        try handle.account.validateForDerivation()
         guard handle.account.kind == .portable else {
             throw FidoPassError.invalidState("Account is not portable")
         }

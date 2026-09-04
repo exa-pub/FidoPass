@@ -1,12 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// The credentials on a key: the list on the left, whatever is selected on the right.
-///
-/// Grouped by relying party because that is the only grouping the authenticator itself has —
-/// there is no folder, no tag and no creation order to sort by. FidoPass's own relying
-/// parties are not separated out or hidden: the window shows the key as it is, and a list
-/// that quietly omitted the app's own credentials would lie by omission.
+/// Discoverable credentials grouped by relying party, with details for the selected row.
 struct CredentialsBrowserView: View {
     let inventory: CredentialInventory
     @Binding var selection: String?

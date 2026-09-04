@@ -1,13 +1,8 @@
 import SwiftUI
 import FidoPassCore
 
-/// An account's identity as a person can compare it: the hex, and a strip of sixteen colours
-/// under it. Used by the panel and the manager alike.
-///
-/// Two sizes. The swatch (`.swatch`) is a small capsule that sits in a list row beside the
-/// name and keeps the hex in its tooltip — enough to see that two rows are, or are not, the
-/// same account. The full form shows the hex above a wider strip, for the screens where the
-/// identity is read out, typed in or checked against paper.
+/// Identity hex and sixteen colour cells. Swatches show hex in a tooltip; full views
+/// show both for comparison with another key or a recovery sheet.
 struct IdentityFingerprintView: View {
     enum Style {
         /// Inline in a row: 16 cells of 3 pt, 6 pt tall, no hex.

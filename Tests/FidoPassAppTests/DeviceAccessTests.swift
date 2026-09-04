@@ -15,7 +15,7 @@ import TestSupport
 /// appeared.** The assertions count calls rather than inspect values — the number of times
 /// the key was taken over is the whole subject.
 @MainActor
-final class DeviceAccessTests: XCTestCase {
+final class DeviceAccessTests: AppTestCase {
 
     private func backendWithOneKey() -> (MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()

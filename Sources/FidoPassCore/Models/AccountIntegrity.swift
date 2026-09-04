@@ -1,11 +1,7 @@
 import Foundation
 
-/// Whether an account as read from the key is whole enough to derive from.
-///
-/// A v2 credential without its record — an enrolment that was interrupted between the touch
-/// and the write, a blob store rewritten by another tool — is a credential and not an
-/// account: nothing is derived from it, and the one thing to do with it is delete it. The
-/// v1 equivalent is a portable credential whose `user.name` does not hold its key material.
+/// Whether the credential has the data required for derivation. Missing/corrupt v2
+/// records and unreadable v1 portable masks must fail closed.
 public enum AccountIntegrity: String, Codable, Hashable, Sendable {
     case ok
     /// A v2 credential with no record in the large-blob store.

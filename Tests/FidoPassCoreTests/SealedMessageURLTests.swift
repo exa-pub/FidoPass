@@ -1,3 +1,4 @@
+import TestSupport
 import XCTest
 @testable import FidoPassCore
 
@@ -98,5 +99,13 @@ final class SealedMessageURLTests: XCTestCase {
         XCTAssertEqual(failure("https://example.org/" + text), .notFidoPassURL)
         XCTAssertEqual(failure(text.uppercased()), .notFidoPassURL)
         XCTAssertEqual(failure("https://fidopass.org/link?" + (try message().payload)), .notFidoPassURL, "the payload belongs in the fragment")
+    }
+}
+
+extension SealedMessageURLTests {
+    func testOversizedPublicLinksAreRejectedBeforeDecoding() {
+        let text = "fidopass://hpkeblobv1?" + String(repeating: "A", count: MessageLimits.maxLinkBytes)
+        XCTAssertThrowsError(try SealedMessageURL(parsing: text))
+        XCTAssertThrowsError(try EncryptionKeyURL(parsing: text))
     }
 }

@@ -1,12 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The custom-label field, as an `NSTextField`.
-///
-/// SwiftUI's `TextField` does not expose the caret, and the caret is exactly what decides
-/// here: a left arrow means "move the cursor" everywhere except at the very start of the
-/// text, where it means "leave the field and go back to the chips". Guessing that from
-/// keystrokes alone is not possible, so the field is the AppKit one.
+/// AppKit label field exposing caret position: Left exits to chips only at the start.
 struct LabelTextField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
@@ -61,12 +56,7 @@ struct LabelTextField: NSViewRepresentable {
             self.parent = parent
         }
 
-        /// Takes focus and leaves a caret rather than a selection.
-        ///
-        /// `makeFirstResponder` on a text field selects its whole contents — which on a field
-        /// that already holds a draft looks like anything but a place to type. The selection
-        /// is collapsed straight after, and again on the next pass if the field editor is not
-        /// installed yet.
+        /// Focuses with a caret, collapsing AppKit’s select-all now or after the field editor appears.
         func focus(_ field: NSTextField, caretAtEnd: Bool) {
             guard !isChangingResponder else { return }
             isChangingResponder = true

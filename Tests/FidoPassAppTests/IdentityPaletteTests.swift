@@ -2,13 +2,11 @@ import XCTest
 import SwiftUI
 @testable import FidoPassAppKit
 import FidoPassCore
-#if canImport(AppKit)
 import AppKit
-#endif
 
 /// The strip is compared by eye between two keys, so it has to be the same function of the
 /// bytes everywhere, and every cell has to be visible.
-final class IdentityPaletteTests: XCTestCase {
+final class IdentityPaletteTests: AppTestCase {
 
     func testOneCellPerByte() {
         let colors = IdentityPalette.colors(for: .random())
@@ -50,11 +48,7 @@ final class IdentityPaletteTests: XCTestCase {
     }
 
     private func components(_ color: Color) -> (hue: CGFloat, saturation: CGFloat, brightness: CGFloat) {
-        #if canImport(AppKit)
         let converted = NSColor(color).usingColorSpace(.deviceRGB)!
         return (converted.hueComponent, converted.saturationComponent, converted.brightnessComponent)
-        #else
-        return (0, 0, 0)
-        #endif
     }
 }

@@ -1,25 +1,8 @@
 import Foundation
 
-/// An encryption key as it is handed around: a link anyone can seal a message under.
-///
-/// ```
-/// https://fidopass.org/link#hpkev1?nonce=<43>&pubkey=<43>&idfp=<22>&keyfp=<12 hex>    (180 chars)
-/// fidopass://hpkev1?nonce=<43>&pubkey=<43>&idfp=<22>&keyfp=<12 hex>                   (165 chars)
-/// ```
-///
-/// Everything in it is public. The nonce is what the private key is re-derived from on the
-/// authenticator, the public key is what a sender encrypts to, the locator finds the account
-/// without naming it, and `keyfp` is the fingerprint of the rest — the six emoji the owner
-/// and the sender compare, and a checksum against a link mangled in transit. The
-/// fingerprint is computed over the *payload*, `hpkev1?…` up to `&keyfp=`, which is the
-/// same whichever carrier the link travels in: the emoji are a property of the key, not of
-/// the link's dress.
-///
-/// Canonical form is the only form: fields in this order, base64url without padding, lower
-/// case, nothing else. `init(parsing:)` re-serialises what it read and refuses anything that
-/// does not come back identical, then checks the fingerprint. Not `Codable` and without a
-/// `description`: not because it is secret — it is not — but so that a 180-character link
-/// never ends up inside an error message by accident.
+/// Public encryption-key link: nonce, public key, account locator and payload checksum.
+/// Fields and encodings follow docs/crypto.md §7.1. Compare the fingerprint with the owner;
+/// a valid checksum alone cannot detect a substituted key.
 public struct EncryptionKeyURL: Hashable, Sendable {
     public static let host = "hpkev1"
     public static let nonceByteCount = 32
@@ -55,13 +38,8 @@ public struct EncryptionKeyURL: Hashable, Sendable {
                                                                                     locator: locator))
     }
 
-    /// Reads a link someone pasted, in either carrier. Whitespace is ignored; everything else
-    /// has to be exact.
-    ///
-    /// Throws `MessageCryptoError` — `.incomplete` for every prefix of a valid link, so that a
-    /// field being typed into can stay quiet; the other cases name what is wrong. A link
-    /// that stops before its checksum is a prefix like any other: the checksum is required,
-    /// but its absence is indistinguishable from a link not yet finished.
+    /// Reads either carrier with strict field order and encoding. Whitespace is ignored;
+    /// scheme, host and checksum hex are case-insensitive. Prefixes throw .incomplete.
     public init(parsing text: String) throws {
         let parsed = try FidoPassLinkParser.parse(text,
                                                   host: Self.host,

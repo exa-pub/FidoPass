@@ -11,3 +11,4 @@ libfido2/
 *.cer
 *.certSigningRequest
 FidoPass.zip
+FidoPass.app.zip

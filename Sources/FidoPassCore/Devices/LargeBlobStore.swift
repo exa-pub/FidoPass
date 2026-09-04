@@ -1,16 +1,9 @@
 import Foundation
 import CLibfido2
 
-/// The key's large-blob store, per credential — where a v2 account keeps its record.
-///
-/// CTAP keeps one array of encrypted entries for the whole key. Each entry is sealed under
-/// one credential's `largeBlobKey`, which is why the store is addressed by that key here:
-/// libfido2 fetches the array, finds the entry the key opens, and inflates it (raw DEFLATE,
-/// the same framing a browser uses, so a record written here reads there and back).
-///
-/// Reading needs neither PIN nor touch: the array is public and the key does the opening.
-/// Writing and removing rewrite the array and need the PIN. The key itself never leaves the
-/// core: it is read from a credential and used on the spot.
+/// Per-credential records in the shared large-blob array. libfido2 handles encryption
+/// and raw DEFLATE using the credential’s largeBlobKey, which stays in Core.
+/// Reads need no PIN or touch; writes and removal require PIN authentication.
 enum LargeBlobStore {
 
     /// The entry sealed under `key`, or `nil` when the store holds none for it.
@@ -34,7 +27,7 @@ enum LargeBlobStore {
 
     /// Writes `blob` as the entry for `key`, replacing any existing one. PIN, no touch.
     static func write(device: OpaquePointer, key: Data, blob: Data, pin: String?) throws {
-        let rc = PinScope.withPIN(pin) { pinCString in
+        let rc = try PinScope.withPIN(pin) { pinCString in
             key.withUnsafeBytes { keyPointer in
                 blob.withUnsafeBytes { blobPointer in
                     fido_dev_largeblob_set(device,
@@ -53,9 +46,9 @@ enum LargeBlobStore {
     }
 
     /// Removes the entry for `key`. Nothing to remove is not an error: the record is gone
-    /// either way, and this runs ahead of deleting the credential itself.
+    /// either way. The credential was already deleted; a failure leaves an encrypted orphan.
     static func remove(device: OpaquePointer, key: Data, pin: String?) throws {
-        let rc = PinScope.withPIN(pin) { pinCString in
+        let rc = try PinScope.withPIN(pin) { pinCString in
             key.withUnsafeBytes { pointer in
                 fido_dev_largeblob_remove(device,
                                           pointer.bindMemory(to: UInt8.self).baseAddress,

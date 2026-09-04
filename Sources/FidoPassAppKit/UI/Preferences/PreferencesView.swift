@@ -10,7 +10,6 @@ struct PreferencesView: View {
     @ObservedObject var labels: LabelStore
     @ObservedObject var hotkey: HotkeyRegistration
     let launchAtLogin: LaunchAtLoginService
-    @State private var startsAtLogin = false
 
     var body: some View {
         Form {
@@ -53,7 +52,7 @@ struct PreferencesView: View {
             }
 
             Section {
-                Toggle("Preselect the last account and label", isOn: $preferences.rememberLastUsed)
+                Toggle("Preselect the last account", isOn: $preferences.rememberLastUsed)
 
                 LabeledContent("Preselected") {
                     HStack(spacing: 8) {
@@ -67,7 +66,7 @@ struct PreferencesView: View {
             } header: {
                 Text("What FidoPass remembers")
             } footer: {
-                Text("The one account and label the HUD opens on, so the usual password is one keypress away. Stored on this Mac only.")
+                Text("The last selected credential. Label history is stored separately below. Stored on this Mac only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -109,7 +108,7 @@ struct PreferencesView: View {
                 Text("Label history")
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Labels are kept per account — offered under another account, a label would derive a password that is valid and wrong. They sync through iCloud when available, together with the account ids they are grouped by.")
+                    Text("Label history is stored on this Mac, separately for each account.")
                     Text("Nothing here is a secret: no password, PIN or backup key is written anywhere. But a forgotten label makes its password unreproducible even with the key in hand, which is what the recovery sheet is for.")
                 }
                 .font(.caption)
@@ -118,11 +117,7 @@ struct PreferencesView: View {
             }
 
             Section {
-                Toggle("Launch at login", isOn: Binding(get: { startsAtLogin },
-                                                        set: { newValue in
-                                                            startsAtLogin = newValue
-                                                            launchAtLogin.setEnabled(newValue)
-                                                        }))
+                LaunchAtLoginToggle("Launch at login", service: launchAtLogin)
                 Toggle("Show in Dock", isOn: $preferences.showInDock)
             } header: {
                 Text("Startup")
@@ -136,7 +131,6 @@ struct PreferencesView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460)
-        .onAppear { startsAtLogin = launchAtLogin.isEnabled }
     }
 
     /// One key's histories, under the name that key gave when they were recorded — which is

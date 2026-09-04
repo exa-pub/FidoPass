@@ -1,12 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The window the HUD lives in.
-///
-/// A plain `NSPopover` (or SwiftUI's `MenuBarExtra`) cannot be opened from a global hotkey
-/// and closes itself the moment a save panel appears or the key is being touched. Owning the
-/// window is what buys those two things; `canBecomeKey` is what lets the PIN field work at
-/// all, since a non-activating panel refuses first responder by default.
+/// HUD panel supporting global shortcuts and save dialogs.
+/// canBecomeKey allows PIN fields to receive focus in a non-activating panel.
 final class PanelWindow: NSPanel {
 
     init(contentViewController: NSViewController) {

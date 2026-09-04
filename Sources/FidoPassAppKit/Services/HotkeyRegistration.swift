@@ -1,12 +1,7 @@
 import Combine
 import Foundation
 
-/// Keeps the system-wide shortcut in step with what Preferences says it should be.
-///
-/// The two pieces of state here are transient — whether the last registration failed, and
-/// whether the settings window is currently capturing a new combination — which is why they
-/// live next to the registrar rather than in `Preferences`, whose job is what survives a
-/// relaunch.
+/// Coordinates hotkey registration and shortcut capture with persisted preferences.
 @MainActor
 final class HotkeyRegistration: ObservableObject {
 

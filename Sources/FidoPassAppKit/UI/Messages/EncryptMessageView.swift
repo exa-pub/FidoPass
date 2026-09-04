@@ -1,12 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// The sending window, top to bottom: the key link, its fingerprint, the text, the sealed
-/// link. Nothing here touches a security key, and nothing is written to disk.
-///
-/// The text is masked by default — bullets in the editor, as in a password field, while
-/// typing goes on underneath — and the eye shows it. Nothing here auto-hides or auto-shows:
-/// the eye is the only thing that changes it.
+/// Sending form with masked plaintext by default. Sealing requires no security key.
 struct EncryptMessageView: View {
     @ObservedObject var store: MessageEncryptStore
     @Environment(\.clipboard) private var clipboard

@@ -1,17 +1,8 @@
 import FidoPassCore
 import Foundation
 
-/// The fields of a set-PIN or change-PIN form, and the one operation they lead to.
-///
-/// One instance per screen. The panel's bootstrap screen and the manager's change-PIN sheet
-/// used to share a single form on the panel's store, and closing the panel — which happens
-/// the moment the manager takes focus — wiped a PIN the user was halfway through typing in
-/// the other window.
-///
-/// Validation is done here rather than by the key. For setting a first PIN that only changes
-/// *when* the user finds out, since libfido2 rejects a bad length before it sends anything.
-/// For a change it matters far more: a new PIN that was never going to be accepted must not
-/// cost one of the eight attempts standing between this key and a permanent lock-out.
+/// One PIN form per screen, bound to its key. Validate new PINs before hardware access
+/// so invalid input does not consume an authentication attempt.
 @MainActor
 final class PinFormModel: ObservableObject {
 
@@ -22,9 +13,17 @@ final class PinFormModel: ObservableObject {
         case change
     }
 
-    @Published var current = ""
-    @Published var new = ""
-    @Published var confirm = ""
+    @Published var current = "" { didSet { bindIfNeeded() } }
+    @Published var new = "" { didSet { bindIfNeeded() } }
+    @Published var confirm = "" { didSet { bindIfNeeded() } }
+
+    private(set) var boundPath: String?
+    private var boundLease: OperationLease?
+    private func bindIfNeeded() {
+        guard boundPath == nil, !isEmpty, let target = device() else { return }
+        boundPath = target.path
+        boundLease = devices.lease(for: target.path)
+    }
 
     let mode: Mode
     private let devices: DeviceStore
@@ -52,6 +51,8 @@ final class PinFormModel: ObservableObject {
         current = ""
         new = ""
         confirm = ""
+        boundPath = nil
+        boundLease = nil
     }
 
     /// The rules this key enforces on its own PIN.
@@ -61,20 +62,22 @@ final class PinFormModel: ObservableObject {
 
     /// Why the PIN being typed cannot be submitted yet — in words for the person typing.
     var issue: String? {
+        if mode == .change, let problem = PinPolicy.validateExisting(current), !current.isEmpty { return problem.message }
         let old = mode == .change && !current.isEmpty ? current : nil
         if let issue = policy.validate(new, oldPIN: old) {
             // "Enter a PIN" under an empty field is noise, not help.
             return issue == .empty ? nil : issue.message
         }
-        if !confirm.isEmpty, new != confirm {
+        if !confirm.isEmpty, !new.utf8.elementsEqual(confirm.utf8) {
             return "The two PINs do not match."
         }
         return nil
     }
 
     var canSubmit: Bool {
+        guard boundLease?.isValid == true, boundPath == device()?.path else { return false }
         guard !touchGate.isWorking, issue == nil else { return false }
-        guard !new.isEmpty, new == confirm else { return false }
+        guard !new.isEmpty, new.utf8.elementsEqual(confirm.utf8) else { return false }
         return mode == .change ? !current.isEmpty : true
     }
 

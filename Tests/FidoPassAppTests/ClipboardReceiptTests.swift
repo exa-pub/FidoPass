@@ -6,7 +6,7 @@ import TestSupport
 /// The "on the clipboard" indicator used to be a bare `Date?`. It survived account switches,
 /// claimed copies that belonged to a different account, and advertised a countdown that
 /// nothing ever read.
-final class ClipboardReceiptTests: XCTestCase {
+final class ClipboardReceiptTests: AppTestCase {
 
     private let copiedAt = Date(timeIntervalSince1970: 1_000_000)
 

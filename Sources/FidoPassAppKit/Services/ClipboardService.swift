@@ -1,74 +1,61 @@
 import Foundation
 import AppKit
 
-/// Puts a derived secret on the pasteboard with the handling such a value deserves.
-///
-/// A plain `setString` leaks in three directions: the value stays on the pasteboard
-/// indefinitely, clipboard managers archive it into their searchable history, and
-/// Universal Clipboard forwards it to every other Apple device on the account. All three
-/// are addressed here.
-///
-/// One instance per application: the pending wipe is state, and two of them would race to
-/// clear a pasteboard only one of them wrote.
+/// One owner for secret copies. Concealment is a convention clipboard managers may honor;
+/// currentHostOnly is AppKit's supported opt-out from Universal Clipboard.
 @MainActor
 final class ClipboardService {
-
-    /// Convention honoured by clipboard managers (Maccy, Alfred, Raycast and others) to
-    /// mean "do not record this in history". Not an Apple API — just a widely respected
-    /// agreement, and free to add.
-    private static let concealedType = "org.nspasteboard.ConcealedType"
-
-    /// How long a secret is allowed to stay on the pasteboard.
     nonisolated static let defaultClearInterval: TimeInterval = 45
-
+    private let pasteboard: any ClipboardPasteboard
+    private let now: () -> Date
     private var clearWorkItem: DispatchWorkItem?
+    private var ownedChangeCount: Int?
+    private var onCleared: (@Sendable () -> Void)?
+    private(set) var lastWriteSucceeded = false
 
-    init() {}
+    init(pasteboard: any ClipboardPasteboard = NSPasteboard.general, now: @escaping () -> Date = Date.init) {
+        self.pasteboard = pasteboard
+        self.now = now
+    }
 
-    /// Copies `secret`, then clears the pasteboard after `clearAfter` seconds.
-    ///
-    /// - Parameter syncAcrossDevices: when false the value never leaves this Mac.
-    /// - Returns: the deadline at which the pasteboard will be cleared, for UI countdowns.
-    /// - Parameter onCleared: called on the main queue once the value is no longer ours to
-    ///   clear — either because the timeout elapsed or because something else took over the
-    ///   pasteboard. Lets the UI stop advertising a countdown that no longer applies.
     @discardableResult
     func copySecret(_ secret: String,
                     clearAfter: TimeInterval = defaultClearInterval,
-                    syncAcrossDevices: Bool = false,
                     onCleared: (@Sendable () -> Void)? = nil) -> Date? {
-        let pasteboard = NSPasteboard.general
-        clearWorkItem?.cancel()
-
-        pasteboard.clearContents()
-        pasteboard.setString(secret, forType: .string)
-        // Marking it concealed keeps it out of clipboard-manager history.
-        pasteboard.setString("", forType: NSPasteboard.PasteboardType(Self.concealedType))
-        if !syncAcrossDevices {
-            // Opting out of Universal Clipboard keeps the secret on this machine.
-            pasteboard.setData(Data([1]), forType: NSPasteboard.PasteboardType("com.apple.is-sensitive"))
-        }
-
+        relinquish()
+        lastWriteSucceeded = false
+        let item = NSPasteboardItem()
+        guard item.setString(secret, forType: .string),
+              item.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")) else { return nil }
+        _ = pasteboard.prepareForNewContents(with: [.currentHostOnly])
+        guard pasteboard.writeObjects([item]) else { return nil }
+        lastWriteSucceeded = true
+        let count = pasteboard.changeCount
+        ownedChangeCount = count
+        self.onCleared = onCleared
         guard clearAfter > 0 else { return nil }
-
-        // Remember which pasteboard generation is ours: if anything else is copied in the
-        // meantime, clearing would destroy the user's newer content instead of our secret.
-        let ownedChangeCount = pasteboard.changeCount
-        let work = DispatchWorkItem {
-            if NSPasteboard.general.changeCount == ownedChangeCount {
-                NSPasteboard.general.clearContents()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.ownedChangeCount == count else { return }
+                self.clearIfOwned()
             }
-            // Fires either way: if someone else copied over it, our secret is equally gone.
-            onCleared?()
         }
         clearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + clearAfter, execute: work)
-        return Date().addingTimeInterval(clearAfter)
+        return now().addingTimeInterval(clearAfter)
     }
 
-    /// Clears the pasteboard immediately, but only if it still holds what we put there.
     func clearIfOwned() {
-        clearWorkItem?.perform()
+        if let count = ownedChangeCount, pasteboard.changeCount == count { _ = pasteboard.clearContents() }
+        relinquish()
+    }
+
+    private func relinquish() {
+        clearWorkItem?.cancel()
         clearWorkItem = nil
+        ownedChangeCount = nil
+        let callback = onCleared
+        onCleared = nil
+        callback?()
     }
 }

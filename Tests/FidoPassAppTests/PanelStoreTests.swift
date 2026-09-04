@@ -5,7 +5,7 @@ import TestSupport
 @testable import FidoPassAppKit
 
 @MainActor
-final class PanelStoreTests: XCTestCase {
+final class PanelStoreTests: AppTestCase {
 
     // MARK: - Unlock and the pending intent
 
@@ -74,7 +74,7 @@ final class PanelStoreTests: XCTestCase {
     /// Pressing Return used to leave the PIN form on screen while the key was being asked,
     /// which reads as "nothing happened, type it again" — and typing it again is precisely
     /// how PIN attempts get spent.
-    func testVerifyingThePinShowsAWaitingStateInsteadOfTheFormAgain() async {
+    func testVerifyingThePinShowsAWaitingStateInsteadOfTheFormAgain() async throws {
         let backend = MockKeyBackend()
         let device = MockKeyBackend.device()
         backend.devices = [device]
@@ -87,7 +87,8 @@ final class PanelStoreTests: XCTestCase {
         backend.enumerateGate = gate
 
         let submission = Task { await store.submitPin() }
-        try? await Task.sleep(nanoseconds: 80_000_000)
+        defer { gate.open() }
+        try await waitUntil { gate.hasEntered }
         XCTAssertTrue(store.isWorking)
         XCTAssertNotNil(store.busyTitle, "the panel must say it is checking, not re-offer the field")
 
@@ -449,19 +450,20 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertEqual(store.route, .accounts)
         XCTAssertNotNil(store.statusText)
 
-        let migrated = try XCTUnwrap(store.accounts.account(old))
+        XCTAssertNil(store.accounts.account(old), "A removed credential must not resolve by its former name")
+        let migrated = try XCTUnwrap(store.selection.flatMap { store.accounts.account($0) })
         XCTAssertEqual(migrated.account.format, .v2)
         XCTAssertEqual(migrated.account.identity, chosen)
         XCTAssertFalse(migrated.account.needsMigration)
         XCTAssertEqual(store.visibleAccounts.map(\.id), ["disk", "old"], "one row, not two")
-        XCTAssertEqual(store.primaryAction, .generateAndCopy(old), "once migrated, ⏎ generates again")
+        XCTAssertEqual(store.primaryAction, .generateAndCopy(AccountRef(migrated)), "once migrated, ⏎ uses the new credential")
 
         let newScope = LabelScope(credentialId: migrated.credentialIdB64)
         XCTAssertNotEqual(newScope, oldScope)
         XCTAssertEqual(store.labels.labels(for: newScope), ["work"], "the history followed the account")
         XCTAssertEqual(store.labels.labels(for: oldScope), [])
 
-        await store.copyPassword(for: old, label: "vault")
+        await store.copyPassword(for: AccountRef(migrated), label: "vault")
         XCTAssertEqual(backend.generateCalls.map { $0.accountId }, ["old"])
         XCTAssertEqual(store.route, .accounts)
         XCTAssertNotNil(store.generation.result)
@@ -557,7 +559,8 @@ final class PanelStoreTests: XCTestCase {
         XCTAssertEqual(backend.finishCalls, ["old"])
         XCTAssertEqual(backend.migrateCalls.count, 1, "no second copy is made")
         XCTAssertEqual(store.route, .accounts)
-        XCTAssertEqual(store.accounts.account(old)?.account.format, .v2)
+        XCTAssertNil(store.accounts.account(old))
+        XCTAssertEqual(store.selection.flatMap { store.accounts.account($0) }?.account.format, .v2)
         XCTAssertNil(store.accounts.migrationCopy(for: old))
         XCTAssertEqual(store.visibleAccounts.map(\.id), ["disk", "old"])
     }
@@ -850,7 +853,6 @@ final class PanelStoreTests: XCTestCase {
 
     /// One account, one label: no arrows are advertised, because there is nowhere to go.
     func testHintsOmitArrowsWhenThereIsNothingToMoveBetween() async {
-        let device = MockKeyBackend.device()
         let single = [Account.portableFixture(id: "vault")]
         let (store, _, _) = await AppTestFactory.unlockedStore(accounts: single)
 
@@ -964,7 +966,7 @@ final class PanelStoreTests: XCTestCase {
 /// revokes access to the key has to take that window with it — otherwise "locked" describes
 /// the account list while the messages stay readable elsewhere.
 @MainActor
-final class PanelDecryptorLifetimeTests: XCTestCase {
+final class PanelDecryptorLifetimeTests: AppTestCase {
 
     func testLockingTheKeyClosesTheDecryptor() async {
         let (store, _, device) = await AppTestFactory.unlockedStore()
@@ -1019,7 +1021,7 @@ final class PanelDecryptorLifetimeTests: XCTestCase {
 /// Issuing keys and receiving messages from the panel's side: what touches the key, what
 /// opens which window, and what a clicked link may do.
 @MainActor
-final class PanelMessageTests: XCTestCase {
+final class PanelMessageTests: AppTestCase {
 
     func testIssuingAKeyIsOneTouchAndOpensTheSendingWindowWithIt() async throws {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
@@ -1102,5 +1104,103 @@ final class PanelMessageTests: XCTestCase {
         XCTAssertTrue(backend.deriveMessageKeyCalls.isEmpty)
         XCTAssertTrue(backend.generateCalls.isEmpty)
         XCTAssertEqual(backend.enumerateCallCount, readsBefore, "nothing was read from the key for a link")
+    }
+}
+
+@MainActor
+extension PanelStoreTests {
+    private func delayedPanel() async -> (PanelStore, DelayedGenerationBackend) {
+        let backend = DelayedGenerationBackend()
+        let device = MockKeyBackend.device()
+        backend.devices = [device]
+        backend.pins[device.path] = "1234"
+        backend.accountsByPath[device.path] = [Account.fixture(id: "disk", kind: .local)]
+        let panel = AppTestFactory.makeStore(backend: backend)
+        await panel.prepareForDisplay()
+        panel.pinDraft = "1234"
+        await panel.submitPin()
+        panel.setLabel("vault")
+        return (panel, backend)
+    }
+
+    func testAbandonMustDiscardGenerationResult() async throws {
+        let (panel, backend) = await delayedPanel()
+        defer { backend.generationGate.open() }
+        let task = Task { await panel.revealPassword(for: panel.selection) }
+        try await waitUntil { backend.generationGate.hasEntered }
+        panel.abandonTouch()
+        backend.generationGate.open()
+        await task.value
+        XCTAssertTrue(panel.generation.result == nil, "Abandoned generation was published")
+    }
+
+    func testLockMustDiscardGenerationResult() async throws {
+        let (panel, backend) = await delayedPanel()
+        defer { backend.generationGate.open() }
+        let task = Task { await panel.revealPassword(for: panel.selection) }
+        try await waitUntil { backend.generationGate.hasEntered }
+        panel.lockSelectedKey()
+        backend.generationGate.open()
+        await task.value
+        XCTAssertTrue(panel.generation.result == nil, "Generation repopulated a locked session")
+    }
+
+    func testAccountReloadMustNotResurrectDroppedAccounts() async throws {
+        let (panel, backend, device) = await AppTestFactory.unlockedStore()
+        let gate = BlockingGate()
+        defer { gate.open() }
+        backend.enumerateGate = gate
+        let task = Task { await panel.accounts.reload(unlockedPaths: [device.path]) }
+        try await waitUntil { gate.hasEntered }
+        panel.lockSelectedKey()
+        gate.open()
+        await task.value
+        XCTAssertTrue(panel.accounts.accounts.isEmpty, "Reload restored accounts after locking")
+    }
+
+    func testLockDuringUnlockMustRemainLocked() async throws {
+        let (panel, backend, device) = await AppTestFactory.unlockedStore()
+        panel.lockSelectedKey()
+        let gate = BlockingGate()
+        defer { gate.open() }
+        backend.enumerateGate = gate
+        panel.pinDraft = "1234"
+        let task = Task { await panel.submitPin() }
+        try await waitUntil { gate.hasEntered }
+        panel.devices.lock(path: device.path)
+        gate.open()
+        await task.value
+        XCTAssertFalse(panel.isSelectedKeyUnlocked, "Pending unlock defeated a newer lock")
+    }
+
+    func testFailedMigrationMustExposeLeftoverCopyImmediately() async {
+        let legacy = Account.portableFixture(id: "old", legacy: true)
+        let (panel, backend, _) = await AppTestFactory.unlockedStore(accounts: [legacy])
+        backend.migrationLeavesCopy = true
+        panel.beginMigration(panel.selection!)
+        await panel.migrate()
+        XCTAssertNotNil(panel.migrationCopy, "Copy exists on the mock key, but Finish and Discard remain unavailable")
+    }
+
+    func testByteDistinctUnicodeLabelMustInvalidateResult() async {
+        let (panel, _, _) = await AppTestFactory.unlockedStore()
+        let composed = "é"
+        let decomposed = "e\u{0301}"
+        XCTAssertTrue(composed == decomposed)
+        XCTAssertFalse(composed.utf8.elementsEqual(decomposed.utf8))
+        panel.setLabel(composed)
+        await panel.revealPassword(for: panel.selection)
+        panel.setLabel(decomposed)
+        XCTAssertTrue(panel.generation.result == nil, "Different derivation bytes retained the previous result")
+    }
+}
+
+private final class DelayedGenerationBackend: MockKeyBackend, @unchecked Sendable {
+    // The immutable gate synchronizes the only additional state.
+    let generationGate = BlockingGate()
+    override func generatePassword(_ handle: AccountHandle, label: String,
+                                   pinProvider: @escaping @Sendable () -> String?) throws -> String {
+        generationGate.wait()
+        return "synthetic-password"
     }
 }

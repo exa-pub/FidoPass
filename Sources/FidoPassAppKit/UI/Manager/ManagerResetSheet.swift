@@ -62,6 +62,9 @@ struct ManagerResetSheet: View {
                                     message: "The reset has to be issued within seconds of the key being powered up, so it must be reconnected first.")
             case .replug: waitStage(title: "Plug the key back in",
                                     message: "The reset fires the moment it reappears, and then asks to be touched.")
+            case .retry, .expired:
+                Text("Reset is not armed. Retry starts a new, limited reconnect window.")
+                    .font(.caption)
             case .running:
                 waitStage(title: "Touch the key now",
                           message: waited >= 25
@@ -81,6 +84,10 @@ struct ManagerResetSheet: View {
                 if flow.stage != .running {
                     Button("Cancel") { store.cancelReset() }
                         .keyboardShortcut(.cancelAction)
+                }
+                if flow.stage == .retry || flow.stage == .expired {
+                    Button("Retry") { reset.retry() }
+                        .disabled(touchGate.isWorking)
                 }
                 if flow.stage == .confirm {
                     Button("Erase the key") { reset.arm() }
@@ -104,7 +111,7 @@ struct ManagerResetSheet: View {
 
         if flow.doomed.isEmpty {
             Text(flow.accountsReadable
-                 ? "No FidoPass accounts on this key. Its PIN will still be cleared."
+                 ? "No FidoPass accounts are listed. Credentials for other apps and websites, and the PIN, will also be erased."
                  : "The key is locked, so what it holds could not be read. Anything on it will still be erased.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -123,7 +130,7 @@ struct ManagerResetSheet: View {
         // Shown only when it actually gates the button. On a key that is known to hold
         // nothing there is nothing to acknowledge, and a checkbox that changes nothing is
         // worse than no checkbox — which is exactly how it read.
-        if !flow.isKnownEmpty {
+        Group {
             Toggle("I understand that this cannot be undone",
                    isOn: Binding(get: { reset.flow?.acknowledged ?? false },
                                  set: { reset.flow?.acknowledged = $0 }))

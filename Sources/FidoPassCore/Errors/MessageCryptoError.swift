@@ -1,11 +1,6 @@
 import Foundation
 
-/// Why a key or a message could not be used.
-///
-/// The cases exist to be told apart in the UI. While someone is typing or pasting a link,
-/// most intermediate states are simply incomplete — presenting those as failures would make
-/// normal editing look broken — and the states that really are wrong say what to do about
-/// them: ask for the link again, migrate the account, plug in the other key.
+/// Distinguishes incomplete input, malformed links and actionable cryptographic failures.
 public enum MessageCryptoError: Error, Equatable, LocalizedError, Sendable {
     /// Not a whole link yet. The ordinary state of a field being typed into — and of a key
     /// link cut off before its checksum, which is required but looks exactly like that.

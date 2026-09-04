@@ -1,18 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// Every salt an assertion is made under — one place, because the salts are the contract.
-///
-/// Two families. The v1 salts are plain SHA-256 over a domain string and the inputs, and
-/// they are frozen: a v1 account derives with them for as long as it exists. The v2 salts
-/// go through `prfSalt`, which is the wrapping WebAuthn's `prf` extension applies before
-/// handing a salt to the authenticator — so a browser page, which can only reach the key
-/// through that extension, gets the same 32 bytes back that this app does. That wrapping
-/// is the one thing the app and a browser could disagree on silently, and it is pinned by
-/// vector in `SaltFactoryTests`.
-///
-/// Messages have one salt for both formats: nothing about them is frozen the way v1
-/// passwords are, and a v1 account cannot be reached from a browser in any case.
+/// Frozen salts for password, fixed-component and message derivation.
+/// V2 and both layouts’ message salts use WebAuthn PRF wrapping; v1 password/fixed salts
+/// do not. See docs/crypto.md §§3–6 and SaltFactoryTests.
 enum SaltFactory {
     private static let residentPrefix = Data("fidopass|salt|".utf8)
     private static let fixedChallenge = Data("fidopass|fixed-challenge|v1".utf8)

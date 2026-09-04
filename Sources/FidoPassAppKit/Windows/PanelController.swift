@@ -144,7 +144,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         if panel?.isVisible == true { hide() } else { show() }
     }
 
-    func show(intent: PanelIntent? = nil) {
+    func show(intent: PanelIntent? = nil, readKey: Bool = true) {
         let panel = ensurePanel()
         position(panel)
         // An accessory app has no windows of its own to activate, so without this the panel
@@ -154,7 +154,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         // The first placement uses the panel's placeholder height, because SwiftUI has not
         // laid the content out yet. Place it again once it has.
         DispatchQueue.main.async { [weak self] in self?.position(panel) }
-        Task { await store.prepareForDisplay(intent: intent) }
+        Task { await store.prepareForDisplay(intent: intent, readKey: readKey) }
     }
 
     func hide() {

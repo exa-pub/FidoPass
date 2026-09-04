@@ -7,7 +7,7 @@ import TestSupport
 /// Erasing the key. What is asserted here is mostly what must *not* happen: the wrong key
 /// not erased, a cancelled wizard not firing, state not left behind.
 @MainActor
-final class ResetCoordinatorTests: XCTestCase {
+final class ResetCoordinatorTests: AppTestCase {
 
     private func armedReset() async throws -> (PanelStore, MockKeyBackend, FidoDevice, ResetCoordinator) {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
@@ -135,7 +135,7 @@ final class ResetCoordinatorTests: XCTestCase {
         await reset.task?.value
 
         XCTAssertNotNil(reset.error)
-        XCTAssertEqual(reset.flow?.stage, .replug, "the flow waits rather than pretending it worked")
+        XCTAssertEqual(reset.flow?.stage, .retry, "retry requires a fresh explicit authorization")
         XCTAssertEqual(backend.pins[device.path], "1234", "the key still has its PIN, so nothing was erased")
         XCTAssertFalse(backend.accountsByPath[device.path, default: []].isEmpty)
     }
@@ -194,8 +194,8 @@ final class ResetCoordinatorTests: XCTestCase {
 
         let empty = ResetFlow(deviceName: "Key", expectedAAGUID: nil,
                               doomed: [], accountsReadable: true, scopes: [])
-        XCTAssertTrue(empty.isKnownEmpty)
-        XCTAssertTrue(empty.canProceed, "nothing to acknowledge — and no checkbox is shown")
+        XCTAssertFalse(empty.isKnownEmpty, "An empty FidoPass list says nothing about other credentials")
+        XCTAssertFalse(empty.canProceed, "Erasing every credential always requires acknowledgement")
     }
 
     /// The wizard tells the user to unplug the key. When they do, the flow must survive the
@@ -244,5 +244,26 @@ final class ResetCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(backend.resetCalls.isEmpty)
         XCTAssertNil(store.devices.armedReset)
+    }
+}
+
+@MainActor
+extension ResetCoordinatorTests {
+    func testResetFailureMustOfferAnArmedRetry() async throws {
+        let (panel, backend, device) = await AppTestFactory.unlockedStore()
+        let reset = AppTestFactory.reset(for: panel)
+        try await reset.begin(device: device)
+        reset.flow?.acknowledged = true
+        reset.flow?.typed = "RESET"
+        reset.arm()
+        backend.resetError = FidoPassError.invalidState("synthetic timeout")
+        reset.armedKeyAppeared(device)
+        await reset.task?.value
+        XCTAssertEqual(reset.flow?.stage, .retry)
+        XCTAssertNil(panel.devices.armedReset)
+        reset.retry()
+        XCTAssertNotNil(panel.devices.armedReset)
+        XCTAssertEqual(reset.flow?.stage, .unplug)
+        reset.cancel()
     }
 }

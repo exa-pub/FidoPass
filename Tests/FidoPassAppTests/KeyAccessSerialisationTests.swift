@@ -11,7 +11,7 @@ import TestSupport
 /// password from the same one. `KeyWorker` therefore funnels every call through a single
 /// serial queue, and this is the test that says so.
 @MainActor
-final class KeyAccessSerialisationTests: XCTestCase {
+final class KeyAccessSerialisationTests: AppTestCase {
 
     /// Counts how many calls are inside the backend at once. Anything above one is the defect.
     private final class OverlapCountingBackend: MockKeyBackend, @unchecked Sendable {

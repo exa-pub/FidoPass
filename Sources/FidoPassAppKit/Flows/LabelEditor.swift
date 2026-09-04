@@ -1,16 +1,7 @@
 import Foundation
 
-/// The label the next password derives from, and the row that picks it.
-///
-/// The label is an input to derivation, not a name: the same key, account and label always
-/// produce the same password, and a typo silently produces a different one. The row offers
-/// the recent labels as chips and a field for anything else, and the keyboard walks exactly
-/// that row. This object is the one place that state lives — it used to be spread over the
-/// history store, the panel store and the view's own state, with four handlers keeping the
-/// three in step.
-///
-/// `draft` is what has been typed into the field. It survives losing focus and picking a
-/// chip, because retyping a label is exactly the mistake that derives a different password.
+/// Label selection and editing. The draft survives focus changes and chip selection
+/// to avoid losing an input needed to reproduce a password.
 @MainActor
 final class LabelEditor: ObservableObject {
 
@@ -42,14 +33,14 @@ final class LabelEditor: ObservableObject {
     func focus(_ target: LabelTarget?) {
         history.focus(target)
         current = PanelReducer.resolveLabel(recent: history.recent)
-        draft = chips.contains(current) ? "" : current
+        draft = chips.contains(where: { $0.utf8.elementsEqual(current.utf8) }) ? "" : current
     }
 
     /// A chip was picked, or a screen set the label outright.
     func set(_ label: String) {
         isEditing = false
         current = label
-        if !chips.contains(label) { draft = label }
+        if !chips.contains(where: { $0.utf8.elementsEqual(label.utf8) }) { draft = label }
     }
 
     /// A password was just derived with `label`, so it is the label now — whatever the row
@@ -74,7 +65,7 @@ final class LabelEditor: ObservableObject {
         if editing {
             // Stepping back into the field means going back to what was typed there.
             if !typed.isEmpty { current = typed }
-        } else if !chips.contains(current) {
+        } else if !chips.contains(where: { $0.utf8.elementsEqual(current.utf8) }) {
             draft = current
         }
     }
@@ -92,9 +83,9 @@ final class LabelEditor: ObservableObject {
 
         // Standing on the field means either typing in it, or having a label that is not one
         // of the chips — that text lives there whether or not it has focus.
-        let position = isEditing || !chips.contains(current)
+        let position = isEditing || !chips.contains(where: { $0.utf8.elementsEqual(current.utf8) })
             ? fieldIndex
-            : (chips.firstIndex(of: current) ?? 0)
+            : (chips.firstIndex(where: { $0.utf8.elementsEqual(current.utf8) }) ?? 0)
 
         // Wraps: with three or four positions, a dead end at each edge is just a key that
         // does nothing.

@@ -1,11 +1,6 @@
 import SwiftUI
 
-/// The key is waiting for a finger — as one strip, for windows that have content to keep on
-/// screen while it waits.
-///
-/// The panel's `TouchOverlayView` takes the whole panel over, which is right for a 340-point
-/// popover with nothing else to show. A window with a message in it must not lose that
-/// message to the prompt: this sits in the row the button was in and says the same thing.
+/// Inline touch prompt for windows that must keep their content visible.
 struct TouchInlineView: View {
     let prompt: TouchPrompt
     let onCancel: () -> Void

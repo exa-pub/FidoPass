@@ -9,7 +9,7 @@ import TestSupport
 /// left in the form, a doubled keypress not doubled on the key. Changing the PIN and erasing
 /// the key live in the manager; see `ManagerStoreTests` and `ResetCoordinatorTests`.
 @MainActor
-final class PinManagementTests: XCTestCase {
+final class PinManagementTests: AppTestCase {
 
     /// A key straight out of its packet: present, no PIN, nothing on it.
     private func freshKeyStore() async -> (PanelStore, MockKeyBackend, FidoDevice) {
@@ -136,5 +136,31 @@ final class PinManagementTests: XCTestCase {
         // navigated to, and an unexplained refusal is worse than a screen they did not ask for.
         store.backToAccounts()
         XCTAssertEqual(store.effectiveRoute, .pinChangeRequired)
+    }
+}
+
+@MainActor
+extension PinManagementTests {
+    func testMalformedUnlockPINMustNotReachBackend() async {
+        let (panel, backend, _) = await AppTestFactory.unlockedStore()
+        panel.lockSelectedKey()
+        let before = backend.enumerateCallCount
+        panel.pinDraft = "1"
+        await panel.submitPin()
+        XCTAssertEqual(backend.enumerateCallCount, before, "Impossible PIN reached authentication")
+    }
+
+    func testManagerPINFormMustNotFollowAnotherDevice() async {
+        let (panel, backend, first) = await AppTestFactory.unlockedStore()
+        let manager = AppTestFactory.manager(for: panel)
+        manager.chosenPath = first.path
+        manager.beginChangePIN()
+        manager.pinForm.current = "synthetic-old-pin"
+        manager.pinForm.new = "synthetic-new-pin"
+        manager.pinForm.confirm = "synthetic-new-pin"
+        backend.devices = [MockKeyBackend.device(path: "/dev/second")]
+        await panel.devices.refresh()
+        XCTAssertTrue(manager.pinForm.isEmpty || manager.pinForm.device()?.path != "/dev/second",
+                      "PIN draft for the removed key is now bound to its replacement")
     }
 }

@@ -1,25 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// `DeriveKeyPair` of DHKEM(X25519, HKDF-SHA256) — RFC 9180 §7.1.3 — the one piece of HPKE
-/// that CryptoKit does not expose.
-///
-/// A message key is a deterministic function of what the authenticator answers: the same
-/// account and nonce have to yield the same key pair on every machine, and a browser page
-/// holding the same `ikm` has to arrive at the same public key through its own HPKE
-/// library. `DeriveKeyPair` is what every such library implements, so the key pair is a
-/// function of the standard rather than of this code.
-///
-/// ```
-/// suite_id = "KEM" ‖ 0x0020
-/// dkp_prk  = HKDF-Extract(salt: "", ikm: "HPKE-v1" ‖ suite_id ‖ "dkp_prk" ‖ ikm)
-/// sk       = HKDF-Expand(dkp_prk, info: I2OSP(32, 2) ‖ "HPKE-v1" ‖ suite_id ‖ "sk", L: 32)
-/// pk       = X25519(sk, 9)
-/// ```
-///
-/// No clamping here: X25519 clamps the scalar at use, in CryptoKit as in every other
-/// implementation, so the public key is a function of the bytes of `sk`. `DHKEMTests` pins
-/// that with the RFC's own vectors, whose `skRm` is not clamped.
+/// RFC 9180 §7.1.3 DeriveKeyPair for X25519/HKDF-SHA256, absent from CryptoKit’s HPKE API.
+/// Do not clamp sk here: X25519 clamps at use. RFC vectors pin the original bytes.
+/// See docs/crypto.md §6.2 for the labelled HKDF construction.
 enum DHKEM {
     static let inputKeyMaterialByteCount = 32
     static let privateKeyByteCount = 32

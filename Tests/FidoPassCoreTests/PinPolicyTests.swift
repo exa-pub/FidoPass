@@ -1,16 +1,13 @@
+import TestSupport
 import XCTest
 @testable import FidoPassCore
 
-/// The rules a key PIN must satisfy.
-///
-/// Enforced here so a PIN that was never going to work is refused in the field rather than by
-/// the key — which matters most when changing a PIN, where a doomed attempt would spend one of
-/// the eight that stand between the key and a permanent lock-out.
+/// New PIN minimums count Unicode scalars; maximums count UTF-8 bytes.
 final class PinPolicyTests: XCTestCase {
 
     private let policy = PinPolicy()
 
-    func testTheProtocolFloorIsFourBytes() {
+    func testTheProtocolFloorIsFourScalars() {
         XCTAssertEqual(policy.validate("123"), .tooShort(min: 4))
         XCTAssertNil(policy.validate("1234"))
     }
@@ -22,9 +19,8 @@ final class PinPolicyTests: XCTestCase {
         XCTAssertEqual(policy.validate(String(repeating: "a", count: 64)), .tooLong(max: 63))
     }
 
-    /// Bytes, not characters. Counting characters would let a PIN through that the key then
-    /// rejects — and, at the short end, would accept a three-byte PIN spelled in two glyphs.
-    func testLengthIsCountedInUTF8Bytes() {
+    /// Multibyte scalars consume more of the byte ceiling.
+    func testTheMaximumCountsUTF8Bytes() {
         XCTAssertNil(policy.validate("паро"), "four characters, eight bytes — comfortably valid")
         // 16 emoji at 4 bytes each is 64: one character short of the glyph limit, one byte
         // over the real one.
@@ -32,7 +28,7 @@ final class PinPolicyTests: XCTestCase {
     }
 
     func testAKeyCanRaiseTheMinimum() {
-        let strict = PinPolicy(minLengthBytes: 6)
+        let strict = PinPolicy(minimumCodePoints: 6)
         XCTAssertEqual(strict.validate("12345"), .tooShort(min: 6))
         XCTAssertNil(strict.validate("123456"))
     }
@@ -40,7 +36,7 @@ final class PinPolicyTests: XCTestCase {
     /// A key that declares a minimum below the protocol floor is describing something CTAP2
     /// will not honour anyway.
     func testAMinimumBelowTheFloorIsIgnored() {
-        XCTAssertEqual(PinPolicy(minLengthBytes: 1).minLengthBytes, 4)
+        XCTAssertEqual(PinPolicy(minimumCodePoints: 1).minimumCodePoints, 4)
     }
 
     /// Some keys accept a "change" to the same value, which is worse than refusing it: the
@@ -61,13 +57,13 @@ final class PinPolicyTests: XCTestCase {
                                     supportsHmacSecret: true,
                                     remainingResidentKeys: 25,
                                     minPINLength: 8)
-        XCTAssertEqual(declared.pinPolicy.minLengthBytes, 8)
+        XCTAssertEqual(declared.pinPolicy.minimumCodePoints, 8)
 
         let silent = DeviceStatus(pinRetriesRemaining: 8,
                                   hasPIN: false,
                                   supportsHmacSecret: true,
                                   remainingResidentKeys: 25)
-        XCTAssertEqual(silent.pinPolicy.minLengthBytes, PinPolicy.ctapFloor)
+        XCTAssertEqual(silent.pinPolicy.minimumCodePoints, PinPolicy.ctapFloor)
     }
 }
 
@@ -86,5 +82,15 @@ final class FidoStatusMappingTests: XCTestCase {
 
     func testUnknownCodesSurviveAsThemselves() {
         XCTAssertEqual(FidoStatus(code: 0x7F), .other(0x7F))
+    }
+}
+
+extension PinPolicyTests {
+    func testPinPolicyMustCountCodePointsForMinimum() {
+        XCTAssertNotNil(PinPolicy().validate("éé"), "Two code points are not a four-character PIN")
+    }
+
+    func testPinPolicyMustRejectNULBeforeCStringConversion() {
+        XCTAssertNotNil(PinPolicy().validate("1234\0suffix"), "NUL would truncate the PIN at the C boundary")
     }
 }

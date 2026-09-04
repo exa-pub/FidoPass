@@ -1,12 +1,7 @@
 import Foundation
 import CLibfido2
 
-/// Reads an authenticator wide rather than deep: everything `getInfo` reports, and every
-/// resident credential credential management will list.
-///
-/// Lives beside `DeviceManagementService` rather than inside `DeviceRepository` for the same
-/// reason that one does: the repository is device access, this is an operation performed
-/// because a person asked. Nothing here writes to the key.
+/// Read-only getInfo and discoverable credential enumeration.
 final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
 
     private let deviceRepository: DeviceAccessing
@@ -81,7 +76,7 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
                 throw FidoPassError.unsupported("This key does not support credential management")
             }
 
-            let metadata = Self.readMetadata(device: device, pin: pin)
+            let metadata = try Self.readMetadata(device: device, pin: pin)
             let parties = try Self.readRelyingParties(device: device, pin: pin)
 
             var groups: [CredentialInventory.RelyingParty] = []
@@ -94,6 +89,7 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
                                                                    idHashHex: party.idHashHex,
                                                                    credentials: credentials))
                 } catch {
+                    guard KeyFailurePolicy.allowsAuthenticatedRecovery(after: error) else { throw error }
                     // One unreadable relying party must not blank the rest: a partial
                     // inventory that says which part is missing beats no inventory at all.
                     unreadable[party.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -114,13 +110,14 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
 
     /// Slot counts for the whole key. Best-effort: a key that declines to report them still
     /// has an enumerable credential list, and losing the counts must not lose the list.
-    private static func readMetadata(device: OpaquePointer, pin: String) -> (used: Int?, remaining: Int?) {
+    private static func readMetadata(device: OpaquePointer, pin: String) throws -> (used: Int?, remaining: Int?) {
         guard let raw = fido_credman_metadata_new() else { return (nil, nil) }
         var metadata: OpaquePointer? = raw
         defer { fido_credman_metadata_free(&metadata) }
 
-        let rc = PinScope.withPIN(pin) { fido_credman_get_dev_metadata(device, raw, $0) }
-        guard rc == FIDO_OK else { return (nil, nil) }
+        let rc = try PinScope.withPIN(pin) { fido_credman_get_dev_metadata(device, raw, $0) }
+        if rc == FIDO_ERR_INVALID_COMMAND || rc == FIDO_ERR_UNSUPPORTED_OPTION { return (nil, nil) }
+        try Libfido2Context.check(rc, operation: "credman_metadata")
         return (Int(fido_credman_rk_existing(raw)), Int(fido_credman_rk_remaining(raw)))
     }
 
@@ -137,7 +134,7 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
         var parties: OpaquePointer? = raw
         defer { fido_credman_rp_free(&parties) }
 
-        let rc = PinScope.withPIN(pin) { fido_credman_get_dev_rp(device, raw, $0) }
+        let rc = try PinScope.withPIN(pin) { fido_credman_get_dev_rp(device, raw, $0) }
         // A key holding nothing reports it as an error rather than as an empty list.
         if rc == FIDO_ERR_NO_CREDENTIALS { return [] }
         try Libfido2Context.checkCredman(rc, operation: "credman_get_dev_rp")
@@ -172,7 +169,7 @@ final class AuthenticatorInspectionService: AuthenticatorInspecting, Sendable {
         var residentKeys: OpaquePointer? = raw
         defer { fido_credman_rk_free(&residentKeys) }
 
-        let rc = PinScope.withPIN(pin) { fido_credman_get_dev_rk(device, rpId, raw, $0) }
+        let rc = try PinScope.withPIN(pin) { fido_credman_get_dev_rk(device, rpId, raw, $0) }
         if rc == FIDO_ERR_NO_CREDENTIALS { return [] }
         try Libfido2Context.checkCredman(rc, operation: "credman_get_dev_rk")
 

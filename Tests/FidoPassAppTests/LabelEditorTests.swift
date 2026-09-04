@@ -5,15 +5,12 @@ import TestSupport
 
 /// The label row on its own: what the field holds, and how a draft survives.
 @MainActor
-final class LabelEditorTests: XCTestCase {
+final class LabelEditorTests: AppTestCase {
 
     private func editor(recent: [String]) -> LabelEditor {
         let suite = "LabelEditorTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        let history = LabelStore(userDefaults: defaults,
-                                 ubiStore: InMemoryUbiquitousStore(),
-                                 notificationCenter: NotificationCenter())
+        let defaults = AppTestFactory.makeDefaults(suite: suite)
+        let history = LabelStore(userDefaults: defaults)
         let target = LabelTarget(scope: LabelScope(credentialId: "cred"), accountId: "vault",
                                  deviceSignature: "1050:0407", deviceName: "Key")
         for label in recent.reversed() { history.use(label, in: target) }

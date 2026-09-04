@@ -115,6 +115,7 @@ final class AuxiliaryWindows {
     /// optimised for the shortest path to a password, and a table of every credential on a
     /// key is neither of those things.
     func showAuthenticatorManager() {
+        Task { await container.manager.managerDidOpen() }
         if let managerWindow {
             present(managerWindow)
             return
@@ -128,7 +129,10 @@ final class AuxiliaryWindows {
                                 content: AnyView(view),
                                 size: NSSize(width: 960, height: 620),
                                 resizable: true)
-        onClose(of: window) { [weak self] in self?.managerWindow = nil }
+        onClose(of: window) { [weak self] in
+            self?.container.manager.managerDidClose()
+            self?.managerWindow = nil
+        }
         managerWindow = window
         present(window)
     }
@@ -195,8 +199,12 @@ final class AuxiliaryWindows {
     }
 
     private func onClose(of window: NSWindow, perform action: @escaping () -> Void) {
-        let delegate = WindowCloseDelegate(action: action)
-        delegates[ObjectIdentifier(window)] = delegate
+        let id = ObjectIdentifier(window)
+        let delegate = WindowCloseDelegate { [weak self] in
+            action()
+            self?.delegates.removeValue(forKey: id)
+        }
+        delegates[id] = delegate
         window.delegate = delegate
     }
 }

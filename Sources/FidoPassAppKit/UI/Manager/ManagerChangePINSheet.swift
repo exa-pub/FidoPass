@@ -1,12 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// Replacing the key's PIN.
-///
-/// Lives in the manager rather than the panel: it is a rare, deliberate operation on the key
-/// itself, which is what this window is for. It works on a locked key — proving knowledge of
-/// the old PIN is the same proof unlocking asks for — and on a key that is demanding a change,
-/// which is the one case where the user has no choice but to be here.
+/// Manager PIN-change form, also available when the key requires a PIN change.
 struct ManagerChangePINSheet: View {
     @ObservedObject var store: ManagerStore
     @ObservedObject private var form: PinFormModel

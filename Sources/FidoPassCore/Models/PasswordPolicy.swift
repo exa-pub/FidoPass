@@ -1,11 +1,6 @@
 import Foundation
 
-/// Note: there is deliberately no "avoid ambiguous characters" switch.
-///
-/// The alphabet in `PasswordEngine` always excludes `i l o I L O 0 1`. Generated keys are
-/// frequently transcribed by hand — onto a phone, into a disk-encryption prompt — where
-/// telling `l` from `1` is guesswork. The flag existed but was never read, so removing it
-/// changes no output; making it switchable would have been the wrong fix.
+/// Password mapping options. The frozen alphabet always excludes i l o I L O 0 1.
 public struct PasswordPolicy: Codable, Hashable, Sendable {
     /// Lengths outside this range are clamped rather than rejected.
     ///
@@ -14,7 +9,7 @@ public struct PasswordPolicy: Codable, Hashable, Sendable {
     /// trap on an empty password.
     public static let lengthRange = 8...128
 
-    public var length: Int
+    public var length: Int { didSet { length = Self.clampLength(length) } }
     public var useLower: Bool
     public var useUpper: Bool
     public var useDigits: Bool

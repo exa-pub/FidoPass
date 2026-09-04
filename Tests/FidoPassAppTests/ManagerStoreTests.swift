@@ -5,7 +5,7 @@ import TestSupport
 
 /// The manager window: when it reads the key, and the PIN change it hosts.
 @MainActor
-final class ManagerStoreTests: XCTestCase {
+final class ManagerStoreTests: AppTestCase {
 
     // MARK: - Reading
 
@@ -169,5 +169,21 @@ final class ManagerStoreTests: XCTestCase {
 
         XCTAssertNotNil(manager.settingsError)
         XCTAssertNil(store.error, "the panel has nothing to do with it")
+    }
+}
+
+@MainActor
+extension ManagerStoreTests {
+    func testManagerMustNotReadNewlyPluggedKeyWithoutRequest() async {
+        let backend = MockKeyBackend()
+        let panel = AppTestFactory.makeStore(backend: backend)
+        await panel.prepareForDisplay()
+        let manager = AppTestFactory.manager(for: panel)
+        await manager.deviceDidAppear()
+        backend.devices = [MockKeyBackend.device()]
+        await panel.devices.refresh()
+        // Mirrors the view's .task(id: store.device?.path) on hot-plug.
+        await manager.deviceDidAppear()
+        XCTAssertEqual(backend.inspectCallCount, 0, "Existing manager seized the newly appeared key")
     }
 }

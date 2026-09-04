@@ -48,7 +48,7 @@ enum PasswordEngine {
         // `policy.length` is a settable property, so it can still be zero here even
         // though PasswordPolicy clamps it on construction. Topping up character classes
         // indexes modulo `characters.count` and would trap on an empty password.
-        if !characters.isEmpty, policy.useLower || policy.useUpper || policy.useDigits || policy.useSymbols {
+        if !characters.isEmpty, !bytes.isEmpty, policy.useLower || policy.useUpper || policy.useDigits || policy.useSymbols {
             for (classIndex, characterSet) in requiredClasses.enumerated() {
                 if !characters.contains(where: { characterSet.contains($0) }) {
                     let position = Int(bytes[classIndex % bytes.count]) % characters.count

@@ -1,3 +1,4 @@
+import TestSupport
 import XCTest
 import CryptoKit
 @testable import FidoPassCore
@@ -163,4 +164,13 @@ final class MessageSealerTests: XCTestCase {
     }
 
     static let frozenMessage = "https://fidopass.org/link#hpkeblobv1?nonce=AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw&idfp=FZfcwcqV9GRF5jKRYBfPyQ&content=UYQyuFMtbgrHGFOfKywBJdW0z8Poem_7fLpZcrF_n1DqYOqz824Nv5Uj96quFjlFG3VolME-CFC1oSmUd3bODFIuEkauS815AMQgCEvaIbiNCKJR"
+}
+
+extension MessageSealerTests {
+    func testCombiningScalarsCannotBypassPlaintextByteBudget() throws {
+        let text = "a" + String(repeating: "\u{301}", count: MessageLimits.maxPlaintextBytes / 2)
+        XCTAssertEqual(text.count, 1)
+        let key = try MessageFixtures.url()
+        XCTAssertThrowsError(try MessageSealer().seal(text, for: key))
+    }
 }

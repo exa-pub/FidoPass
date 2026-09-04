@@ -1,14 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// The value that reproduces every password of a portable account.
-///
-/// It gets its own screen, its own wording and no resemblance to a password field: pasting
-/// it into a login box would be a catastrophe, and the UI must make that impossible to do
-/// by accident.
-///
-/// The identity under it is shown unmasked. It is not a secret, and it is the one thing a
-/// person can compare with a paper copy or with the other key without revealing anything.
+/// Backup presentation, separate from generated passwords. The identity is public.
 struct BackupKeyView: View {
     @ObservedObject var store: PanelStore
     let ref: AccountRef
@@ -26,7 +19,7 @@ struct BackupKeyView: View {
 
                 Text(revealed ? (backup?.base64 ?? "") : String(repeating: "•", count: backup?.base64.count ?? 64))
                     .font(.system(size: 11, design: .monospaced))
-                    .textSelection(.enabled)
+                    .textSelection(.disabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(7)

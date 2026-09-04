@@ -5,28 +5,26 @@ import FidoPassCore
 import TestSupport
 @testable import FidoPassAppKit
 
-/// Lets a test hold a backend call open, so mid-flight UI state can be observed.
-///
-/// One-shot: once opened it stays open. A plain semaphore deadlocked the suite, because
-/// unlocking is immediately followed by a second enumeration for the account list.
+/// The condition guards entry and release; one release opens the gate permanently.
 final class BlockingGate: @unchecked Sendable {
-    private let semaphore = DispatchSemaphore(value: 0)
-    private let lock = NSLock()
+    private let condition = NSCondition()
+    private var entered = false
     private var isOpen = false
 
+    var hasEntered: Bool { condition.withLock { entered } }
+
     func wait() {
-        lock.lock()
-        let opened = isOpen
-        lock.unlock()
-        guard !opened else { return }
-        semaphore.wait()
+        condition.lock()
+        defer { condition.unlock() }
+        entered = true
+        while !isOpen { condition.wait() }
     }
 
     func open() {
-        lock.lock()
+        condition.lock()
+        defer { condition.unlock() }
         isOpen = true
-        lock.unlock()
-        semaphore.signal()
+        condition.broadcast()
     }
 }
 
@@ -317,11 +315,8 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         return PortableBackup(masterKey: backupValue.masterKey, identity: handle.account.identity)!
     }
 
-    /// `MessageKey` is only constructible inside the core, so the mock borrows a core wired
-    /// to stub derivation rather than faking the type — and the same core's sealer, so what
-    /// it seals can be opened. The stub answers per credential and nonce, so different
-    /// accounts issue different keys and the same account always the same one; the fixed
-    /// component is constant, so a portable account and its backup share a master key.
+    /// Uses real Core message crypto with deterministic per-credential/nonce secrets.
+    /// A fixed portable component lets account and backup recover the same master key.
     private static let cryptoCore: FidoPassCore = {
         let derivation = MockSecretDerivationService()
         derivation.deriveMessageSecretClosure = { handle, nonce, _ in
@@ -429,30 +424,44 @@ final class RecordingWindowRouter: WindowRouter {
 
 enum AppTestFactory {
 
-    /// Containers built for tests, kept alive for the process.
-    ///
-    /// The container owns the cross-store reactions (a key going away closes the editor and
-    /// drops the inventory) through closures that hold it weakly. A test that keeps only the
-    /// panel store would otherwise lose those reactions the moment the container was
-    /// collected — which in the app never happens, because `AppDelegate` holds it.
+    /// Retains cross-store reactions until AppTestCase tears down the test.
     @MainActor
     private static var retained: [AppContainer] = []
+    @MainActor private static var domains: [String] = []
+
+    @MainActor static func cleanUp() {
+        for container in retained {
+            container.panel.panelDidClose()
+            container.manager.managerDidClose()
+            container.devices.lockAll()
+            container.clipboard.clearIfOwned()
+        }
+        retained.removeAll()
+        for suite in domains { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        domains.removeAll()
+    }
+
+    @MainActor
+    static func makeDefaults(suite: String = "AppTests-\(UUID().uuidString)") -> UserDefaults {
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        domains.append(suite)
+        return defaults
+    }
 
     /// The whole object graph on a mock key, with its own preferences domain so tests never
     /// touch the developer's real settings.
     @MainActor
-    static func makeContainer(backend: MockKeyBackend,
+    static func makeContainer(backend: KeyBackend,
                               suite: String = "HUDTests-\(UUID().uuidString)") -> AppContainer {
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+        let defaults = makeDefaults(suite: suite)
         let preferences = Preferences(defaults: defaults)
-        let labels = LabelStore(userDefaults: defaults,
-                                ubiStore: InMemoryUbiquitousStore(),
-                                notificationCenter: NotificationCenter())
+        let labels = LabelStore(userDefaults: defaults)
         let container = AppContainer(backend: backend,
                                      router: RecordingWindowRouter(),
                                      preferences: preferences,
                                      labels: labels,
+                                     clipboard: ClipboardService(pasteboard: MemoryPasteboard()),
                                      emptyConfirmationDelay: .milliseconds(1),
                                      enableMonitors: false)
         retained.append(container)
@@ -499,21 +508,24 @@ enum AppTestFactory {
         return (store, backend, device)
     }
 
-    /// Seeds label history for the account the store is currently pointed at.
-    ///
-    /// Labels are per account now, so a test that wants chips has to say which account they
-    /// belong to — there is no global list left to write into.
+    /// Seeds history for the selected credential and updates the label row.
     @MainActor
     static func seedLabels(_ store: PanelStore, _ labels: [String]) {
         guard let target = store.labelTarget(for: store.selection) else {
             XCTFail("no account selected, so there is no history to seed")
             return
         }
-        // As generation would: the history is written, and the label just used becomes the
-        // one the row points at.
         for label in labels {
             store.labels.use(label, in: target)
             store.labelEditor.adopt(label)
         }
+    }
+}
+
+// Fixture references use the same synthetic credential IDs as AccountHandle.fixture.
+extension AccountRef {
+    init(accountId: String, devicePath: String) {
+        self.init(accountId: accountId, devicePath: devicePath,
+                  credentialId: Data(accountId.utf8).base64EncodedString())
     }
 }

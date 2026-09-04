@@ -14,38 +14,6 @@ extension TestError: LocalizedError {
     }
 }
 
-public final class InMemoryUbiquitousStore: NSUbiquitousKeyValueStore {
-    private var storage: [String: Any] = [:]
-
-    public override init() {
-        super.init()
-    }
-
-    public override func set(_ anObject: Any?, forKey aKey: String) {
-        storage[aKey] = anObject
-    }
-
-    public override func set(_ aData: Data?, forKey aKey: String) {
-        storage[aKey] = aData
-    }
-
-    public override func removeObject(forKey aKey: String) {
-        storage.removeValue(forKey: aKey)
-    }
-
-    public override func array(forKey aKey: String) -> [Any]? {
-        storage[aKey] as? [Any]
-    }
-
-    public override func data(forKey aKey: String) -> Data? {
-        storage[aKey] as? Data
-    }
-
-    public override func synchronize() -> Bool {
-        true
-    }
-}
-
 public final class MockDeviceLister: DeviceListing, @unchecked Sendable {
     public init() {}
 

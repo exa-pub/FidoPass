@@ -4,12 +4,20 @@ import CLibfido2
 final class DeviceRepository: DeviceAccessing, Sendable {
     /// More keys than this on one Mac is not a case worth handling.
     private static let manifestLimit = 16
+    private let connectionFactory: (any DeviceConnectionFactory)?
+    private let injectedLister: (any DeviceListing)?
 
-    init() {
+    init(connectionFactory: (any DeviceConnectionFactory)? = nil, deviceLister: (any DeviceListing)? = nil) {
+        self.connectionFactory = connectionFactory
+        self.injectedLister = deviceLister
         Libfido2Context.initialize()
     }
 
     func listDevices() throws -> [FidoDevice] {
+        if let injectedLister { return try injectedLister.listDevices() }
+        guard connectionFactory == nil else {
+            throw FidoPassError.invalidState("An injected transport requires an explicit device list")
+        }
         let limit = Self.manifestLimit
         guard let rawList = fido_dev_info_new(limit) else {
             throw FidoPassError.noDevices
@@ -52,7 +60,15 @@ final class DeviceRepository: DeviceAccessing, Sendable {
             fido_dev_free(&dev)
         }
 
-        try Libfido2Context.check(fido_dev_open(device, path), operation: "open \(path)")
+        // Every synchronous call has a finite deadline, including open and non-reset work.
+        try Libfido2Context.check(fido_dev_set_timeout(device, 35_000), operation: "set_timeout")
+        if let connectionFactory {
+            return try LibfidoTransportBridge.withConfiguredDevice(device, connection: connectionFactory.connect(path: path)) { token in
+                try Libfido2Context.check(fido_dev_open(device, token), operation: "open injected device")
+                return try body(device, path)
+            }
+        }
+        try Libfido2Context.check(fido_dev_open(device, path), operation: "open device")
         return try body(device, path)
     }
 

@@ -1,13 +1,7 @@
 import Foundation
 
-/// Sealing and opening messages, and the two computations the windows need before any key
-/// is touched.
-///
-/// Pure computation: no device is involved. Sealing needs nothing but the key's link, which
-/// is why the sending window is not bound to a key at all; opening needs a `MessageKey`,
-/// which only `MessageKeyDeriving` can produce. `parseKey` and `locator` cost one argon2id
-/// each (~10 ms, 32 MiB), so a window runs them off the main actor; a test may substitute
-/// something cheaper.
+/// Device-independent message operations. Parsing fingerprints and computing locators
+/// use Argon2id and must run off the main actor.
 public protocol MessageSealing: Sendable {
     /// Seals text under a key. Every call produces a different link for the same input — a
     /// fresh ephemeral key is part of the construction.

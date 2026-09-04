@@ -3,7 +3,7 @@ import XCTest
 import FidoPassCore
 import TestSupport
 
-final class RecoverySheetTests: XCTestCase {
+final class RecoverySheetTests: AppTestCase {
 
     private func sheet(kind: AccountKind = .local,
                        labels: [String] = ["vault", "disk"]) -> String {

@@ -1,15 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// An account's key for one nonce: the public link, and the private key behind it.
-///
-/// Deriving it costs a touch of the security key, so the receiving window keeps it alive for
-/// as long as it is open rather than recomputing per message. A value type: the holder owns
-/// the only copy, and `wipe()` makes the end of its life explicit instead of leaving the
-/// material to be collected whenever.
-///
-/// One type for both uses. Issuing a key takes `url` and wipes the rest at once; opening
-/// messages keeps it until the window closes. The private key never leaves this module.
+/// Account key for one nonce. The private half stays in Core.
+/// A receiving window caches it per credential and nonce until close. wipe() releases
+/// this value’s reference; it cannot erase other Swift or CryptoKit copies.
 public struct MessageKey: Sendable {
     /// Everything public: nonce, public key, locator, fingerprint.
     public let url: EncryptionKeyURL

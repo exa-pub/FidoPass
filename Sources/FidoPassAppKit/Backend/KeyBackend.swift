@@ -1,14 +1,8 @@
 import FidoPassCore
 import Foundation
 
-/// What the app layer asks of an authenticator, in three facets.
-///
-/// The stores talk to these instead of `FidoPassCore` so they can be tested on a machine
-/// with no key attached — CI never has one. Split by consumer: the manager reads, the
-/// panel works with accounts, the settings and reset flows administer the key itself. A
-/// store names the facet it needs, and a test can substitute just that.
-///
-/// Every method here blocks on the authenticator; `KeyWorker` is the only permitted caller.
+/// Device, account and administration facets for the app and its test doubles.
+/// Run hardware methods through KeyWorker; message sealing is device-independent.
 
 /// Listing and reading keys. Nothing here writes, nothing needs a touch.
 protocol KeyDeviceBackend: Sendable {

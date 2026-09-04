@@ -1,11 +1,7 @@
 import Foundation
 
-/// One resident (discoverable) credential, exactly as credential management reports it.
-///
-/// The fields CTAP does not return for an enumerated credential are absent here rather than
-/// zero. `fido_cred_sigcount` answers 0 and `fido_cred_aaguid_len` answers 16 zero bytes for
-/// a credential read this way; both are artefacts of the C struct, not values, and
-/// rendering either would be a lie.
+/// Discoverable credential returned by credman. Unreported fields stay absent;
+/// libfido2’s default zero counters/AAGUID are not authenticator-reported values.
 public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
     /// Taken from the enumeration loop, never from `fido_cred_rp_id`: that getter returns
     /// NULL for a credential obtained through credential management.
@@ -13,21 +9,15 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
     public let credentialIdB64: String
     /// `user.id` is opaque bytes, so hex is the only always-correct rendering.
     public let userIdHex: String
-    /// The same bytes as readable text, when they are any — which they are for a FidoPass
-    /// account, whose id is stored there directly. See `readableText(from:)` for why
-    /// "decodes as UTF-8" is not the test.
+    /// User-id bytes as text when `readableText(from:)` accepts them. A v2 FidoPass
+    /// identity is binary and need not be readable.
     public let userIdUTF8: String?
     public let userName: CredentialUserName
     public let userDisplayName: String?
     public let coseAlgorithm: Int?
     public let publicKeyB64: String?
     public let credentialProtection: CredentialProtection?
-    /// Whether a `largeBlobKey` came back with this credential.
-    ///
-    /// The key itself never leaves the core: it decrypts that credential's large blob. In
-    /// practice authenticators return one for every resident credential, whether or not it
-    /// was asked for at creation, so this carries little information — but it must still
-    /// never be the material itself.
+    /// Presence of a largeBlobKey. Its bytes remain in Core and must not enter exports.
     public let hasLargeBlobKey: Bool
     /// The state of a v2 FidoPass account's record in the large-blob store. `nil` for every
     /// other credential. The record's mask is never carried here: it is key material in the
@@ -44,12 +34,7 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
 
     public var id: String { credentialIdB64 }
 
-    /// Renders opaque bytes as text only when the result is something a person can read.
-    ///
-    /// "Valid UTF-8" is not enough. A one-byte user id of `0x05` decodes perfectly well into
-    /// a control character, which draws as nothing at all — so the manager would show an
-    /// empty "user id (as text)" row and a blank list entry, both of which read as "this
-    /// field is missing" rather than "these bytes are not text". Seen on real hardware.
+    /// Shows user-id bytes as text only when valid UTF-8 contains no control characters.
     public static func readableText(from data: Data) -> String? {
         guard !data.isEmpty, let text = String(data: data, encoding: .utf8), !text.isEmpty else { return nil }
         let unreadable = text.unicodeScalars.contains { scalar in
@@ -78,8 +63,8 @@ public struct ResidentCredential: Sendable, Hashable, Codable, Identifiable {
         self.credentialIdB64 = credentialIdB64
         self.userIdHex = userIdHex
         self.userIdUTF8 = userIdUTF8
-        self.userName = userName
-        self.userDisplayName = userDisplayName
+        self.userName = userName.revealed.map { CredentialUserName.classify(rawName: $0, rpId: rpId) } ?? userName
+        self.userDisplayName = CredentialUserName.classify(rawName: userDisplayName, rpId: rpId).revealed
         self.coseAlgorithm = coseAlgorithm
         self.publicKeyB64 = publicKeyB64
         self.credentialProtection = credentialProtection

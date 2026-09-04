@@ -35,24 +35,14 @@ enum PanelReducer {
     static func resolveSelection(accounts: [AccountHandle],
                                  devices: [FidoDevice],
                                  memory: Preferences.LastUsed?) -> AccountRef? {
-        if let memory {
-            let matching = accounts.first { handle in
-                guard handle.id == memory.accountId,
-                      let device = devices.first(where: { $0.path == handle.devicePath }) else { return false }
-                return device.modelSignature == memory.deviceSignature
-            }
-            if let matching { return AccountRef(matching) }
+        if let credential = memory?.credentialId,
+           let matching = accounts.first(where: { $0.credentialIdB64 == credential }) {
+            return AccountRef(matching)
         }
         return accounts.first.map(AccountRef.init)
     }
 
-    /// The label to start from: the last one used with this very account, and otherwise the
-    /// conventional default.
-    ///
-    /// Nothing else is consulted. A label used with another account is not a candidate here
-    /// — it would derive a valid, wrong password — and `Preferences.LastUsed.label` now says
-    /// the same thing as the head of the account's own history, only for one account instead
-    /// of all of them.
+    /// Starts with this credential’s latest label, or the conventional default.
     static func resolveLabel(recent: [String]) -> String {
         recent.first ?? LabelStore.fallback
     }

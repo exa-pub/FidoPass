@@ -1,14 +1,6 @@
 import Foundation
 
-/// The `user.name` of a credential, with FidoPass's own key material removed.
-///
-/// A portable v1 account stores its masked master key in `user.name`, and credential
-/// management hands that field back for a PIN alone — no touch. Rendering it verbatim would
-/// print key material on screen and write it into any export, bypassing `BackupKeyView` and
-/// its warning entirely. A v2 account keeps a plain name there and nothing is withheld.
-///
-/// Redaction happens here, in the core, rather than in a view: this type is `Codable` and
-/// the JSON export never passes through a view.
+/// Redacts portable v1 material from credential user names in Core, before UI or JSON export.
 public enum CredentialUserName: Sendable, Hashable, Codable {
     case value(String)
     /// FidoPass v1 portable key material. Nothing of it is carried — not even truncated,
@@ -39,7 +31,8 @@ public enum CredentialUserName: Sendable, Hashable, Codable {
     /// hiding it would misrepresent what is on the key.
     public static func classify(rawName: String?, rpId: String) -> CredentialUserName {
         guard let rawName, !rawName.isEmpty else { return .none }
-        if rpId == AccountKind.portable.rpId, PortablePayload(base64: rawName) != nil {
+        if rpId == AccountKind.portable.rpId,
+           PortablePayload(base64: rawName) != nil || rawName.hasPrefix("fp-ext:v1:") {
             return .portableKeyMaterialWithheld
         }
         return .value(rawName)

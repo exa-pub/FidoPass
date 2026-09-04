@@ -46,7 +46,7 @@ struct EmptyAccountsView: View {
                 .foregroundStyle(.secondary)
             Text("No accounts on this key")
                 .font(.system(size: 13, weight: .semibold))
-            Text("An account is one derivation identity — a vault master password, a disk key. One or two is the normal number.")
+            Text("Create an account for a vault master password, a disk key or a backup passphrase.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -258,10 +258,13 @@ struct AccountRowView: View {
                 .foregroundStyle(.tertiary)
 
             HStack(spacing: 4) {
-                ForEach(labels.chips, id: \.self) { label in
+                ForEach(Array(labels.chips.enumerated()), id: \.offset) { _, label in
                     LabelChip(label: label,
-                              isCurrent: label == editor.current && !editor.isEditing,
+                              isCurrent: label.utf8.elementsEqual(editor.current.utf8) && !editor.isEditing,
                               action: { store.setLabel(label) })
+                        .help(labels.chips.contains { $0 == label && !$0.utf8.elementsEqual(label.utf8) }
+                              ? "Distinct label bytes: " + label.utf8.map { String(format: "%02x", $0) }.joined(separator: " ")
+                              : label)
                 }
 
                 LabelTextField(text: Binding(get: { editor.draft }, set: { editor.draftChanged($0) }),
@@ -452,7 +455,7 @@ struct ResultView: View {
                     .font(.system(size: 12, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .textSelection(.enabled)
+                    .textSelection(.disabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)

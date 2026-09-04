@@ -1,20 +1,8 @@
 import Foundation
 
-/// Moves a portable v1 account to the v2 layout by recreating it.
-///
-/// The material of a portable account is its master key, which the credential only masks;
-/// a new credential with the same master key derives the same passwords and issues the
-/// same message keys. So the copy is made, the master key is read back **through the copy**
-/// by the ordinary path — enumerate, record, recover — and compared, and only then is the
-/// original deleted. Any failure before that deletes the copy instead. Four touches.
-///
-/// The copy is created under the original's own name and with no marker of any kind: a
-/// name is a name. The pair "v1 and v2 with one name on one key" can arise no other way,
-/// because ordinary creation refuses a taken name under every relying party, and that is
-/// how an interrupted migration is recognised and finished.
-///
-/// A local v1 account has no master key — its secrets are the credential's own and cannot
-/// be moved — so it does not migrate, and is refused here.
+/// Migrates portable v1 accounts by recreating and verifying their master key through
+/// the v2 copy before deleting the original. Failed attempts may leave a namesake copy
+/// for resume/discard. Local v1 accounts cannot migrate because their secrets are credential-bound.
 final class AccountMigrationService: Migrating, Sendable {
     private let enrollmentService: Enrolling
     private let secretDerivationService: SecretDeriving
@@ -29,10 +17,11 @@ final class AccountMigrationService: Migrating, Sendable {
                  askPIN: (@Sendable () -> String?)?,
                  onStep: (@Sendable (MigrationStep) -> Void)?) throws -> AccountHandle {
         try Self.requireMigratable(old)
-        if let pin = askPIN?(), !pin.isEmpty,
-           let existing = try? enrollmentService.enumerateAccounts(devicePath: old.devicePath, pin: pin),
-           existing.contains(where: { $0.id == old.id && $0.account.format == .v2 }) {
-            throw MigrationError.copyExists(name: old.id)
+        if let pin = askPIN?(), !pin.isEmpty {
+            let existing = try enrollmentService.enumerateAccounts(devicePath: old.devicePath, pin: pin)
+            if existing.contains(where: { $0.id == old.id && $0.account.format == .v2 }) {
+                throw MigrationError.copyExists(name: old.id)
+            }
         }
 
         onStep?(.readingOldAccount)
@@ -59,6 +48,9 @@ final class AccountMigrationService: Migrating, Sendable {
             onStep?(.verifying)
             verified = try verify(copy: copy, masterKey: masterKey, askPIN: askPIN)
         } catch {
+            guard KeyFailurePolicy.allowsAuthenticatedRecovery(after: error) else {
+                throw KeyMutationError(completed: .credentialCreated, underlying: error)
+            }
             onStep?(.rollingBack)
             do {
                 try enrollmentService.deleteAccount(copy, pin: askPIN?())
@@ -69,7 +61,8 @@ final class AccountMigrationService: Migrating, Sendable {
         }
 
         onStep?(.deletingOld)
-        try enrollmentService.deleteAccount(old, pin: askPIN?())
+        do { try enrollmentService.deleteAccount(old, pin: askPIN?()) }
+        catch { throw KeyMutationError(completed: .migrationCopyVerified, underlying: error) }
         return verified
     }
 
@@ -100,7 +93,8 @@ final class AccountMigrationService: Migrating, Sendable {
         let verified = try verify(copy: copy, masterKey: masterKey, askPIN: askPIN)
 
         onStep?(.deletingOld)
-        try enrollmentService.deleteAccount(old, pin: askPIN?())
+        do { try enrollmentService.deleteAccount(old, pin: askPIN?()) }
+        catch { throw KeyMutationError(completed: .migrationCopyVerified, underlying: error) }
         return verified
     }
 

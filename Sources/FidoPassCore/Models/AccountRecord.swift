@@ -1,27 +1,8 @@
 import Foundation
 
-/// What a v2 account keeps in the key's large-blob store: its kind, and for a portable
-/// account its mask.
-///
-/// Every v2 account has one, a local account included. Without that, "no record" would mean
-/// "local", and a portable account whose record was lost would silently derive from the
-/// wrong path — passwords that look right and are not. With a record for every account, a
-/// missing one is a fault the app can name.
-///
-/// The layout is frozen, and it is a fixed layout rather than a map with optional fields
-/// on purpose: any field added later — a per-account password policy, say — changes what
-/// the account derives, so an older build that ignored it would derive the wrong thing. A
-/// version byte it refuses is the correct behaviour, and it comes for free.
-///
-/// ```
-/// byte 0        0x01                 record version
-/// byte 1        0x00 local · 0x01 portable
-/// bytes 2..33   mask, 32 bytes       portable only
-/// ```
-///
-/// Two or thirty-four bytes; anything else is not a record. The platform — libfido2 here,
-/// the browser elsewhere — compresses and encrypts it under the credential's own large-blob
-/// key; this is the plaintext.
+/// Frozen v2 record: version byte 0x01, kind byte (0 local / 1 portable), then a 32-byte
+/// mask for portable accounts. Exactly 2 or 34 bytes, before large-blob compression/encryption.
+/// Local accounts also require a record: missing data must not silently select a derivation.
 public struct AccountRecord: Hashable, Sendable {
     public static let version: UInt8 = 1
     public static let maskByteCount = 32

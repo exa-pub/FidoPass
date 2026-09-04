@@ -23,25 +23,33 @@ final class EnrollmentService: Enrolling, Sendable {
         let trimmedId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = try Self.encodeUserName(trimmedId)
 
-        // Reject a taken name before writing anything, under every relying party FidoPass
-        // has ever written to: two credentials sharing a name on one key are
-        // indistinguishable in the UI and permanently occupy a resident-key slot each — and
-        // the one pair allowed, a v1 portable account and its v2 copy, is what an unfinished
-        // migration looks like, which is only unambiguous because nothing else may make it.
-        // Enumeration needs no user presence, so this costs one silent round-trip. It runs
-        // before the device is opened for makeCredential — nesting two opens would fail.
-        if let pin = askPIN?(), !pin.isEmpty {
-            // Best-effort: a key that cannot list its credentials still deserves to be
-            // enrolled, so a failure to check is not a failure to create.
-            let existing = (try? enumerateAccounts(devicePath: devicePath, pin: pin)) ?? []
-            let namesakes = existing.filter { $0.id == trimmedId }
-            let blocking = namesakePolicy == .allowLegacyTwin ? namesakes.filter { !$0.account.needsMigration } : namesakes
-            if let taken = blocking.first {
-                throw FidoPassError.invalidState("Account ‘\(trimmedId)’ already exists on this key (\(taken.account.format.rawValue))")
-            }
+        guard let pin = askPIN?(), !pin.isEmpty else {
+            throw FidoPassError.invalidState("A PIN is required to create an account")
         }
 
         return try deviceRepository.withOpenedDevice(path: devicePath) { device, path in
+            // Check raw user handles, including credentials with missing/corrupt records,
+            // in the same open as creation. An unreadable key is never an empty key.
+            for rpId in AccountFormat.relyingPartyIds {
+                try Self.forEachResidentCredential(device: device, rpId: rpId, pin: pin) { existing in
+                    let userID = fido_cred_user_id_ptr(existing).map {
+                        Data(bytes: $0, count: fido_cred_user_id_len(existing))
+                    } ?? Data()
+                    if rpId == AccountFormat.v2RelyingPartyId, userID == identity.bytes {
+                        throw FidoPassError.invalidState("This identity already belongs to an account on this key")
+                    }
+                    let parsed = AccountFormat.parse(rpId: rpId)
+                    let existingName = parsed?.0 == .v1
+                        ? String(data: userID, encoding: .utf8)
+                        : fido_cred_user_name(existing).map { String(cString: $0) }
+                    if existingName == trimmedId {
+                        let legacyTwin = namesakePolicy == .allowLegacyTwin && parsed?.0 == .v1 && parsed?.1 == .portable
+                        guard legacyTwin else {
+                            throw FidoPassError.invalidState("An account with this name already exists on this key")
+                        }
+                    }
+                }
+            }
             try deviceRepository.ensureHmacSecretSupported(device)
             guard try CborInfo.with(device: device, { $0.supportsLargeBlobs }) else {
                 throw FidoPassError.unsupported("This key has no large-blob store, which every new account needs. Accounts already on it keep working.")
@@ -83,7 +91,7 @@ final class EnrollmentService: Enrolling, Sendable {
                     operation: "cred_set_clientdata_hash")
             }
 
-            try PinScope.withPIN(askPIN?()) { pinCString in
+            try PinScope.withPIN(pin) { pinCString in
                 try Libfido2Context.check(fido_dev_make_cred(device, credential, pinCString), operation: "dev_make_cred")
             }
 
@@ -108,12 +116,16 @@ final class EnrollmentService: Enrolling, Sendable {
                     guard let key = LargeBlobStore.key(of: credential) else {
                         throw FidoPassError.invalidState("The key returned no large-blob key for the new credential")
                     }
-                    try LargeBlobStore.write(device: device, key: key, blob: AccountRecord(kind: .local, mask: nil)!.encoded, pin: askPIN?())
+                    try LargeBlobStore.write(device: device, key: key, blob: AccountRecord(kind: .local, mask: nil)!.encoded, pin: pin)
                     account.integrity = .ok
                 } catch {
                     // A credential without a record is not an account: take it back off the
                     // key rather than leave a slot occupied by something the app cannot use.
-                    try? Self.deleteCredential(device: device, credentialId: credentialId, pin: askPIN?())
+                    guard KeyFailurePolicy.allowsAuthenticatedRecovery(after: error) else {
+                        throw KeyMutationError(completed: .credentialCreated, underlying: error)
+                    }
+                    do { try Self.deleteCredential(device: device, credentialId: credentialId, pin: pin) }
+                    catch { throw KeyMutationError(completed: .credentialCreated, underlying: error) }
                     throw error
                 }
             }
@@ -124,15 +136,9 @@ final class EnrollmentService: Enrolling, Sendable {
 
     // MARK: - Reading
 
-    /// Reads the accounts stored on an authenticator, of every format, in one open.
-    ///
-    /// Uses credential management rather than a silent assertion. An assertion made with
-    /// `up = false` returns only `user.id`: CTAP withholds `name` and `displayName` unless
-    /// user presence is confirmed, so the v1 portable payload — which lives in `name` —
-    /// came back empty and portable accounts lost their key material on every reload.
-    /// Credential management returns the full user entity and still needs no touch, only
-    /// the PIN. For a v2 account it also returns the large-blob key, which is what opens
-    /// the account's record — read here, so that the kind is known for the list.
+    /// Reads all account formats in one open using PIN-authenticated credential management.
+    /// Unlike a silent assertion, credman returns the full user entity needed for v1 masks
+    /// and the large-blob key needed to read v2 records.
     func enumerateAccounts(devicePath: String,
                            pin: String?) throws -> [AccountHandle] {
         guard let pin, !pin.isEmpty else {
@@ -143,7 +149,7 @@ final class EnrollmentService: Enrolling, Sendable {
             var accounts: [AccountHandle] = []
             for rpId in AccountFormat.relyingPartyIds {
                 try Self.forEachResidentCredential(device: device, rpId: rpId, pin: pin) { credential in
-                    if let account = Self.account(from: credential, rpId: rpId, device: device) {
+                    if let account = try Self.account(from: credential, rpId: rpId, device: device) {
                         accounts.append(AccountHandle(account: account, devicePath: path))
                     }
                 }
@@ -159,13 +165,16 @@ final class EnrollmentService: Enrolling, Sendable {
             throw FidoPassError.invalidState("Credential ID is not valid base64")
         }
         try deviceRepository.withOpenedDevice(path: handle.devicePath) { device, _ in
-            // The record goes first: once the credential is deleted its large-blob key is
-            // gone with it, and the entry would sit in the store for good.
-            if handle.account.format == .v2,
-               let key = try? Self.largeBlobKey(device: device, credentialIdB64: handle.account.credentialIdB64, pin: pin) {
-                try LargeBlobStore.remove(device: device, key: key, pin: pin)
-            }
+            // Keep the key in memory before deletion. Delete the credential first so a
+            // failed credential deletion can never strand a portable account without its mask.
+            let key = handle.account.format == .v2
+                ? try Self.largeBlobKey(device: device, credentialIdB64: handle.account.credentialIdB64, pin: pin)
+                : nil
             try Self.deleteCredential(device: device, credentialId: credentialId, pin: pin)
+            if let key {
+                do { try LargeBlobStore.remove(device: device, key: key, pin: pin) }
+                catch { throw KeyMutationError(completed: .credentialDeleted, underlying: error) }
+            }
         }
     }
 
@@ -187,7 +196,7 @@ final class EnrollmentService: Enrolling, Sendable {
     // MARK: - Credential management helpers
 
     private static func deleteCredential(device: OpaquePointer, credentialId: Data, pin: String?) throws {
-        let rc = PinScope.withPIN(pin) { pinCString in
+        let rc = try PinScope.withPIN(pin) { pinCString in
             credentialId.withUnsafeBytes { pointer -> Int32 in
                 fido_credman_del_dev_rk(device,
                                         pointer.bindMemory(to: UInt8.self).baseAddress,
@@ -228,7 +237,7 @@ final class EnrollmentService: Enrolling, Sendable {
         var residentKeys: OpaquePointer? = rawList
         defer { fido_credman_rk_free(&residentKeys) }
 
-        let rc = PinScope.withPIN(pin) { fido_credman_get_dev_rk(device, rpId, rawList, $0) }
+        let rc = try PinScope.withPIN(pin) { fido_credman_get_dev_rk(device, rpId, rawList, $0) }
         // An authenticator with nothing stored for this relying party reports it as an
         // error rather than an empty list.
         if rc == FIDO_ERR_NO_CREDENTIALS { return }
@@ -242,7 +251,7 @@ final class EnrollmentService: Enrolling, Sendable {
 
     /// One credential as read through credential management, as an account — or `nil` when
     /// it is not one FidoPass can name at all.
-    private static func account(from credential: OpaquePointer, rpId: String, device: OpaquePointer) -> Account? {
+    private static func account(from credential: OpaquePointer, rpId: String, device: OpaquePointer) throws -> Account? {
         guard let parsed = AccountFormat.parse(rpId: rpId),
               let credentialPointer = fido_cred_id_ptr(credential) else { return nil }
         let credentialId = Data(bytes: credentialPointer, count: fido_cred_id_len(credential))
@@ -287,7 +296,7 @@ final class EnrollmentService: Enrolling, Sendable {
                                   integrity: identity == nil ? .recordCorrupt : .recordMissing)
             guard identity != nil,
                   let key = LargeBlobStore.key(of: credential),
-                  let blob = try? LargeBlobStore.read(device: device, key: key) else { return account }
+                  let blob = try LargeBlobStore.read(device: device, key: key) else { return account }
             guard let record = AccountRecord(decoding: blob) else {
                 account.integrity = .recordCorrupt
                 return account
@@ -301,12 +310,8 @@ final class EnrollmentService: Enrolling, Sendable {
 
     // MARK: - Credential user fields
 
-    /// Reads a v1 portable account's key material back out of the two credential strings.
-    ///
-    /// The released layout puts the 32-byte payload in `name`; the prefixed `displayName`
-    /// form is still accepted because builds between a refactor and its fix wrote it, and
-    /// those accounts are on real keys — losing the payload would make their passwords
-    /// unreproducible. A local account never carries any, whatever its strings look like.
+    /// Reads portable v1 masks from user.name or the historical prefixed displayName.
+    /// Both layouts must remain readable; local credentials carry no portable payload.
     static func decodeUserFields(kind: AccountKind,
                                  name: String,
                                  displayName: String) -> PortablePayload? {
@@ -322,6 +327,9 @@ final class EnrollmentService: Enrolling, Sendable {
     /// most an authenticator is required to keep. A v2 account's name is a name and nothing
     /// else — no key material, no markers — which is what lets a browser show it as one.
     static func encodeUserName(_ accountId: String) throws -> String {
+        guard !accountId.utf8.contains(0) else {
+            throw FidoPassError.invalidState("Account ID cannot contain a NUL character")
+        }
         let count = accountId.utf8.count
         guard count > 0 else {
             throw FidoPassError.invalidState("Account ID must not be empty")

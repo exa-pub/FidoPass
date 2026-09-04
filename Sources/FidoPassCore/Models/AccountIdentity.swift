@@ -1,22 +1,8 @@
 import Foundation
 import CryptoKit
 
-/// Sixteen bytes that tell one account apart from another. Not a secret, and never an input
-/// to derivation.
-///
-/// A v2 account carries its identity on the key as the credential's `user.id`, so a copy of
-/// the account on a second key shows the same identity — which is how a person tells "the
-/// same vault" from "another account named vault" without deriving a password and comparing
-/// — and so that a browser, which is handed `user.id` as the `userHandle` of an assertion
-/// and nothing else about the user, can show the same fingerprint. It is chosen when the
-/// account is created: random unless the person says otherwise.
-///
-/// A local account from the v1 format has no room for one on the key and needs none: its
-/// credential id already names one credential on one key, so the identity is derived from
-/// it and never written. A portable v1 account has none until it is migrated.
-///
-/// `DerivationContractTests.testIdentityDoesNotAffectDerivation` pins the "never an input"
-/// half; the golden vectors do not know this type exists, which is the point.
+/// Public 16-byte identity: user.id in v2, derived from credential ID for v1 local,
+/// absent for v1 portable. It affects the message locator, not password or key-pair derivation.
 public struct AccountIdentity: Hashable, Sendable {
     public static let byteCount = 16
 

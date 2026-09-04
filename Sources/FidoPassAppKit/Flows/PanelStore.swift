@@ -2,12 +2,7 @@ import Combine
 import FidoPassCore
 import Foundation
 
-/// The single object the HUD views talk to.
-///
-/// It owns navigation, and it is the only place allowed to start an operation on the key —
-/// which is what guarantees the touch prompt is always raised. A view reaching past it into
-/// a store is a bug: that is exactly how the app once ended up looking frozen while the key
-/// silently waited for a finger.
+/// HUD navigation and actions. Key operations use the shared TouchGate.
 @MainActor
 final class PanelStore: ObservableObject {
 
@@ -16,24 +11,18 @@ final class PanelStore: ObservableObject {
     @Published private(set) var statusText: String?
     @Published var selection: AccountRef?
     @Published var pinDraft: String = ""
-    /// Value being shown on the backup-key screen. Never persisted, dropped on leaving.
-    @Published private(set) var backup: PortableBackup?
+    @Published var backup: PortableBackup?
+    @Published var enrollStep: String?
+    @Published var migrationDraft = MigrationDraft()
     @Published var enrollDraft = EnrollDraft() {
         didSet {
-            // A backup that carries an identity fills the field with it the moment it is
-            // recognised — once, so that typing over it sticks. Checked before mutating:
-            // a mutation here re-enters this observer, and an unconditional one recurses.
-            if enrollDraft.hasUnadoptedImportIdentity {
-                enrollDraft.adoptImportIdentityIfNeeded()
-            }
+            if enrollDraft.hasUnadoptedImportIdentity { enrollDraft.adoptImportIdentityIfNeeded() }
         }
     }
-    @Published private(set) var enrollStep: String?
-    /// The identity the migration screen will create the copy with. Reset each time it opens.
-    @Published var migrationDraft = MigrationDraft()
+    private(set) var accountFlowLease = OperationLease()
     /// Set while a system panel of our own is up — a save dialog takes key status away, and
     /// the HUD must not vanish behind it.
-    @Published private(set) var isShowingSystemPanel = false
+    @Published var isShowingSystemPanel = false
 
     let devices: DeviceStore
     let accounts: AccountStore
@@ -54,6 +43,7 @@ final class PanelStore: ObservableObject {
     /// The label row: the label the next password derives from, and the field it is typed in.
     let labelEditor: LabelEditor
 
+    private var lifetime = OperationLease()
     private var pendingIntent: PanelIntent?
     private var subscriptions: Set<AnyCancellable> = []
     private var statusTask: Task<Void, Never>?
@@ -87,7 +77,7 @@ final class PanelStore: ObservableObject {
         // secret derived from something else.
         labelEditor.$current
             .dropFirst()
-            .removeDuplicates()
+            .removeDuplicates(by: { $0.utf8.elementsEqual($1.utf8) })
             .sink { [weak self] label in
                 guard let self, let selection = self.selection else { return }
                 self.generation.invalidateResult(unless: selection, label: label)
@@ -152,33 +142,17 @@ final class PanelStore: ObservableObject {
         handle.account.needsMigration && devices.state(for: handle.devicePath)?.supportsLargeBlobs != false
     }
 
-    /// What `⏎` is expected to do in the current state.
-    ///
-    /// Read by the tests that pin the click budget, not by the panel: each screen owns its
-    /// own default button, because a second, global Return handler used to fire alongside
-    /// the focused field's submit and spend two PIN attempts on one keypress. This is the
-    /// statement of what those buttons must add up to, checked against real store state.
+    /// Default-action contract checked by tests. Screens own their default buttons;
+    /// a second Return dispatcher would submit twice.
     var primaryAction: PanelPrimaryAction { PanelReducer.primaryAction(snapshot) }
 
-    /// What may actually be shown, given the state of the key.
-    ///
-    /// `route` is an intention; this is the truth. Deriving it here rather than trusting
-    /// every code path to keep `route` in step is what stops the panel from claiming
-    /// "no accounts on this key" under a header that says the key is locked — its account
-    /// list is not empty, it is unread, and the two must never look the same.
+    /// Resolves the requested route against current key availability and PIN state.
     var effectiveRoute: PanelRoute {
-        // Ahead of the "is a key present" check, because no key is a *step* of this wizard:
-        // it asks the user to unplug, and the key being gone is what it waits for. Falling
-        // through to "No security key connected" made the wizard vanish at exactly the moment
-        // it was doing its job.
         guard !devices.devices.isEmpty else { return .accounts }
-        // A key that says it must have its PIN changed will refuse every other operation, and
-        // silent refusals are impossible to explain. Changing it proves knowledge of the old
-        // PIN, so this works on a locked key too.
+        // A required PIN change blocks other operations, including unlock.
         if devices.selectedState?.forcePINChange == true { return .pinChangeRequired }
         guard isSelectedKeyUnlocked else {
-            // A key with no PIN cannot be unlocked at all; offering the field would be a dead
-            // end, which is exactly what it used to be.
+            // A new key needs to set its PIN before it can unlock.
             if devices.selectedState?.hasPIN == false { return .setPIN }
             if case .pinChangeRequired = route { return .pinChangeRequired }
             return .unlock
@@ -194,15 +168,30 @@ final class PanelStore: ObservableObject {
         return isSelectedKeyUnlocked ? .unlocked : .locked
     }
 
+    private func clearAccountFlow() {
+        accountFlowLease.invalidate()
+        accountFlowLease = OperationLease()
+        backup = nil
+        enrollStep = nil
+        enrollDraft = EnrollDraft()
+        migrationDraft = MigrationDraft()
+    }
+
     // MARK: - Lifecycle
 
     /// Called every time the panel is about to appear.
-    func prepareForDisplay(intent: PanelIntent? = nil) async {
+    func prepareForDisplay(intent: PanelIntent? = nil, readKey: Bool = true) async {
+        let token = lifetime
         error = nil
         await devices.refresh()
         if let failure = devices.refreshError { error = failure }
-        await readStatusOfLockedKey()
-        await reloadAccountsIfNeeded()
+        guard token.isValid else { return }
+        if readKey {
+            await readStatusOfLockedKey()
+            guard token.isValid else { return }
+            await reloadAccountsIfNeeded()
+        }
+        guard token.isValid else { return }
         restoreSelectionIfNeeded()
 
         if let intent {
@@ -213,6 +202,12 @@ final class PanelStore: ObservableObject {
     }
 
     func panelDidClose() {
+        clearAccountFlow()
+        lifetime.invalidate()
+        lifetime = OperationLease()
+        if touchGate.surface == .panel { touchGate.abandonTouch() }
+        generation.clearResult()
+        enrollDraft.importText = ""
         pinDraft = ""
         pinForm.clear()
         error = nil
@@ -224,15 +219,8 @@ final class PanelStore: ObservableObject {
         if case .accounts = route {} else { route = .accounts }
     }
 
-    /// Asks the selected key about itself — but only when the panel is being opened.
-    ///
-    /// Opening a key seizes it from every other process on macOS, so the app may not do it
-    /// merely because a key was plugged in: that is how a running FidoPass used to make
-    /// `ykman fido reset` impossible. Opening the panel *is* a request, and it is the moment
-    /// the answers are needed — whether the key has a PIN decides which screen to show, and
-    /// the attempts left have to be on screen before one is spent.
-    ///
-    /// Skipped for an unlocked key: it demonstrably has a PIN, and its state is already known.
+    /// Probes a locked key when the HUD is explicitly opened, never on passive hot-plug.
+    /// Unlocked keys already have known state.
     private func readStatusOfLockedKey() async {
         guard let device = selectedDevice, devices.selectedState?.unlocked != true else { return }
         await devices.refreshStatus(for: device)
@@ -251,7 +239,7 @@ final class PanelStore: ObservableObject {
         }
     }
 
-    private func restoreSelectionIfNeeded() {
+    func restoreSelectionIfNeeded() {
         let visible = visibleAccounts
         let resolved = selection.flatMap { visible.contains(where: $0.matches) ? $0 : nil }
             ?? PanelReducer.resolveSelection(accounts: visible,
@@ -287,16 +275,12 @@ final class PanelStore: ObservableObject {
     // MARK: - Navigation
 
     func show(_ route: PanelRoute) {
+        if case .enroll = self.route { enrollDraft.importText = "" }
         self.route = route
         if case .backupKey = route {} else { backup = nil }
     }
 
-    /// Whether clicking away must leave the panel open.
-    ///
-    /// Derived from what is on screen, not remembered from the last `show(_:)`. It used to be
-    /// stored, and then a screen the user never navigated to — unplugging the key turns the
-    /// reset wizard into "no security key" — left the panel pinned by a route nobody could
-    /// see. The result was a HUD that would not close and gave no reason why.
+    /// Whether the currently visible screen must stay open when focus moves away.
     var isPinnedOpen: Bool {
         if isShowingSystemPanel { return true }
         switch effectiveRoute {
@@ -346,6 +330,7 @@ final class PanelStore: ObservableObject {
     }
 
     func selectKey(path: String) {
+        if devices.selectedPath != path { panelDidClose() }
         devices.selectedPath = path
         selection = nil
         restoreSelectionIfNeeded()
@@ -413,15 +398,8 @@ final class PanelStore: ObservableObject {
 
     private var statusRequestedForDraft = false
 
-    /// Asks the key how many attempts are left — on the first character typed, not when the
-    /// PIN screen appears, and only for a key nobody has asked yet.
-    ///
-    /// The PIN screen appears the moment a key is plugged in, and opening a key seizes it
-    /// (`libfido2/src/hid_osx.c`, `kIOHIDOptionsTypeSeizeDevice`). That is how a running
-    /// FidoPass used to break `ykman fido reset`: the key was taken over within a second of
-    /// being connected, before its owner had asked for anything. Typing a PIN is asking; the
-    /// key being present is not. A key the panel already asked when it opened is not asked
-    /// again: its state is known, and a second open buys nothing.
+    /// Probes unknown PIN state on the first typed character. Typing is a user request;
+    /// merely showing the unlock screen after hot-plug must not seize the key.
     func pinDraftDidChange() async {
         guard !pinDraft.isEmpty else {
             statusRequestedForDraft = false
@@ -490,9 +468,9 @@ final class PanelStore: ObservableObject {
         pendingIntent = nil
         switch intent {
         case .copyPassword(let ref, let label):
-            await copyPassword(for: resolved(ref) ?? selection, label: label)
+            await copyPassword(for: resolved(ref), label: label)
         case .revealPassword(let ref, let label):
-            await revealPassword(for: resolved(ref) ?? selection, label: label)
+            await revealPassword(for: resolved(ref), label: label)
         case .enroll:
             show(.enroll)
         case .decrypt(let message):
@@ -503,9 +481,8 @@ final class PanelStore: ObservableObject {
     /// Re-resolves a reference across a reconnect: the account is the same, the path is not.
     private func resolved(_ ref: AccountRef) -> AccountRef? {
         if accounts.account(ref) != nil { return ref }
-        guard let path = devices.selectedPath else { return nil }
-        let candidate = AccountRef(accountId: ref.accountId, devicePath: path)
-        return accounts.account(candidate) != nil ? candidate : nil
+        let matches = accounts.accounts.filter { $0.credentialIdB64 == ref.credentialId }
+        return matches.count == 1 ? matches.first.map(AccountRef.init) : nil
     }
 
     /// Queues what the user asked for so it survives the PIN prompt.
@@ -566,13 +543,16 @@ final class PanelStore: ObservableObject {
             if let target = labelTarget(for: ref) { labels.use(usedLabel, in: target) }
             labelEditor.adopt(usedLabel)
             if let device = selectedDevice {
-                preferences.remember(accountId: ref.accountId, label: usedLabel, device: device)
+                preferences.remember(accountId: ref.accountId, label: usedLabel, device: device, credentialId: account.credentialIdB64)
             }
             if reveal {
                 generation.reveal(true)
                 setStatus("Shown on screen only — not copied")
             } else {
-                generation.copy(password, as: .password, for: ref)
+                guard generation.copy(password, as: .password, for: ref) else {
+                    error = .plain("Could not write to the clipboard.")
+                    return
+                }
                 setStatus("Password copied — the clipboard clears itself")
             }
         } catch {
@@ -587,240 +567,11 @@ final class PanelStore: ObservableObject {
 
     func copyCurrentResult() {
         guard let result = generation.result else { return }
-        generation.copy(result.password, as: .password, for: result.ref)
-        setStatus("Password copied — the clipboard clears itself")
-    }
-
-    // MARK: - Enrolment
-
-    func createAccount() async {
-        guard !isWorking else { return }
-        guard let request = enrollDraft.request,
-              let identity = enrollDraft.identity,
-              let path = devices.selectedPath,
-              let device = selectedDevice,
-              selectedKeyHoldsRecords else { return }
-        let draft = enrollDraft
-
-        do {
-            let created = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                                message: request.kind == .portable
-                                                                    ? "Step 1 of 2 — creating the credential."
-                                                                    : "Confirming with the key.",
-                                                                deviceName: device.displayName)) {
-                try await self.accounts.enroll(accountId: draft.trimmedId,
-                                               identity: identity,
-                                               request: request,
-                                               devicePath: path) { step in
-                    Task { @MainActor in
-                        self.enrollStep = Self.stepMessage(step)
-                        self.touchGate.updatePrompt(message: Self.stepMessage(step))
-                    }
-                }
-            }
-            enrollStep = nil
-            enrollDraft = EnrollDraft()
-            select(AccountRef(created.0))
-
-            if let generated = created.1 {
-                // Shown on its own screen, never in a field that reads like a password:
-                // this value reproduces every password of the account without the key.
-                backup = generated
-                show(.backupKey(AccountRef(created.0)))
-            } else {
-                // An import has its backup already — the one that was just pasted.
-                show(.accounts)
-                if case .import = request {
-                    setStatus("Account imported — it derives the same passwords as the original")
-                } else {
-                    setStatus("Account added")
-                }
-            }
-        } catch {
-            enrollStep = nil
-            present(error)
-        }
-    }
-
-    /// A fresh identity for the account being created — for someone who typed over the one
-    /// offered and wants a random one back.
-    func randomiseEnrollIdentity() {
-        enrollDraft.randomiseIdentity()
-    }
-
-    static func stepMessage(_ step: PortableEnrollmentStep) -> String {
-        switch step {
-        case .creatingCredential: return "Step 1 of 2 — touch your key to create the credential"
-        case .derivingBackupKey:  return "Step 2 of 2 — touch your key again to derive its backup key"
-        case .savingRecord:       return "Saving the record to the key…"
-        }
-    }
-
-    static func stepMessage(_ step: MigrationStep) -> String {
-        switch step {
-        case .readingOldAccount:    return "Step 1 of 4 — touch your key to read the old record"
-        case .creatingCredential:   return "Step 2 of 4 — touch your key to create the new record"
-        case .derivingNewComponent: return "Step 3 of 4 — touch your key to seal the new record"
-        case .savingRecord:         return "Saving the record to the key…"
-        case .verifying:            return "Step 4 of 4 — touch your key to verify the new record"
-        case .deletingOld:          return "Verified. Deleting the old record…"
-        case .rollingBack:          return "Something went wrong — removing the unfinished copy…"
-        }
-    }
-
-    func deleteAccount(_ ref: AccountRef) async {
-        guard !isWorking else { return }
-        guard let account = accounts.account(ref) else { return }
-        // Read before the account goes: the scope is its credential, which the account
-        // carries and the store no longer has once it is deleted.
-        let scope = labelTarget(for: ref)?.scope
-        do {
-            try await touchGate.withBusy("Deleting “\(ref.accountId)”…") {
-                try await accounts.delete(account)
-            }
-            if let scope { labels.forget(scope) }
-            generation.clearResult()
-            if selection == ref { selection = nil }
-            restoreSelectionIfNeeded()
-            show(.accounts)
-            setStatus("Account deleted")
-        } catch {
-            present(error)
-        }
-    }
-
-    // MARK: - Migration
-
-    /// Opens the migration screen for a v1 portable account. The identity is random, or —
-    /// when an unfinished copy is already on the key — the copy's own, which is not for
-    /// changing here.
-    func beginMigration(_ ref: AccountRef) {
-        guard let account = accounts.account(ref), isMigratable(account) else { return }
-        if let copy = accounts.migrationCopy(for: ref), let identity = copy.account.identity {
-            migrationDraft = MigrationDraft(identity: identity, isFixed: true)
-        } else {
-            migrationDraft = MigrationDraft()
-        }
-        selection = ref
-        show(.migrate(ref))
-    }
-
-    /// The unfinished copy of the account the migration screen is about, if there is one.
-    var migrationCopy: AccountHandle? {
-        guard case .migrate(let ref) = route else { return nil }
-        return accounts.migrationCopy(for: ref)
-    }
-
-    /// Recreates the account as v2 — or finishes the copy already on the key. Four touches
-    /// the first time, two to finish; the old record goes only after the new one has been
-    /// read back and verified, so a failure leaves every password where it was.
-    func migrate() async {
-        guard !isWorking else { return }
-        guard case .migrate(let ref) = route,
-              let account = accounts.account(ref),
-              isMigratable(account),
-              let identity = migrationDraft.identity else { return }
-        // The history follows the account: the migrated one is a new credential, and the
-        // labels are the one thing about the old one that cannot be derived again.
-        let oldScope = labelTarget(for: ref)?.scope
-        let finishing = accounts.migrationCopy(for: ref) != nil
-        do {
-            let migrated = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                                 message: finishing
-                                                                     ? "Two touches: read the old record, verify the new one."
-                                                                     : "Four touches. The old record is deleted only after the new one is verified.",
-                                                                 deviceName: selectedDevice?.displayName ?? "Security key")) {
-                let report: @Sendable (MigrationStep) -> Void = { step in
-                    Task { @MainActor in self.touchGate.updatePrompt(message: Self.stepMessage(step)) }
-                }
-                return finishing
-                    ? try await self.accounts.finishMigration(account, onStep: report)
-                    : try await self.accounts.migrate(account, identity: identity, onStep: report)
-            }
-            if let oldScope {
-                labels.move(from: oldScope, to: LabelScope(credentialId: migrated.credentialIdB64))
-            }
-            select(ref)
-            show(.accounts)
-            setStatus("Account migrated — passwords are unchanged")
-        } catch {
-            present(error)
-        }
-    }
-
-    /// Deletes the unfinished copy and leaves the original as it was. PIN, no touch.
-    func discardMigrationCopy() async {
-        guard !isWorking else { return }
-        guard case .migrate(let ref) = route, let account = accounts.account(ref) else { return }
-        do {
-            try await touchGate.withBusy("Removing the unfinished copy of “\(ref.accountId)”…") {
-                try await accounts.discardMigrationCopy(of: account)
-            }
-            migrationDraft = MigrationDraft()
-            setStatus("Unfinished copy removed — the account is as it was")
-        } catch {
-            present(error)
-        }
-    }
-
-    /// The identity is not a secret: no timeout, no receipt, but the same concealed path as
-    /// everything else the app puts on the clipboard.
-    func copyIdentity(for ref: AccountRef) {
-        guard let identity = accounts.account(ref)?.account.identity else { return }
-        generation.copyIdentity(identity)
-        setStatus("Identity copied")
-    }
-
-    // MARK: - Backup key and recovery
-
-    /// Works for an account from before identities too: it exports what it always did, the
-    /// master key alone, and the screen says so. Export must not wait for migration — a
-    /// backup is the last thing that should be gated.
-    func showBackupKey(for ref: AccountRef) async {
-        guard !isWorking else { return }
-        guard let account = accounts.account(ref), account.kind == .portable else { return }
-        if let problem = account.account.integrity.problem {
-            error = .plain(problem)
+        guard generation.copy(result.password, as: .password, for: result.ref) else {
+            error = .plain("Could not write to the clipboard.")
             return
         }
-        do {
-            let exported = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                                 message: "Recovering the backup key.",
-                                                                 deviceName: selectedDevice?.displayName ?? "Security key")) {
-                try await self.accounts.exportBackup(for: account)
-            }
-            backup = exported
-            show(.backupKey(ref))
-        } catch {
-            present(error)
-        }
-    }
-
-    func copyBackupKey() {
-        guard let backup, case .backupKey(let ref) = route else { return }
-        generation.copy(backup.base64, as: .backupKey, for: ref)
-        setStatus("Backup key copied — store it offline, not in a password manager")
-    }
-
-    func saveRecoverySheet(for ref: AccountRef) {
-        guard let account = accounts.account(ref) else { return }
-        let description = devices.state(for: ref.devicePath).map { "\($0.device.displayName) — \($0.device.identityLabel)" }
-        let known = labelTarget(for: ref).map { labels.labels(for: $0.scope) } ?? []
-        let sheet = RecoverySheet(account: account.account,
-                                  parameters: .v1,
-                                  labels: known,
-                                  deviceDescription: description)
-        isShowingSystemPanel = true
-        router.saveRecoverySheet(sheet)
-    }
-
-    func recoverySheetFinished(saved: Bool, failure: String? = nil) {
-        isShowingSystemPanel = false
-        if let failure {
-            error = .plain("Could not save the recovery sheet: \(failure)")
-        } else if saved {
-            setStatus("Recovery sheet saved — it contains no secrets")
-        }
+        setStatus("Password copied — the clipboard clears itself")
     }
 
     // MARK: - Messages
@@ -875,14 +626,15 @@ final class PanelStore: ObservableObject {
     /// lands here too, which is why that has to be so.
     func openDecryptor(prefilled message: SealedMessageURL? = nil) {
         guard let device = selectedDevice else {
+            pendingIntent = .decrypt(message)
             setStatus("Plug in the security key this message was encrypted for")
-            router.openPanel()
+            router.openPanelForIncomingLink()
             return
         }
         guard isSelectedKeyUnlocked else {
             pendingIntent = .decrypt(message)
             route = .unlock
-            router.openPanel()
+            router.openPanelForIncomingLink()
             return
         }
         if let open = decryptor.store, decryptor.boundDevicePath == device.path {
@@ -909,15 +661,18 @@ final class PanelStore: ObservableObject {
             openDecryptor(prefilled: message)
         case .unrecognised(let reason):
             setStatus("Not a FidoPass link — \(reason.localizedDescription.lowercased())")
-            router.openPanel()
+            router.openPanelForIncomingLink()
         }
     }
 
     // MARK: - Touch prompt
 
     /// The panel's door to the key — `TouchGate`, with the prompt drawn here.
-    func withTouchPrompt<T>(_ prompt: TouchPrompt, _ body: () async throws -> T) async rethrows -> T {
-        try await touchGate.withTouchPrompt(prompt, surface: .panel, body)
+    func withTouchPrompt<T>(_ prompt: TouchPrompt, _ body: () async throws -> T) async throws -> T {
+        let token = lifetime
+        let value = try await touchGate.withTouchPrompt(prompt, surface: .panel, body)
+        try KeyOperationContext.check(token)
+        return value
     }
 
     func abandonTouch() {
@@ -943,6 +698,14 @@ final class PanelStore: ObservableObject {
     /// A key stopped being usable. The container has already dropped what the other stores
     /// held for it; this is only what the panel itself was showing.
     func keyDidClose(_ path: String) {
+        if devices.selectedPath == path || selection?.devicePath == path {
+            lifetime.invalidate()
+            lifetime = OperationLease()
+            pinDraft = ""
+            pinForm.clear()
+            clearAccountFlow()
+            if touchGate.surface == .panel { touchGate.abandonTouch() }
+        }
         if selection?.devicePath == path {
             selection = nil
             focusLabels(on: nil)
@@ -962,6 +725,7 @@ final class PanelStore: ObservableObject {
     /// The machine locked. Every key is locked by now and every store emptied; the panel
     /// goes back to the PIN field and out of sight.
     func sessionDidLock() {
+        panelDidClose()
         backup = nil
         selection = nil
         focusLabels(on: nil)
@@ -984,17 +748,19 @@ final class PanelStore: ObservableObject {
         restoreSelectionIfNeeded()
     }
 
-    private func present(_ failure: Error) {
+    func present(_ failure: Error) {
+        guard !(failure is CancellationError) else { return }
         error = PresentedError(failure)
     }
 
     /// Presents an error, supplying the meaning of a bare refusal — see
     /// `PresentedError.init(_:meaningOfRefusal:)`.
-    private func present(_ failure: Error, whenRefused meaning: String) {
+    func present(_ failure: Error, whenRefused meaning: String) {
+        guard !(failure is CancellationError) else { return }
         error = PresentedError(failure, meaningOfRefusal: meaning)
     }
 
-    private func setStatus(_ text: String) {
+    func setStatus(_ text: String) {
         statusText = text
         statusTask?.cancel()
         statusTask = Task { [weak self] in

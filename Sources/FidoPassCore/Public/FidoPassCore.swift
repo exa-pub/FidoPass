@@ -3,6 +3,11 @@ import Foundation
 public final class FidoPassCore: Sendable {
     public static let shared = FidoPassCore()
 
+    /// Test infrastructure shares the real services without exposing C handles.
+    package convenience init(deviceLister: any DeviceListing, connectionFactory: any DeviceConnectionFactory) {
+        self.init(deviceRepository: DeviceRepository(connectionFactory: connectionFactory, deviceLister: deviceLister))
+    }
+
     private let deviceRepository: DeviceAccessing
     private let deviceLister: DeviceListing
     private let enrollmentService: Enrolling

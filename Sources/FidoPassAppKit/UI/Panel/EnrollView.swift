@@ -1,13 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// Creating an account. Portable is the default because losing the only key that can derive
-/// a vault master password is unrecoverable; Import is the same kind of account made from a
-/// backup, and gets its own segment because it is a different thing to ask for.
-///
-/// The identity is chosen here, whatever the mode: random unless the person says otherwise,
-/// and from the backup for an import. It is written to the key as the credential's user id
-/// and cannot be changed afterwards.
+/// Account creation/import form. Portable is the default; imports adopt the backup identity.
 struct EnrollView: View {
     @ObservedObject var store: PanelStore
 
@@ -115,7 +109,7 @@ struct EnrollView: View {
 
     private var importFields: some View {
         VStack(alignment: .leading, spacing: 5) {
-            TextField("Backup key (base64)", text: $store.enrollDraft.importText)
+            SecureField("Backup key (base64)", text: $store.enrollDraft.importText)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
                 .focused($focus, equals: .importText)

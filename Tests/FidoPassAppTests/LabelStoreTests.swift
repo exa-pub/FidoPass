@@ -3,11 +3,8 @@ import FidoPassCore
 @testable import FidoPassAppKit
 import TestSupport
 
-/// Labels are not secret, but forgetting one makes its password unreproducible — so the
-/// history has to survive relaunches, merge across devices, never quietly come back after
-/// the user clears it, and, above all, stay with the account it belongs to: a label offered
-/// for the wrong account derives a perfectly valid, perfectly wrong password.
-final class LabelStoreTests: XCTestCase {
+/// Local history survives relaunch and stays scoped to the credential that used it.
+final class LabelStoreTests: AppTestCase {
 
     private static let vault = target("cred-vault", account: "vault")
     private static let disk = target("cred-disk", account: "disk")
@@ -171,11 +168,9 @@ final class LabelStoreTests: XCTestCase {
         XCTAssertEqual(written?.deviceSignature, "1050:0407")
     }
 
-    /// Histories written when the key was identified by vendor/product signature are claimed
-    /// by the credential they turn out to belong to. Dropping them would lose labels, and a
-    /// lost label is a password nobody can derive again.
+    /// Model and account name cannot identify the owner of legacy history.
     @MainActor
-    func testAHistoryFromTheOldSignatureSchemeIsAdopted() {
+    func testLegacyHistoryRemainsUnassignedUntilItsOwnerIsKnown() {
         let defaults = Self.defaults()
         let older = """
         [{"deviceSignature":"1050:0407","accountId":"vault","labels":["work"],"usedAt":0}]
@@ -185,14 +180,14 @@ final class LabelStoreTests: XCTestCase {
         let store = Self.makeStore(defaults: defaults)
         store.focus(Self.vault)
 
-        XCTAssertEqual(store.recent, ["work"], "the old history is this account's")
-        XCTAssertEqual(Self.stored(defaults).first?.credentialId, "cred-vault", "and is re-keyed on disk")
+        XCTAssertTrue(store.recent.isEmpty, "Model and name cannot identify a physical key")
+        XCTAssertNil(Self.stored(defaults).first?.credentialId)
+        XCTAssertEqual(store.histories.first?.labels, ["work"], "Unassigned labels must be retained")
     }
 
-    /// Adoption matches on the old key, not on the account id alone: the same id on another
-    /// key is a different credential and a different history.
+    /// A different model with the same account name cannot claim legacy labels either.
     @MainActor
-    func testAdoptionDoesNotClaimAnotherKeysHistory() {
+    func testAnotherModelCannotClaimLegacyHistory() {
         let defaults = Self.defaults()
         let older = """
         [{"deviceSignature":"1050:0407","accountId":"vault","labels":["work"],"usedAt":0}]
@@ -227,45 +222,24 @@ final class LabelStoreTests: XCTestCase {
     @MainActor
     func testHistoriesSurviveARelaunch() {
         let defaults = Self.defaults()
-        let cloud = InMemoryUbiquitousStore()
-        let store = Self.makeStore(defaults: defaults, cloud: cloud)
+        let store = Self.makeStore(defaults: defaults)
         store.use("work", in: Self.vault)
 
-        let reopened = Self.makeStore(defaults: defaults, cloud: cloud)
+        let reopened = Self.makeStore(defaults: defaults)
         reopened.focus(Self.vault)
         XCTAssertEqual(reopened.recent, ["work"])
     }
 
-    /// A conflict between two Macs must not lose a label on either side.
-    @MainActor
-    func testMergeUnionsEachAccountSeparately() {
-        let defaults = Self.defaults()
-        let cloud = InMemoryUbiquitousStore()
-        let store = Self.makeStore(defaults: defaults, cloud: cloud)
-        store.use("local", in: Self.vault)
-
-        Self.seedCloud(cloud, [(Self.vault, ["remote"]), (Self.disk, ["other-mac"])])
-        store.mergeUbiquitous()
-
-        store.focus(Self.vault)
-        XCTAssertEqual(store.recent, ["local", "remote"])
-        XCTAssertEqual(store.labels(for: Self.disk.scope), ["other-mac"], "a history only the other Mac had arrives whole")
-        XCTAssertEqual(Self.stored(defaults).count, 2, "and the merge is written down, not just shown")
-    }
-
-    /// Clearing only the in-memory list used to leave the values in UserDefaults and iCloud,
-    /// so they reappeared on the next launch.
+    /// Clearing persists across relaunches.
     @MainActor
     func testClearingWipesStorage() {
         let defaults = Self.defaults()
-        let cloud = InMemoryUbiquitousStore()
-        let store = Self.makeStore(defaults: defaults, cloud: cloud)
+        let store = Self.makeStore(defaults: defaults)
         store.use("work", in: Self.vault)
         store.clearAll()
 
         XCTAssertTrue(store.histories.isEmpty)
         XCTAssertEqual(Self.stored(defaults), [])
-        XCTAssertEqual(Self.decodeCloud(cloud), [])
     }
 
     @MainActor
@@ -292,95 +266,102 @@ final class LabelStoreTests: XCTestCase {
     }
 
     @MainActor
-    private static func makeStore(defaults: UserDefaults? = nil,
-                                  cloud: InMemoryUbiquitousStore = InMemoryUbiquitousStore()) -> LabelStore {
-        LabelStore(userDefaults: defaults ?? Self.defaults(),
-                   ubiStore: cloud,
-                   notificationCenter: NotificationCenter())
+    private static func makeStore(defaults: UserDefaults? = nil) -> LabelStore {
+        LabelStore(userDefaults: defaults ?? Self.defaults())
     }
 
+    @MainActor
     private static func defaults() -> UserDefaults {
         let suite = "LabelStore-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+        let defaults = AppTestFactory.makeDefaults(suite: suite)
         return defaults
     }
 
-    private static func decodeCloud(_ cloud: InMemoryUbiquitousStore) -> [LabelStore.Entry] {
-        guard let data = cloud.data(forKey: LabelStore.storageKey) else { return [] }
-        return (try? JSONDecoder().decode([LabelStore.Entry].self, from: data)) ?? []
-    }
 
     private static func stored(_ defaults: UserDefaults) -> [LabelStore.Entry] {
         guard let data = defaults.data(forKey: LabelStore.storageKey) else { return [] }
         return (try? JSONDecoder().decode([LabelStore.Entry].self, from: data)) ?? []
     }
 
-    private static func seedCloud(_ cloud: InMemoryUbiquitousStore, _ values: [(LabelTarget, [String])]) {
-        let entries = values.map {
-            LabelStore.Entry(credentialId: $0.0.scope.credentialId,
-                             accountId: $0.0.accountId,
-                             deviceSignature: $0.0.deviceSignature,
-                             deviceName: $0.0.deviceName,
-                             labels: $0.1,
-                             usedAt: Date())
-        }
-        cloud.set(try! JSONEncoder().encode(entries), forKey: LabelStore.storageKey)
+}
+
+
+@MainActor
+extension LabelStoreTests {
+    func testClearAllMustRemoveLegacyLabelStorage() {
+        let suite = "LabelStore-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["public-label"], forKey: LabelStore.legacyStorageKey)
+        let store = LabelStore(userDefaults: defaults)
+        store.clearAll()
+        XCTAssertNil(defaults.object(forKey: LabelStore.legacyStorageKey), "Legacy local history survived clear")
+    }
+
+    func testLabelHistoryMustRetainByteDistinctDerivationInputs() {
+        let suite = "LabelStore-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = LabelStore(userDefaults: defaults)
+        let target = LabelTarget(scope: LabelScope(credentialId: "public-credential"),
+                                 accountId: "vault", deviceSignature: "mock", deviceName: "Mock")
+        store.use("é", in: target)
+        store.use("e\u{0301}", in: target)
+        XCTAssertEqual(store.labels(for: target.scope).count, 2, "Different salts collapsed into one historical label")
     }
 }
 
-/// What the app is allowed to remember between launches.
-final class PreferencesTests: XCTestCase {
-
-    @MainActor
-    func testLastUsedSurvivesAReconnectByVendorAndProduct() {
-        let preferences = Preferences(defaults: Self.defaults())
-        let device = MockKeyBackend.device(path: "/dev/one")
-        preferences.remember(accountId: "vault", label: "work", device: device)
-
-        // Same key, new session handle: the memory has to still apply.
-        let reconnected = MockKeyBackend.device(path: "/dev/whatever-else")
-        XCTAssertEqual(preferences.lastUsed?.deviceSignature, reconnected.modelSignature)
-    }
-
-    /// The account id is the only piece of account data that reaches the disk, and it is
-    /// opt-out — turning the switch off must erase what was already written.
-    @MainActor
-    func testTurningOffTheMemoryForgetsWhatWasStored() {
+@MainActor
+extension LabelStoreTests {
+    func testStoredDeletionMarkersAreAppliedAndRetired() throws {
         let defaults = Self.defaults()
-        let preferences = Preferences(defaults: defaults)
-        preferences.remember(accountId: "vault", label: "work", device: MockKeyBackend.device())
-        XCTAssertNotNil(preferences.lastUsed)
+        let entries = [
+            LabelStore.Entry(credentialId: Self.vault.scope.credentialId, accountId: "vault",
+                             labels: ["old"], usedAt: Date(timeIntervalSinceReferenceDate: 99)),
+            LabelStore.Entry(credentialId: Self.disk.scope.credentialId, accountId: "disk",
+                             labels: ["deleted"], usedAt: Date(timeIntervalSinceReferenceDate: 102)),
+            LabelStore.Entry(credentialId: Self.vaultOnSpare.scope.credentialId, accountId: "vault",
+                             labels: ["kept"], usedAt: Date(timeIntervalSinceReferenceDate: 104))
+        ]
+        let markers = LabelDeletionState(clearedAt: Date(timeIntervalSinceReferenceDate: 100),
+                                         scopes: [Self.disk.scope.credentialId: Date(timeIntervalSinceReferenceDate: 103)])
+        defaults.set(try JSONEncoder().encode(entries), forKey: LabelStore.storageKey)
+        defaults.set(try JSONEncoder().encode(markers), forKey: LabelStore.deletionKey)
 
-        preferences.rememberLastUsed = false
-        XCTAssertNil(preferences.lastUsed)
-        XCTAssertNil(defaults.data(forKey: "hud.lastUsed"))
+        let store = Self.makeStore(defaults: defaults)
+        XCTAssertEqual(store.histories.map(\.labels), [["kept"]])
+        XCTAssertEqual(Self.stored(defaults), store.histories)
+        XCTAssertNil(defaults.data(forKey: LabelStore.deletionKey))
 
-        preferences.remember(accountId: "vault", label: "work", device: MockKeyBackend.device())
-        XCTAssertNil(preferences.lastUsed, "with the switch off, nothing new may be recorded either")
+        store.use("new", in: Self.vault)
+        let reopened = Self.makeStore(defaults: defaults)
+        XCTAssertEqual(reopened.labels(for: Self.vault.scope), ["new"])
+        XCTAssertEqual(reopened.labels(for: Self.vaultOnSpare.scope), ["kept"])
+        store.forget(Self.vault.scope)
+        XCTAssertTrue(Self.makeStore(defaults: defaults).labels(for: Self.vault.scope).isEmpty)
     }
 
-    /// The timeout is what stands between "unlocked" and "anyone at this Mac can generate
-    /// this vault's master password", so it has to survive a relaunch exactly as chosen.
-    @MainActor
-    func testLockTimeoutIsRememberedAndFallsBackToAKnownValue() {
+    func testMalformedDeletionMarkersDoNotEraseHistory() {
         let defaults = Self.defaults()
-        let preferences = Preferences(defaults: defaults)
-        XCTAssertEqual(preferences.lockTimeout, 300)
+        let store = Self.makeStore(defaults: defaults)
+        store.use("kept", in: Self.vault)
+        let malformed = Data("invalid".utf8)
+        defaults.set(malformed, forKey: LabelStore.deletionKey)
 
-        preferences.lockTimeout = 900
-        XCTAssertEqual(Preferences(defaults: defaults).lockTimeout, 900)
-
-        // A value from a future version, or a hand-edited plist, must not become a timeout
-        // nobody can see or change in the picker.
-        defaults.set(7.0, forKey: "hud.lockTimeout")
-        XCTAssertEqual(Preferences(defaults: defaults).lockTimeout, 300)
+        XCTAssertEqual(Self.makeStore(defaults: defaults).labels(for: Self.vault.scope), ["kept"])
+        XCTAssertEqual(defaults.data(forKey: LabelStore.deletionKey), malformed)
     }
 
-    private static func defaults() -> UserDefaults {
-        let suite = "Preferences-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+    func testMalformedHistoryIsNotOverwrittenWhenRetiringDeletionMarkers() throws {
+        let defaults = Self.defaults()
+        let malformed = Data("unreadable-history".utf8)
+        let markers = try JSONEncoder().encode(LabelDeletionState(clearedAt: Date()))
+        defaults.set(malformed, forKey: LabelStore.storageKey)
+        defaults.set(markers, forKey: LabelStore.deletionKey)
+
+        XCTAssertTrue(Self.makeStore(defaults: defaults).histories.isEmpty)
+        XCTAssertEqual(defaults.data(forKey: LabelStore.storageKey), malformed)
+        XCTAssertEqual(defaults.data(forKey: LabelStore.deletionKey), markers)
     }
+
 }

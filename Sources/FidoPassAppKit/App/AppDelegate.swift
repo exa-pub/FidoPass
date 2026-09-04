@@ -1,12 +1,7 @@
 import AppKit
 import Combine
 
-/// The application, assembled.
-///
-/// Plain AppKit rather than a SwiftUI `App`: the whole application is a status item and a
-/// panel, and `MenuBarExtra` cannot be opened from a global shortcut, kept open across a
-/// save panel, or given focus for a PIN field — the three things this app needs most.
-/// The executable target does nothing but hand an instance of this to `NSApplication`.
+/// AppKit entry point. The custom HUD supports global shortcuts, PIN focus and save panels.
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 

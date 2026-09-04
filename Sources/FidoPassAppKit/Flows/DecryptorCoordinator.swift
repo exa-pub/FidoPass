@@ -1,14 +1,7 @@
 import Foundation
 
-/// The decrypting window's lifetime, tied to the key it was opened for.
-///
-/// That window holds live private keys for one security key's accounts. Every path that
-/// revokes access to that key — locking, unplugging, the session lock — has to take the
-/// window with it, or "locked" would describe the account list while the messages stayed
-/// readable in another window. This object remembers which key that is, and which store,
-/// so that a second message for the same key lands in the window that is already open.
-///
-/// The encrypting window is deliberately not here: it holds no key material.
+/// Binds the receiving window and its cached keys to one connected key.
+/// Closes on lock or disconnect; the key-independent sending window is unaffected.
 @MainActor
 final class DecryptorCoordinator {
 

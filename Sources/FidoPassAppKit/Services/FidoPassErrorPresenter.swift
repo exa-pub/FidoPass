@@ -1,16 +1,16 @@
 import Foundation
 import FidoPassCore
 
-/// Turns libfido2 status codes into something a person can act on.
-///
-/// Raw errors read like `dev_get_assert: FIDO_ERR_PIN_INVALID`, which says nothing about
-/// what went wrong or what to do — and, for the PIN cases, hides that the authenticator is
-/// counting down to a permanent lock-out. The raw text is kept as `details` so it stays
-/// available for bug reports without being the first thing a user sees. The result is a
-/// `PresentedError`; rendering it is the view's job.
+/// Maps core errors to actionable presentation, retaining raw details for diagnostics.
 enum FidoPassErrorPresenter {
 
     static func message(for error: Error) -> PresentedError {
+        if let mutation = error as? KeyMutationError {
+            var result = message(for: mutation.underlying)
+            result = PresentedError(kind: result.kind, title: mutation.localizedDescription,
+                                    recovery: result.title, details: result.details)
+            return result
+        }
         if let fidoError = error as? FidoPassError {
             return message(for: fidoError)
         }
@@ -59,7 +59,7 @@ enum FidoPassErrorPresenter {
         case .pinAuthBlocked:
             return PresentedError(kind: .pinAuthBlocked,
                            title: "Too many PIN attempts in a row",
-                           recovery: "Unplug the key and plug it back in, then try again. One more wrong PIN after that may lock it for good.",
+                           recovery: "Unplug the key and plug it back in, then try again. Further wrong attempts can block the key, requiring a reset that erases its accounts.",
                            details: details)
 
         case .pinBlocked:

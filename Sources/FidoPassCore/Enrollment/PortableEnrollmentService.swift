@@ -10,14 +10,9 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
         self.secretDerivationService = secretDerivationService
     }
 
-    /// Creates a portable account and returns it together with the freshly generated
-    /// backup, if the master key was generated rather than supplied.
-    ///
-    /// Requires two touches of the authenticator: one for `makeCredential`, one for the
-    /// assertion that derives this credential's fixed component. Callers must say so, or
-    /// the second prompt looks like the app hanging. The record — kind and mask — is
-    /// written last, under the PIN; until it is, the credential is not an account, and a
-    /// failure on the way takes the credential back off the key.
+    /// Creates a portable account and returns a backup only for a generated master key.
+    /// Requires two touches (credential creation and fixed-component derivation), then a
+    /// PIN-authenticated record write. Failures attempt credential cleanup.
     func enrollPortable(accountId: String,
                         identity: AccountIdentity,
                         devicePath: String,
@@ -47,7 +42,11 @@ final class PortableEnrollmentService: PortableEnrolling, Sendable {
             // A credential without a record is not an account. Best effort: if the key is
             // gone, the credential stays and shows up as incomplete, with Delete as its
             // one action.
-            try? enrollmentService.deleteAccount(handle, pin: askPIN?())
+            guard KeyFailurePolicy.allowsAuthenticatedRecovery(after: error) else {
+                throw KeyMutationError(completed: .credentialCreated, underlying: error)
+            }
+            do { try enrollmentService.deleteAccount(handle, pin: askPIN?()) }
+            catch { throw KeyMutationError(completed: .credentialCreated, underlying: error) }
             throw error
         }
     }

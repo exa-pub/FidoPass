@@ -1,14 +1,7 @@
 import Foundation
-/// The 256 emoji a key fingerprint is spelled in — one per byte value.
-///
-/// The table is `andrew-d/emoji256` (https://github.com/andrew-d/emoji256), in the order of
-/// its README, row by row. It is part of the `keyv1` format: reorder one entry and every
-/// fingerprint ever shown changes, so `EmojiAlphabetTests` pins the whole table by hash.
-///
-/// Stored as scalars rather than strings because 44 of the entries — ✌ ✔ ❤ ☀ ♠ ✈ ⬆ and
-/// friends — have no default emoji presentation: without a variation selector macOS draws
-/// them as thin black text glyphs. `displayString(for:)` adds `U+FE0F` to those. The
-/// selector is rendering only; the fingerprint's identity is the scalar.
+/// Frozen hpkev1 emoji table from andrew-d/emoji256 (https://github.com/andrew-d/emoji256).
+/// EmojiAlphabetTests pins its scalar order by hash. U+FE0F is added for display only
+/// where macOS would otherwise render a text glyph.
 public enum EmojiAlphabet {
 
     public static let count = 256

@@ -2,12 +2,7 @@ import Combine
 import Foundation
 import FidoPassCore
 
-/// The application's object graph, built once.
-///
-/// Everything that used to be assembled inside the panel's store lives here: one key worker,
-/// the stores, the coordinators, and the reactions that cross store boundaries — a key
-/// going away has to reach the account list, the generated result, the manager's inventory
-/// and the receiving window, and none of those belongs to the panel.
+/// Owns the shared services, stores and cross-store reactions for one application.
 @MainActor
 final class AppContainer {
 
@@ -36,13 +31,14 @@ final class AppContainer {
          router: WindowRouter,
          preferences: Preferences? = nil,
          labels: LabelStore? = nil,
+         clipboard: ClipboardService? = nil,
          emptyConfirmationDelay: Duration = .milliseconds(700),
          enableMonitors: Bool = true) {
         let settings = preferences ?? Preferences()
         // One worker for the whole app: a security key is exclusive, and serialising every
         // call through a single object is what keeps two windows from reaching for it at once.
         let worker = KeyWorker(backend: backend)
-        let clipboard = ClipboardService()
+        let clipboard = clipboard ?? ClipboardService()
         let deviceStore = DeviceStore(worker: worker,
                                       pinTTL: settings.lockTimeout,
                                       emptyConfirmationDelay: emptyConfirmationDelay,
@@ -94,9 +90,13 @@ final class AppContainer {
             .dropFirst()
             .sink { [weak deviceStore] ttl in deviceStore?.setPinTTL(ttl) }
             .store(in: &subscriptions)
+        inventoryStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
+        generationStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
+        accountStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
         deviceStore.onKeyClosed = { [weak self] path in self?.keyDidClose(path) }
         deviceStore.onSessionLocked = { [weak self] in self?.sessionDidLock() }
         deviceStore.onArmedKeyAppeared = { [weak reset] device in reset?.armedKeyAppeared(device) }
+        deviceStore.onResetArmingExpired = { [weak reset] in reset?.armingExpired() }
         reset.onCompleted = { [weak self] in self?.panel.resetDidComplete() }
     }
 
@@ -124,6 +124,7 @@ final class AppContainer {
         } else {
             inventory.dropInventory(devicePath: path)
         }
+        manager.keyDidClose(path)
         panel.keyDidClose(path)
     }
 
@@ -145,10 +146,14 @@ final class AppContainer {
     /// A `fidopass://` link the user clicked somewhere. Read off the main actor — a key link
     /// costs an argon2id — then handed to the panel, which opens a window with it and
     /// touches nothing. See `IncomingLink`.
+    private var incomingLink: Task<Void, Never>?
+
     func openLink(_ url: URL) {
+        incomingLink?.cancel()
         let sealer = accounts.messages
-        Task { [weak self] in
+        incomingLink = Task { [weak self] in
             let link = await IncomingLink.classify(url.absoluteString, sealer: sealer)
+            guard !Task.isCancelled else { return }
             self?.panel.handleLink(link)
         }
     }

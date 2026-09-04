@@ -1,13 +1,8 @@
 import FidoPassCore
 import Foundation
 
-/// Erasing a key, from the first warning to the touch that does it.
-///
-/// One owner for a flow that used to be split between the panel's store (the stages, the
-/// confirmation) and `DeviceStore` (the arming, the hot-plug callback). The key dictates the
-/// shape: most authenticators accept a reset only within seconds of power-up, so the user
-/// unplugs it, plugs it back in, and the reset fires the moment it reappears — and then the
-/// key asks to be touched.
+/// Reset confirmation and reconnect flow. Arming expires; reset is sent immediately
+/// on reconnect to meet the authenticator power-up deadline.
 @MainActor
 final class ResetCoordinator: ObservableObject {
 
@@ -36,6 +31,7 @@ final class ResetCoordinator: ObservableObject {
     /// The key was erased. Whoever shows the account list wants to know.
     var onCompleted: (() -> Void)?
 
+    private var lifetime = OperationLease()
     private let devices: DeviceStore
     private let accounts: AccountStore
     private let labels: LabelStore
@@ -63,7 +59,12 @@ final class ResetCoordinator: ObservableObject {
         guard devices.devices.count == 1 else { throw Refusal.multipleKeys }
         // A user request, so opening the key here is allowed — and the AAGUID it returns is
         // the only thing that will notice a different key coming back.
-        await devices.refreshStatus(for: device)
+        lifetime.invalidate()
+        let token = OperationLease()
+        lifetime = token
+        try await touchGate.withBusy("Reading key…", surface: .manager) { await devices.refreshStatus(for: device) }
+        try KeyOperationContext.check(token)
+        guard devices.state(for: device.path) != nil else { throw CancellationError() }
 
         let state = devices.state(for: device.path)
         let onKey = accounts.accounts(onDevice: device.path)
@@ -86,15 +87,32 @@ final class ResetCoordinator: ObservableObject {
     }
 
     func cancel() {
+        lifetime.invalidate()
+        task?.cancel()
+        if touchGate.surface == .manager { touchGate.abandonTouch() }
         devices.disarmReset()
         flow = nil
         error = nil
     }
 
+    func retry() {
+        guard var flow, flow.stage == .retry || flow.stage == .expired, !touchGate.isWorking else { return }
+        flow.stage = devices.devices.isEmpty ? .replug : .unplug
+        self.flow = flow
+        error = nil
+        devices.armReset(expectedAAGUID: flow.expectedAAGUID)
+    }
+
+    func armingExpired() {
+        guard flow?.stage == .unplug || flow?.stage == .replug else { return }
+        flow?.stage = .expired
+        error = .plain("The reconnect window expired. Press Retry to arm a new reset.")
+    }
+
     /// The wizard is waiting for exactly this: the key has gone, so the next thing to happen
     /// is it coming back.
     func keyDidClose(_ path: String) {
-        if flow?.stage == .unplug, devices.armedReset != nil {
+        if flow?.stage == .unplug, devices.armedReset != nil, devices.state(for: path) == nil {
             flow?.stage = .replug
         }
     }
@@ -111,6 +129,7 @@ final class ResetCoordinator: ObservableObject {
         flow.stage = .running
         self.flow = flow
         let scopes = flow.scopes
+        let token = lifetime
 
         do {
             // The wizard is a sheet in the manager window, so that is where the prompt goes.
@@ -120,6 +139,7 @@ final class ResetCoordinator: ObservableObject {
                                                 surface: .manager) {
                 try await devices.resetKey(device, expectedAAGUID: flow.expectedAAGUID)
             }
+            try KeyOperationContext.check(token)
             // The credential ids these histories are keyed by will never exist again, so the
             // histories would be orphaned for good. Everything else on the key was already
             // dropped by `adoptResetKey` closing it.
@@ -128,7 +148,8 @@ final class ResetCoordinator: ObservableObject {
             self.flow = nil
             onCompleted?()
         } catch {
-            self.flow?.stage = .replug
+            guard token.isValid, !(error is CancellationError) else { return }
+            self.flow?.stage = .retry
             // `FIDO_ERR_NOT_ALLOWED` here means the window closed: the command arrived too
             // late, not that anything was refused on its merits.
             self.error = PresentedError(error, meaningOfRefusal: "The key had already been awake too long — most keys only accept a reset in the first seconds after being plugged in. Unplug it and plug it back in to try again.")

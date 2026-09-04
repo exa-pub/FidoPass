@@ -16,6 +16,7 @@ final class AppWindows: WindowRouter {
     init() {}
 
     func openPanel() { panel?.show() }
+    func openPanelForIncomingLink() { panel?.show(readKey: false) }
     func closePanel() { panel?.hide() }
     func openManager() { auxiliary?.showAuthenticatorManager() }
     func openPreferences() { auxiliary?.showPreferences() }
