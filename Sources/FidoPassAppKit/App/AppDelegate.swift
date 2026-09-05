@@ -82,8 +82,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     /// A minimal main menu.
     ///
     /// Without it the panel's text fields lose ⌘V, ⌘A and friends — the Edit menu is what
-    /// supplies those responders — and ⌘Q would do nothing while the HUD is key.
-    private func installMainMenu() {
+    /// supplies those responders. File > Close routes ⌘W through the key window, including
+    /// floating panels, so their normal close delegates still run.
+    func installMainMenu() {
         let mainMenu = NSMenu()
 
         let appItem = NSMenuItem()
@@ -115,6 +116,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         appMenu.addItem(withTitle: "Quit FidoPass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
+
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
 
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")

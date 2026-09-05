@@ -182,6 +182,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         controller.sizingOptions = [.preferredContentSize]
         let panel = PanelWindow(contentViewController: controller)
         panel.delegate = self
+        panel.onClose = { [weak self] in self?.hide() }
         panel.onCancel = { [weak self] in
             guard let self else { return }
             // On a pushed screen Escape means "back"; only on the top level does it close

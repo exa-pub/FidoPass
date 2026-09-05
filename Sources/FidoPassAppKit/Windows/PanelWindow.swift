@@ -29,12 +29,25 @@ final class PanelWindow: NSPanel {
         // with `tabFocusChain` instead.
     }
 
-    /// Called when the user presses Escape. `performClose` would only beep — a borderless
-    /// window has no close button for it to find.
+    /// Escape may go back within the HUD; Close always dismisses it through its controller.
     var onCancel: (() -> Void)?
+    var onClose: (() -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// A borderless panel has no native close button for AppKit to validate or press.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(performClose(_:)) {
+            return onClose != nil && attachedSheet == nil
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    override func performClose(_ sender: Any?) {
+        guard attachedSheet == nil else { return }
+        onClose?()
+    }
 
     /// Escape closes the panel, the way every other menu-bar window behaves.
     override func cancelOperation(_ sender: Any?) {
