@@ -8,18 +8,60 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+# Nothing here writes to the repository; the release job asks for what it needs.
+permissions:
+  contents: read
+
+# Two runs of the same ref would race for the same artefact names. A tag run is never
+# cancelled: half a release is worse than a slow one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   build-macos:
     name: macOS Build (App + DMG)
     runs-on: macos-15
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.FIDOPASS_VERSION }}
+      build: ${{ steps.version.outputs.FIDOPASS_BUILD }}
+      prerelease: ${{ steps.version.outputs.FIDOPASS_IS_PRERELEASE }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # Bundle versions come from git tags.
+          # The version comes from git tags, and the release check needs main's history.
           fetch-depth: 0
+
+      - name: Resolve the version
+        id: version
+        # One script names the build; its own tests run first so a broken script cannot
+        # name a release wrongly and quietly.
+        run: |
+          python3 scripts/test_version.py
+          bash scripts/version.sh | tee -a "$GITHUB_OUTPUT"
+
+      - name: Require a release-shaped tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          eval "$(bash scripts/version.sh)"
+          tag="$GITHUB_REF_NAME"
+          if [ "$FIDOPASS_IS_RELEASE" != 1 ] || [ "$FIDOPASS_TAG" != "$tag" ]; then
+            echo "::error::$tag does not describe this commit cleanly (version.sh says $FIDOPASS_VERSION); is the tag on the right commit?"
+            exit 1
+          fi
+          if [ "$FIDOPASS_VERSION" != "${tag#v}" ]; then
+            echo "::error::tag $tag but the bundle would be built as $FIDOPASS_VERSION"
+            exit 1
+          fi
+          # Releases come from main. A tag pushed from a branch by mistake stops here.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$tag points at a commit that is not on main"
+            exit 1
+          fi
+          echo "Releasing $FIDOPASS_VERSION (build $FIDOPASS_BUILD, prerelease=$FIDOPASS_IS_PRERELEASE)"
 
       - name: Select the newest Xcode
         run: |
@@ -48,7 +90,7 @@ jobs:
 
 
       - name: Cache Swift build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .build
           key: swift-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.swift', '**/Package.resolved', 'scripts/build_dependencies.sh', 'tools/test-authenticator/Cargo.lock') }}
@@ -108,7 +150,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: swift-code-coverage
           path: artifacts
@@ -155,12 +197,26 @@ jobs:
             echo "::error::no Developer ID Application identity in the imported certificate"
             exit 1
           fi
+          # The certificate in the secrets must be the team the repository expects. Sparkle
+          # refuses an update signed by another team, so a swapped certificate would break
+          # every installed copy silently.
+          source scripts/release.env
+          team="$(printf '%s' "$identity" | sed -n 's/.*(\([A-Z0-9]*\))$/\1/p')"
+          if [ "$team" != "$FIDOPASS_TEAM_ID" ]; then
+            echo "::error::the certificate belongs to team $team, scripts/release.env expects $FIDOPASS_TEAM_ID"
+            exit 1
+          fi
           echo "Signing as: $identity"
           echo "FIDOPASS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
 
       - name: Build .app bundle
-        # Signs ad-hoc, or with Developer ID when the step above exported an identity.
-        run: bash ./scripts/build_app.sh
+        # Signs ad-hoc, or with Developer ID when the step above exported an identity. On a
+        # tag, the bundle must be built as exactly the tag's version.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            export FIDOPASS_EXPECT_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          bash ./scripts/build_app.sh
 
       - name: Verify physical build mode and shared app identity
         run: |
@@ -169,8 +225,11 @@ jobs:
           import os, pathlib, plistlib
           virtual = plistlib.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'virtual-info.plist').read_bytes())
           physical = plistlib.loads(pathlib.Path('.build/release/FidoPass.app/Contents/Info.plist').read_bytes())
-          virtual.pop('FidoPassVirtualKeys')
-          physical.pop('FidoPassVirtualKeys')
+          # The two differ by the mode flag and, on a tag, by the feed only Developer ID
+          # builds carry. Everything that identifies the app must be the same.
+          for key in ('FidoPassVirtualKeys', 'SUFeedURL'):
+              virtual.pop(key, None)
+              physical.pop(key, None)
           assert virtual == physical, 'Virtual mode changed the app identity or system integration'
           PY
 
@@ -237,29 +296,32 @@ jobs:
       - name: List outputs
         run: |
           ls -R .build/release | head -100
-          ls -lh FidoPass.dmg
+          ls -lh FidoPass-*.dmg
 
       - name: Archive app preserving executable modes and signatures
+        # After notarisation, so the zip carries the stapled bundle. This zip is what Sparkle
+        # downloads; the DMG is for people.
         run: |
-          ditto -c -k --sequesterRsrc --keepParent .build/release/FidoPass.app FidoPass.app.zip
+          version="${{ steps.version.outputs.FIDOPASS_VERSION }}"
+          ditto -c -k --sequesterRsrc --keepParent .build/release/FidoPass.app "FidoPass-$version.zip"
           restored="$(mktemp -d)"
-          ditto -x -k FidoPass.app.zip "$restored"
+          ditto -x -k "FidoPass-$version.zip" "$restored"
           test -x "$restored/FidoPass.app/Contents/MacOS/FidoPassApp"
-          python3 scripts/verify_bundle.py "$restored/FidoPass.app"
+          python3 scripts/verify_bundle.py "$restored/FidoPass.app" --expect-version "$version"
           rm -rf "$restored"
 
       - name: Upload App Bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: FidoPass-app-bundle
-          path: FidoPass.app.zip
+          path: FidoPass-*.zip
           if-no-files-found: error
 
       - name: Upload DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: FidoPass-dmg
-          path: FidoPass.dmg
+          path: FidoPass-*.dmg
           if-no-files-found: error
 
   release:
@@ -267,35 +329,139 @@ jobs:
     needs: build-macos
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
+    # The environment holds the Sparkle signing key and may require a reviewer before this
+    # job runs — the one human gate between a tag and a public download.
+    environment: release
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.build-macos.outputs.version }}
+      BUILD: ${{ needs.build-macos.outputs.build }}
+      PRERELEASE: ${{ needs.build-macos.outputs.prerelease }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Download DMG Artifact
-        uses: actions/download-artifact@v4
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          name: FidoPass-dmg
-          path: dist
+          fetch-depth: 0
 
-      - name: Require a stapled notarisation ticket
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: FidoPass-*
+          path: dist
+          merge-multiple: true
+
+      - name: Require stapled notarisation tickets
         run: |
-          # The last gate before the download link is public. A DMG without a ticket is
-          # exactly the artefact users report as "damaged", so publishing nothing is the
-          # better outcome.
-          xcrun stapler validate dist/FidoPass.dmg
+          # The last gate before the download link is public. An artefact without a ticket is
+          # exactly what users report as "damaged", so publishing nothing is the better
+          # outcome. Both the image people download and the zip Sparkle installs are checked.
+          ls -l dist
+          xcrun stapler validate "dist/FidoPass-$VERSION.dmg"
           spctl --assess --type open --context context:primary-signature \
-            --verbose=2 dist/FidoPass.dmg
+            --verbose=2 "dist/FidoPass-$VERSION.dmg"
+          restored="$(mktemp -d)"
+          ditto -x -k "dist/FidoPass-$VERSION.zip" "$restored"
+          xcrun stapler validate "$restored/FidoPass.app"
+          spctl --assess --type exec --verbose=2 "$restored/FidoPass.app"
+          python3 scripts/verify_bundle.py "$restored/FidoPass.app" --virtual-keys 0 \
+            --expect-version "$VERSION" --expect-build "$BUILD"
+          rm -rf "$restored"
 
       - name: Generate checksums
         run: |
           cd dist
-          shasum -a 256 FidoPass.dmg > FidoPass.dmg.sha256
-          cat FidoPass.dmg.sha256
+          shasum -a 256 "FidoPass-$VERSION.dmg" "FidoPass-$VERSION.zip" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Write release notes
+        # GitHub's generated notes, once, used both for the release page and inside the
+        # appcast so the app and the browser tell the same story.
+        run: |
+          mkdir -p notes
+          previous="$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-' | grep -vx "$GITHUB_REF_NAME" | head -1 || true)"
+          args=(-f tag_name="$GITHUB_REF_NAME")
+          if [ -n "$previous" ]; then args+=(-f previous_tag_name="$previous"); fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body \
+            > "notes/FidoPass-$VERSION.md"
+          if [ "$PRERELEASE" = 1 ]; then
+            printf '> A prerelease on the `beta` channel. Released builds do not offer it.\n\n' | cat - "notes/FidoPass-$VERSION.md" > notes/tmp.md
+            mv notes/tmp.md "notes/FidoPass-$VERSION.md"
+          fi
+          cat "notes/FidoPass-$VERSION.md"
+
+      - name: Fetch the Sparkle tools
+        run: echo "SPARKLE_BIN=$(bash scripts/fetch_sparkle_tools.sh)" >> "$GITHUB_ENV"
+
+      - name: Generate the appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          # No `set -x` here: the signing key passes through this step, and only through a
+          # pipe — it is never written to disk.
+          set -eu
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is empty in the release environment — see docs/release.md"
+            exit 1
+          fi
+          # generate_appcast reads a directory: the archive and its notes, nothing else.
+          mkdir -p appcast
+          cp "dist/FidoPass-$VERSION.zip" appcast/
+          cp "notes/FidoPass-$VERSION.md" appcast/
+          channel=()
+          if [ "$PRERELEASE" = 1 ]; then channel=(--channel beta); fi
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" --ed-key-file - \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
+            --link "https://github.com/$GITHUB_REPOSITORY" \
+            --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
+            --embed-release-notes --maximum-versions 1 --maximum-deltas 0 \
+            ${channel[@]+"${channel[@]}"} \
+            -o dist/appcast.xml appcast
+          cat dist/appcast.xml
+
+      - name: Verify the appcast against the public key in the repository
+        run: |
+          channel=""
+          if [ "$PRERELEASE" = 1 ]; then channel=beta; fi
+          python3 scripts/verify_appcast.py dist/appcast.xml \
+            --archive "dist/FidoPass-$VERSION.zip" \
+            --version "$VERSION" --build "$BUILD" --channel "$channel" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/FidoPass-$VERSION.zip"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          name: FidoPass ${{ env.VERSION }}
+          body_path: notes/FidoPass-${{ env.VERSION }}.md
+          prerelease: ${{ env.PRERELEASE == '1' }}
+          make_latest: ${{ env.PRERELEASE != '1' }}
+          fail_on_unmatched_files: true
           files: |
-            dist/FidoPass.dmg
-            dist/FidoPass.dmg.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            dist/FidoPass-${{ env.VERSION }}.dmg
+            dist/FidoPass-${{ env.VERSION }}.zip
+            dist/SHA256SUMS
+            dist/appcast.xml
+
+      - name: Check what installed apps will see
+        # The release exists; now the feed must serve it. A stable release is reached through
+        # `latest`, a prerelease only through its own tag. Either way the appcast the feed
+        # returns must be the one just verified, and its enclosure must download intact.
+        run: |
+          if [ "$PRERELEASE" = 1 ]; then
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/appcast.xml"
+          else
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/appcast.xml"
+          fi
+          ok=0
+          for attempt in $(seq 1 24); do
+            if curl -fsSL "$feed" -o served.xml && cmp -s served.xml dist/appcast.xml; then ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::$feed does not serve this release's appcast — fix the release before users check for updates"
+            exit 1
+          fi
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/FidoPass-$VERSION.zip" -o served.zip
+          cmp served.zip "dist/FidoPass-$VERSION.zip"
+          echo "The feed serves $VERSION and its archive downloads intact."

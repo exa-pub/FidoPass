@@ -5,6 +5,7 @@ import SwiftUI
 struct OnboardingView: View {
     @ObservedObject var preferences: Preferences
     let launchAtLogin: LaunchAtLoginService
+    @ObservedObject var updates: UpdateModel
     let onFinish: () -> Void
 
 
@@ -38,6 +39,17 @@ struct OnboardingView: View {
 
             LaunchAtLoginToggle("Start FidoPass at login", service: launchAtLogin)
             .help("Without this, the global shortcut only works after you start the app by hand.")
+
+            // Consent for the app's only network request, asked here instead of by a dialog
+            // on the second launch. A local build has nothing to ask about.
+            if updates.isAvailable {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
+                    Text("One request a day to github.com for the list of releases. Nothing about you or your keys is sent, and nothing installs without a click.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
 
             HStack {
                 Spacer()

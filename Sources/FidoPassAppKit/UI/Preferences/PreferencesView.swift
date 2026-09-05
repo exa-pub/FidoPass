@@ -10,6 +10,7 @@ struct PreferencesView: View {
     @ObservedObject var labels: LabelStore
     @ObservedObject var hotkey: HotkeyRegistration
     let launchAtLogin: LaunchAtLoginService
+    @ObservedObject var updates: UpdateModel
     @State private var confirmsClearHistory = false
 
     var body: some View {
@@ -133,9 +134,61 @@ struct PreferencesView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // The only place an update has any detail. The menu bar shows a dot, the menu
+            // one item; every state, including failure, is a sentence here — never a window.
+            Section {
+                LabeledContent("Version") {
+                    Text(updates.version.display)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if updates.isAvailable {
+                    LabeledContent("Updates") {
+                        HStack(spacing: 8) {
+                            if updates.state.isInstalling {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(updates.statusText)
+                                .foregroundStyle(updateStatusColor)
+                                .multilineTextAlignment(.trailing)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if updates.state.offersInstall {
+                                Button("Update") { updates.install() }
+                            } else if !updates.state.isInstalling {
+                                Button("Check now") { updates.checkNow() }
+                                    .disabled(updates.state == .checking)
+                            }
+                        }
+                    }
+                    if let candidate = updates.state.candidate, let notes = candidate.releaseNotesURL {
+                        Link("What’s new in \(candidate.version)", destination: notes)
+                            .font(.caption)
+                    }
+                    if let hint = updates.installHint {
+                        Label(hint, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
+                    Toggle("Download updates in the background", isOn: $updates.automaticallyDownloads)
+                        .disabled(!updates.automaticallyChecks)
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text(updates.isAvailable
+                     ? "Checking is one request a day to github.com for the list of releases; nothing about you or your keys is sent. An update is signed twice — with the FidoPass release key and by Apple — and installs only when you click the dot in the menu. With background downloads on, a verified update is also installed when you quit."
+                     : "This build was made locally. Updates come with signed releases from GitHub.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
         }
         .formStyle(.grouped)
         .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { updates.reload() }
         .alert("Clear label history?", isPresented: $confirmsClearHistory) {
             Button("Cancel", role: .cancel) {}
             Button("Clear history", role: .destructive) { labels.clearAll() }
@@ -172,6 +225,14 @@ struct PreferencesView: View {
             case (nil, false):       return KeyGroup(signature: signature, title: signature, entries: entries)
             case (nil, true):        return KeyGroup(signature: signature, title: "Unknown key", entries: entries)
             }
+        }
+    }
+
+    private var updateStatusColor: Color {
+        switch updates.state {
+        case .failed: return .orange
+        case .available, .readyToInstall: return .primary
+        default: return .secondary
         }
     }
 

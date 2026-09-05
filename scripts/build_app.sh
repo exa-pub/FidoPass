@@ -20,10 +20,27 @@ else
 fi
 
 PRODUCT=FidoPassApp
-# Derive bundle version from the latest tag.
-RAW_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
-SHORT_VERSION="${RAW_VERSION#v}"
-BUILD_VERSION="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# The version comes from the tag, through one script; see docs/release.md.
+eval "$(bash scripts/version.sh)"
+SHORT_VERSION="$FIDOPASS_VERSION"
+BUILD_VERSION="$FIDOPASS_BUILD"
+if [[ -n "${FIDOPASS_EXPECT_VERSION:-}" && "$SHORT_VERSION" != "$FIDOPASS_EXPECT_VERSION" ]]; then
+  echo "[error] this checkout builds as ${SHORT_VERSION}, not ${FIDOPASS_EXPECT_VERSION}: the tag is on another commit, the tree is dirty, or tags were not fetched" >&2
+  exit 1
+fi
+# Release constants: the Sparkle public key and feed, the team the certificate must belong to.
+# shellcheck disable=SC1091
+source scripts/release.env
+# Local builds use ad-hoc signing; distribution requires Developer ID and hardened runtime.
+SIGN_IDENTITY="${FIDOPASS_SIGN_IDENTITY:-}"
+if [[ -n "$SIGN_IDENTITY" && "$SIGN_IDENTITY" != *"(${FIDOPASS_TEAM_ID})"* ]]; then
+  echo "[error] ${SIGN_IDENTITY} does not belong to team ${FIDOPASS_TEAM_ID} (scripts/release.env)" >&2
+  exit 1
+fi
+if [[ -n "$SIGN_IDENTITY" && -z "$SPARKLE_PUBLIC_KEY" ]]; then
+  echo "[error] SPARKLE_PUBLIC_KEY is empty in scripts/release.env: a Developer ID build would ship an updater that can never verify an update. See docs/release.md." >&2
+  exit 1
+fi
 # Keep the bundle deployment target aligned with Package.swift.
 MIN_MACOS="$(sed -n 's/.*\.macOS(\.v\([0-9][0-9]*\)).*/\1/p' Package.swift | head -1)"
 MIN_MACOS="${MIN_MACOS:-13}.0"
@@ -38,8 +55,10 @@ FRAMEWORKS_DIR="${CONTENTS}/Frameworks"
 bash scripts/build_dependencies.sh
 DEPS_PREFIX="$PROJECT_ROOT/.build/native-dependencies/$(uname -m)/prefix"
 export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
-swift build -c release --product "$PRODUCT" ${SWIFT_ARGS[@]+"${SWIFT_ARGS[@]}"}
-SWIFT_BIN_DIR="$(swift build -c release --show-bin-path ${SWIFT_ARGS[@]+"${SWIFT_ARGS[@]}"})"
+# --disable-keychain: every dependency is public; without it SwiftPM asks for the login
+# keychain on machines that keep a github.com credential in it.
+swift build --disable-keychain -c release --product "$PRODUCT" ${SWIFT_ARGS[@]+"${SWIFT_ARGS[@]}"}
+SWIFT_BIN_DIR="$(swift build --disable-keychain -c release --show-bin-path ${SWIFT_ARGS[@]+"${SWIFT_ARGS[@]}"})"
 if [[ "$VIRTUAL_KEYS" == 1 ]]; then
   MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS" OPENSSL_DIR="$DEPS_PREFIX" bash scripts/build_test_authenticator.sh --release
 fi
@@ -55,6 +74,20 @@ fi
 
 # Copy icon (expects it already generated)
 cp Sources/FidoPassApp/Resources/AppIcon.icns "${RES_DIR}/AppIcon.icns"
+
+# Sparkle, the updater. SwiftPM puts the framework it linked against next to the binary;
+# the bundle needs it under Frameworks, symlinks intact — hence ditto, not cp.
+SPARKLE_FRAMEWORK="${FRAMEWORKS_DIR}/Sparkle.framework"
+if [[ ! -d "${SWIFT_BIN_DIR}/Sparkle.framework" ]]; then
+  echo "[error] Sparkle.framework is missing from ${SWIFT_BIN_DIR}; did swift build resolve the Sparkle package?" >&2
+  exit 1
+fi
+ditto "${SWIFT_BIN_DIR}/Sparkle.framework" "${SPARKLE_FRAMEWORK}"
+SPARKLE_BUNDLED="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${SPARKLE_FRAMEWORK}/Resources/Info.plist")"
+if [[ "$SPARKLE_BUNDLED" != "$SPARKLE_VERSION" ]]; then
+  echo "[error] the linked Sparkle is ${SPARKLE_BUNDLED}, scripts/release.env says ${SPARKLE_VERSION}; update both Package.swift and release.env together" >&2
+  exit 1
+fi
 
 # Bundle the transitive closure of non-system dylibs. Missing dependencies are fatal.
 
@@ -115,6 +148,19 @@ for binary in "${EXECUTABLES[@]}"; do
   done < <(direct_dependencies "$binary")
 done
 
+# Sparkle keys. The public key is a constant of the repository; the feed URL goes only into
+# Developer ID builds, so a local build never offers an update it could not install (Sparkle
+# also requires the update's Apple signature to match the running app's). Automatic checks
+# are declared on so that Sparkle never asks with a dialog of its own: the switch is in
+# Preferences, and onboarding asks new users.
+SPARKLE_PLIST="  <key>SUEnableAutomaticChecks</key><true/>"
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+  SPARKLE_PLIST+=$'\n'"  <key>SUPublicEDKey</key><string>${SPARKLE_PUBLIC_KEY}</string>"
+fi
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  SPARKLE_PLIST+=$'\n'"  <key>SUFeedURL</key><string>${SPARKLE_FEED_URL}</string>"
+fi
+
 # Write Info.plist
 cat > "${CONTENTS}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -127,6 +173,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
+  <key>FidoPassGitCommit</key><string>${FIDOPASS_COMMIT}</string>
+${SPARKLE_PLIST}
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>CFBundleExecutable</key><string>${PRODUCT}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -149,9 +197,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Sign after install_name_tool changes: dylibs first, hashes next, outer bundle last.
-# Local builds use ad-hoc signing; distribution requires Developer ID and hardened runtime.
-SIGN_IDENTITY="${FIDOPASS_SIGN_IDENTITY:-}"
+# Sign after install_name_tool changes: Sparkle's helpers and dylibs first, hashes next,
+# outer bundle last.
 if [[ -n "$SIGN_IDENTITY" ]]; then
   CODESIGN_FLAGS=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
   SIGNING_MODE="Developer ID — ${SIGN_IDENTITY}"
@@ -162,6 +209,15 @@ fi
 
 if command -v codesign >/dev/null 2>&1; then
   echo "Signing: ${SIGNING_MODE}"
+  # Sparkle's helpers, inside out and one at a time — never --deep, which Sparkle's own
+  # documentation warns against. The order is theirs: XPC services, Autoupdate, Updater.app,
+  # then the framework. Downloader.xpc keeps whatever entitlements it shipped with.
+  sparkle_versions="${SPARKLE_FRAMEWORK}/Versions/B"
+  codesign "${CODESIGN_FLAGS[@]}" "${sparkle_versions}/XPCServices/Installer.xpc"
+  codesign "${CODESIGN_FLAGS[@]}" --preserve-metadata=entitlements "${sparkle_versions}/XPCServices/Downloader.xpc"
+  codesign "${CODESIGN_FLAGS[@]}" "${sparkle_versions}/Autoupdate"
+  codesign "${CODESIGN_FLAGS[@]}" "${sparkle_versions}/Updater.app"
+  codesign "${CODESIGN_FLAGS[@]}" "${SPARKLE_FRAMEWORK}"
   if [[ -d "$FRAMEWORKS_DIR" ]]; then
     while IFS= read -r -d '' dylib; do
       codesign "${CODESIGN_FLAGS[@]}" "$dylib"
@@ -173,16 +229,18 @@ if command -v codesign >/dev/null 2>&1; then
   # Record source versions and hashes after signing the embedded libraries.
   MANIFEST="${RES_DIR}/DEPENDENCIES.txt"
   {
-    echo "FidoPass ${SHORT_VERSION} (build ${BUILD_VERSION})"
+    echo "FidoPass ${SHORT_VERSION} (build ${BUILD_VERSION}, commit ${FIDOPASS_COMMIT})"
     echo "Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     echo "macOS SDK: $(xcrun --show-sdk-version 2>/dev/null || echo unknown)"
     echo "Swift: $(swift --version 2>/dev/null | head -1)"
+    echo "Sparkle: ${SPARKLE_VERSION}"
     echo
     echo "Embedded libraries:"
     for lib in "${FRAMEWORKS_DIR}"/*.dylib; do
       [ -e "$lib" ] || continue
       printf '  %-24s %s\n' "$(basename "$lib")" "$(shasum -a 256 "$lib" | awk '{print $1}')"
     done
+    printf '  %-24s %s\n' "Sparkle.framework" "$(shasum -a 256 "${SPARKLE_FRAMEWORK}/Versions/B/Sparkle" | awk '{print $1}')"
     echo
     if [[ "$VIRTUAL_KEYS" == 1 ]]; then
       echo "OpenSK helper (Rust 1.94.1, e161e95944871ccf719945738a272e718076c1df):"
@@ -197,6 +255,7 @@ if command -v codesign >/dev/null 2>&1; then
     echo "  SHA-256 source pins: scripts/build_dependencies.sh"
   } > "$MANIFEST"
   cp -R "$DEPS_PREFIX/licenses" "$RES_DIR/DependencyLicenses"
+  cp scripts/licenses/Sparkle.txt "$RES_DIR/DependencyLicenses/Sparkle.txt"
 
   if [[ "$VIRTUAL_KEYS" == 1 ]]; then
     rust_host="$(rustc +1.94.1 -vV | sed -n 's/^host: //p')"
@@ -226,7 +285,8 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "Hardened runtime: enabled"
 fi
 
-python3 scripts/verify_bundle.py "$APP_DIR" --virtual-keys "$VIRTUAL_KEYS"
+python3 scripts/verify_bundle.py "$APP_DIR" --virtual-keys "$VIRTUAL_KEYS" \
+  --expect-version "$SHORT_VERSION" --expect-build "$BUILD_VERSION"
 
 echo "Bundled libraries:"
 ls -1 "${FRAMEWORKS_DIR}"

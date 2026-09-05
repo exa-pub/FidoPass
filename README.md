@@ -25,6 +25,13 @@ Download the DMG from the [latest release](https://github.com/exa-pub/FidoPass/r
 and drag FidoPass into Applications. Release builds are Developer ID signed and notarised
 by Apple.
 
+FidoPass updates itself from there. It checks GitHub once a day; when a new release exists,
+a dot appears next to the menu-bar icon and the menu offers **Update to …**. Nothing opens
+on its own, and nothing installs until you click. Every update is signed twice — with the
+FidoPass release key and by Apple — and verified before it is installed. Preferences →
+Updates shows the version and holds the switches. Versions before 0.18 have no updater
+and are updated by downloading the DMG once more.
+
 ## Get started
 
 1. Connect your security key and open FidoPass.
@@ -114,6 +121,10 @@ key links remain usable; messages sent to the same key link are visibly related.
   have copied something else since.
 - Closing a message window clears its text. The receiving window also closes when its key
   disconnects or locks; a sending draft stays open across a session lock.
+- The update check is the app's only network request: one `GET` of the release list from
+  `github.com` a day, and when you ask. GitHub sees your IP address and the app version;
+  nothing about you or your keys is sent. Turn it off in Preferences → Updates. Builds you
+  make yourself never check.
 
 Passwords use `hmac-secret`, HKDF and a fixed character mapping. Messages use HPKE with
 X25519, HKDF-SHA256 and AES-128-GCM. Released derivations and formats are pinned by test
@@ -129,10 +140,13 @@ For local development and unit tests:
 
 ```sh
 brew install libfido2 pkg-config
-swift build --product FidoPassApp
-swift test
-swift build -Xswiftc -warnings-as-errors
+swift build --disable-keychain --product FidoPassApp
+swift test --disable-keychain
+swift build --disable-keychain -Xswiftc -warnings-as-errors
 ```
+
+`--disable-keychain` keeps SwiftPM from asking for your login keychain: it would look
+there for a `github.com` credential before fetching the Sparkle package, which is public.
 
 Tests need no physical key. To run the OpenSK integration suite, install Rust through
 rustup, then follow [the test setup](tools/test-authenticator/README.md#run).
@@ -148,11 +162,16 @@ open .build/release/FidoPass.app
 
 Run the `.app` bundle: `swift run` does not initialise the menu-bar app correctly.
 The bundle script builds pinned libfido2, libcbor and OpenSSL sources for macOS 14, includes
-them in the app, and verifies dependencies and signatures. The first build downloads them.
-It uses an ad-hoc signature unless `FIDOPASS_SIGN_IDENTITY` names a Developer ID identity.
+them and the Sparkle framework in the app, and verifies dependencies and signatures. The
+first build downloads them. It uses an ad-hoc signature unless `FIDOPASS_SIGN_IDENTITY`
+names a Developer ID identity; only a Developer ID build carries an update feed, so a local
+build never checks for updates. The version comes from the nearest git tag through
+`scripts/version.sh`; a build made after a tag calls itself `0.17.0-dev.8`.
 
 Use `bash scripts/create_dmg.sh` to package a DMG. Signed distribution also requires the
-credentials described in [scripts/notarize.sh](scripts/notarize.sh).
+credentials described in [scripts/notarize.sh](scripts/notarize.sh). Releases are cut by
+tagging; [docs/release.md](docs/release.md) has the procedure, the one-time setup and the
+recovery steps.
 
 For contributions, start with [AGENTS.md](AGENTS.md) and the
 [OpenSK test harness](tools/test-authenticator/README.md).
@@ -182,7 +201,8 @@ FIDOPASS_VIRTUAL_KEYS=1 bash scripts/test_keys.sh
 
 ## License
 
-[MIT](LICENSE). Bundled libfido2 is BSD-2-Clause, libcbor is MIT, and OpenSSL is Apache-2.0.
-The [vendored Argon2 implementation](Sources/CArgon2/README.md) is CC0-1.0 / Apache-2.0.
+[MIT](LICENSE). Bundled libfido2 is BSD-2-Clause, libcbor is MIT, OpenSSL is Apache-2.0,
+and [Sparkle](https://sparkle-project.org) is MIT. The
+[vendored Argon2 implementation](Sources/CArgon2/README.md) is CC0-1.0 / Apache-2.0.
 Their license texts are included in the app resources. OpenSK is Apache-2.0 and used only
 by tests.

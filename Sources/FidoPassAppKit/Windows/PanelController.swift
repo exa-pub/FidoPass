@@ -16,6 +16,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     private let devices: DeviceStore
     private let generation: GenerationStore
     private let touchGate: TouchGate
+    private let updates: any UpdateService
     private var statusItem: NSStatusItem?
     private var panel: PanelWindow?
     private var recoverySavePanel: NSSavePanel?
@@ -23,13 +24,20 @@ final class PanelController: NSObject, NSWindowDelegate {
     // Removed in `deinit`, which is not isolated; never touched anywhere else.
     nonisolated(unsafe) private var resignObserver: NSObjectProtocol?
     private var iconSubscription: AnyCancellable?
+    private var updatesSubscription: AnyCancellable?
 
     init(container: AppContainer) {
         self.store = container.panel
         self.devices = container.devices
         self.generation = container.generation
         self.touchGate = container.touchGate
+        self.updates = container.updates
         super.init()
+
+        // An update waiting in the menu is the other thing the icon's dot announces.
+        updatesSubscription = container.updates.statePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateIcon() }
 
         // The icon is a function of store state, so it follows the stores instead of being
         // told. `objectWillChange` fires before the change lands, hence the hop to the next
@@ -73,6 +81,17 @@ final class PanelController: NSObject, NSWindowDelegate {
     private func showStatusMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        // An update is the first item, and only while there is one: the dot on the icon
+        // needs exactly one obvious thing to click. The click is the consent; nothing asks
+        // again. While it installs, the item stays, disabled, so the dot's absence is
+        // explained.
+        if let title = updates.state.menuTitle {
+            let update = NSMenuItem(title: title, action: #selector(menuInstallUpdate), keyEquivalent: "")
+            update.target = self
+            update.isEnabled = updates.state.offersInstall
+            menu.addItem(update)
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Open FidoPass", action: #selector(menuOpen), keyEquivalent: "").target = self
         let copy = NSMenuItem(title: copyItemTitle, action: #selector(menuCopyPassword), keyEquivalent: "")
         copy.target = self
@@ -123,6 +142,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     @objc private func menuTemporaryUV() { store.temporaryUVAction() }
     @objc private func menuPreferences() { store.openPreferences() }
     @objc private func menuQuit() { store.quit() }
+    @objc private func menuInstallUpdate() { updates.install() }
 
     @objc private func menuCopyPassword() {
         guard let ref = store.selection, store.labelEditor.canGenerate else { show(); return }
@@ -150,12 +170,14 @@ final class PanelController: NSObject, NSWindowDelegate {
     func updateIcon() {
         let state = store.iconState
         guard let button = statusItem?.button else { return }
+        let update = updates.state.offersInstall ? updates.state.candidate?.version : nil
         button.image = StatusItemIcon.image(for: state)
-        button.toolTip = StatusItemIcon.description(for: state)
+        button.toolTip = StatusItemIcon.tooltip(for: state, update: update)
         // "Unlocked" and "a secret is on the clipboard" draw the same key symbol, so the
         // second state gets a dot: it is one of the two things the user would otherwise have
-        // to open the HUD to check.
-        button.title = StatusItemIcon.badgeVisible(for: state) ? " •" : ""
+        // to open the HUD to check. An update waiting in the menu uses the same dot — one
+        // signal for "there is something in the menu"; the tooltip and the menu say which.
+        button.title = StatusItemIcon.badgeVisible(for: state, updateOffered: update != nil) ? " •" : ""
         button.imagePosition = button.title.isEmpty ? .imageOnly : .imageLeading
     }
 

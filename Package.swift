@@ -14,6 +14,12 @@ let package = Package(
         .library(name: "FidoPassCore", targets: ["FidoPassCore"]),
         .executable(name: "FidoPassApp", targets: ["FidoPassApp"])
     ],
+    dependencies: [
+        // The in-app updater. A binary xcframework whose checksum Sparkle pins in its own
+        // manifest; `Package.resolved` pins the exact release here. The release tools that
+        // sign updates come from the matching tarball — see scripts/release.env.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6")
+    ],
     targets: [
         .systemLibrary(
             name: "CLibfido2",
@@ -50,12 +56,19 @@ let package = Package(
             dependencies: ["FidoPassCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The only module that imports Sparkle, the way only Core imports CLibfido2. The app
+        // sees it through `UpdateService`; the tests never load the framework.
+        .target(
+            name: "FidoPassUpdater",
+            dependencies: ["FidoPassAppKit", .product(name: "Sparkle", package: "Sparkle")],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         // The entry point and nothing else. The app icon lives here for `build_app.sh`,
         // which copies it into the bundle itself; SwiftPM must not turn it into a resource
         // bundle the app would never read.
         .executableTarget(
             name: "FidoPassApp",
-            dependencies: ["FidoPassAppKit"],
+            dependencies: ["FidoPassAppKit", "FidoPassUpdater"],
             exclude: ["Resources"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -74,6 +87,11 @@ let package = Package(
             name: "FidoPassAppTests",
             dependencies: ["FidoPassAppKit", "FidoPassCore", "FidoPassVirtualKeys", "TestSupport"],
             swiftSettings: appSettings
+        ),
+        .testTarget(
+            name: "FidoPassUpdaterTests",
+            dependencies: ["FidoPassUpdater", "FidoPassAppKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
 )

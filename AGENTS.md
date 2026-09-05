@@ -8,24 +8,32 @@ passphrases. Keep that scope; do not add per-site password-manager features.
 Local development needs Swift 6 and `brew install libfido2 pkg-config`.
 
 ```sh
-swift build --product FidoPassApp
-swift test                                  # no hardware; skips OpenSK if unbuilt
-swift test --filter GoldenVectors            # frozen password contract
+swift build --disable-keychain --product FidoPassApp
+swift test --disable-keychain                # no hardware; skips OpenSK if unbuilt
+swift test --disable-keychain --filter GoldenVectors   # frozen password contract
 bash scripts/test_keys.sh                    # required OpenSK tests; needs rustup
-swift build -Xswiftc -warnings-as-errors
+swift build --disable-keychain -Xswiftc -warnings-as-errors
 bash scripts/build_app.sh                    # runnable bundle; also needs cmake
 open .build/release/FidoPass.app
+bash scripts/version.sh                      # what this checkout builds as
+python3 scripts/test_version.py              # the version scheme, on throwaway repos
 ```
 
-Run the bundle, not `swift run`. See [README](README.md#development) for build prerequisites
-and [OpenSK setup](tools/test-authenticator/README.md#run) for the pinned Rust toolchain.
+Run the bundle, not `swift run`. `--disable-keychain` stops SwiftPM asking for the login
+keychain over the public Sparkle package. See [README](README.md#development) for build
+prerequisites, [OpenSK setup](tools/test-authenticator/README.md#run) for the pinned Rust
+toolchain, and [docs/release.md](docs/release.md) for tags, versions and the release job.
 
 ## Boundaries
 
 - Dependencies: `FidoPassApp` (entry point) → `FidoPassAppKit` (UI/stores) → `FidoPassCore`.
-- Only Core imports `CLibfido2`; only `Support/Argon2.swift` imports `CArgon2`.
-  No C handles in public APIs. Pair C allocations with `defer` frees; use
-  `DeviceAccessing.withOpenedDevice` and `CborInfo`.
+  `FidoPassApp` also links `FidoPassUpdater`, which implements `UpdateService` over Sparkle.
+- Only Core imports `CLibfido2`; only `Support/Argon2.swift` imports `CArgon2`; only
+  `FidoPassUpdater` imports Sparkle. No C handles in public APIs. Pair C allocations with
+  `defer` frees; use `DeviceAccessing.withOpenedDevice` and `CborInfo`.
+- The updater never touches a key and never shows a window: every Sparkle callback becomes
+  an `UpdateState`, rendered as a dot, a menu item and a row in Preferences. Release
+  constants (team, feed, Sparkle public key and version) live in `scripts/release.env`.
 - One `AppContainer`, one `KeyWorker`, one serial key queue. Views call flow actions;
   key work goes through `TouchGate` with its owning surface.
 - Each window owns its forms. Stores use `WindowRouter`, keep `PresentedError`, and leave
@@ -53,6 +61,11 @@ and [OpenSK setup](tools/test-authenticator/README.md#run) for the pinned Rust t
   credential; keep persisted `hud.*` and `labelHistory.v2` formats.
 - **Interaction:** with an unlocked key and selected account, Return generates and copies.
   Keep `PanelReducer` and screen default buttons consistent; no second Return dispatcher.
+- **Releases:** the version comes from `scripts/version.sh` alone; `CFBundleVersion` must
+  stay ordered for Sparkle's comparator (`VersionComparatorTests`). Never move a tag or
+  replace a published asset. Only Developer ID builds carry `SUFeedURL`; never point another
+  build at the production feed. No `set -x` around signing keys; the Sparkle private key
+  exists only in the `release` environment.
 
 ## Style and references
 

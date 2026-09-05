@@ -19,6 +19,8 @@ final class AppContainer {
     let router: WindowRouter
     let reset: ResetCoordinator
     let temporaryUV: TemporaryUVStore
+    /// The in-app updater. Inert in every build but a signed release.
+    let updates: any UpdateService
     /// The menu-bar panel's store.
     let panel: PanelStore
     /// The manager window's store. Reads nothing until that window opens.
@@ -33,6 +35,7 @@ final class AppContainer {
          preferences: Preferences? = nil,
          labels: LabelStore? = nil,
          clipboard: ClipboardService? = nil,
+         updates: (any UpdateService)? = nil,
          temporaryUVDuration: Duration = .seconds(60),
          emptyConfirmationDelay: Duration = .milliseconds(700),
          enableMonitors: Bool = true,
@@ -60,6 +63,7 @@ final class AppContainer {
         let temporaryUV = TemporaryUVStore(devices: deviceStore, gate: touchGate,
                                             duration: temporaryUVDuration)
         let decryptor = DecryptorCoordinator(router: router)
+        let updateService = updates ?? UnavailableUpdateService()
         let reset = ResetCoordinator(devices: deviceStore,
                                      accounts: accountStore,
                                      labels: labelStore,
@@ -75,6 +79,7 @@ final class AppContainer {
         self.clipboard = clipboard
         self.touchGate = touchGate
         self.temporaryUV = temporaryUV
+        self.updates = updateService
         self.decryptor = decryptor
         self.router = router
         self.reset = reset
@@ -107,10 +112,16 @@ final class AppContainer {
                 deviceStore?.adoptInfo(info, for: device.path)
             }
         }
+        // A relaunch for an update waits for the key: an operation in flight would be
+        // abandoned half-way, with the touch it is waiting for landing in nothing.
+        updateService.canRelaunchNow = { [weak touchGate] in !(touchGate?.isWorking ?? false) }
         touchGate.$isWorking
             .dropFirst()
             .filter { !$0 }
-            .sink { [weak temporaryUV] _ in Task { await temporaryUV?.restoreIfDue() } }
+            .sink { [weak temporaryUV, weak updateService] _ in
+                updateService?.relaunchGateDidOpen()
+                Task { await temporaryUV?.restoreIfDue() }
+            }
             .store(in: &subscriptions)
 
         labelStore.onCleared = { [weak self] in

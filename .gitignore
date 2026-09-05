@@ -12,3 +12,11 @@ libfido2/
 *.certSigningRequest
 FidoPass.zip
 FidoPass.app.zip
+# Release outputs
+dist/
+FidoPass-*.zip
+SHA256SUMS
+appcast.xml
+__pycache__/
+# Signing keys made by scripts/sparkle_keygen.swift never belong in the repository
+*.key

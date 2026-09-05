@@ -13,6 +13,8 @@ final class AuxiliaryWindows {
     private unowned let container: AppContainer
     private let hotkey: HotkeyRegistration
     private let launchAtLogin: LaunchAtLoginService
+    /// One model for both windows that show update settings, so they never disagree.
+    private lazy var updates = UpdateModel(service: container.updates)
 
     private var encryptionKeyWindow: NSWindow?
     private var encryptorWindow: NSWindow?
@@ -112,7 +114,8 @@ final class AuxiliaryWindows {
         let view = PreferencesView(preferences: container.preferences,
                                    labels: container.labels,
                                    hotkey: hotkey,
-                                   launchAtLogin: launchAtLogin)
+                                   launchAtLogin: launchAtLogin,
+                                   updates: updates)
         let visible = (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
         let window = makeWindow(title: "FidoPass Settings",
                                 content: AnyView(view),
@@ -161,6 +164,7 @@ final class AuxiliaryWindows {
         }
         let view = OnboardingView(preferences: container.preferences,
                                   launchAtLogin: launchAtLogin,
+                                  updates: updates,
                                   onFinish: { [weak self] in
                                       onFinish()
                                       self?.closeOnboarding()

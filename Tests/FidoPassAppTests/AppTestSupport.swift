@@ -525,6 +525,7 @@ enum AppTestFactory {
     @MainActor
     static func makeContainer(backend: KeyBackend,
                               suite: String = "HUDTests-\(UUID().uuidString)",
+                              updates: (any UpdateService)? = nil,
                               temporaryUVDuration: Duration = .seconds(60)) -> AppContainer {
         let defaults = makeDefaults(suite: suite)
         let preferences = Preferences(defaults: defaults)
@@ -534,6 +535,7 @@ enum AppTestFactory {
                                      preferences: preferences,
                                      labels: labels,
                                      clipboard: ClipboardService(pasteboard: MemoryPasteboard()),
+                                     updates: updates,
                                      temporaryUVDuration: temporaryUVDuration,
                                      emptyConfirmationDelay: .milliseconds(1),
                                      enableMonitors: false)

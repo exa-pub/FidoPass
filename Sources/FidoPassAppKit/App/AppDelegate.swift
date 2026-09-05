@@ -9,17 +9,19 @@ import FidoPassVirtualKeys
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private let windows = AppWindows()
+    private let updates: any UpdateService
     #if FIDOPASS_VIRTUAL_KEYS
     private let helperURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fidopass-test-authenticator")
     private lazy var virtualRegistry = VirtualDeviceRegistry(executable: helperURL)
     private lazy var container = AppContainer(backend: LiveKeyBackend(core: virtualRegistry.core),
-                                               router: windows, emptyConfirmationDelay: .zero,
+                                               router: windows, updates: updates,
+                                               emptyConfirmationDelay: .zero,
                                                enableDeviceMonitor: false)
     private lazy var virtualDevices = VirtualDeviceStore(registry: virtualRegistry, devices: container.devices,
                                                         executable: helperURL)
     private lazy var virtualWindow = VirtualDevicesController(store: virtualDevices)
     #else
-    private lazy var container = AppContainer(router: windows)
+    private lazy var container = AppContainer(router: windows, updates: updates)
     #endif
     private lazy var hud = PanelController(container: container)
     private lazy var hotkey = HotkeyRegistration(preferences: container.preferences,
@@ -31,8 +33,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                                                   launchAtLogin: SMAppLaunchAtLogin())
     private var subscriptions: Set<AnyCancellable> = []
 
-    public override init() {
+    /// - Parameter updates: the updater; `FidoPassMain` passes the Sparkle-backed one.
+    public init(updates: any UpdateService) {
+        self.updates = updates
         super.init()
+    }
+
+    /// A delegate that cannot update — what the tests build.
+    public override convenience init() {
+        self.init(updates: UnavailableUpdateService())
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
@@ -91,6 +100,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About FidoPass", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let updatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updatesItem.target = self
+        appMenu.addItem(updatesItem)
         appMenu.addItem(.separator())
         let preferences = NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
         preferences.target = self
@@ -151,6 +163,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         auxiliary.showPreferences()
     }
 
+    /// No window of its own: the result is a line in Preferences, which this opens.
+    @objc private func checkForUpdates() {
+        auxiliary.showPreferences()
+        container.updates.checkForUpdates()
+    }
+
     @objc private func encryptMessage() {
         container.panel.openEncryptor()
     }
@@ -163,6 +181,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(decryptMessage) {
             return container.panel.isSelectedKeyUnlocked
+        }
+        if menuItem.action == #selector(checkForUpdates) {
+            return updates.isAvailable
         }
         return true
     }
