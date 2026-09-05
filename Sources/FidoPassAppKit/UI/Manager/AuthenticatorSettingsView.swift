@@ -5,6 +5,8 @@ import FidoPassCore
 /// attestation require confirmation because reset is needed to undo them.
 struct AuthenticatorSettingsView: View {
     let info: AuthenticatorInfo
+    let deviceName: String
+    @Binding var hasDraft: Bool
     let isUnlocked: Bool
     let onUnlock: () -> Void
     let onToggleAlwaysUV: () -> Void
@@ -37,7 +39,7 @@ struct AuthenticatorSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ManagerSectionHeader(title: "Settings",
+            ManagerSectionHeader(title: "Settings — \(deviceName)",
                                  note: "What this authenticator will let you change about itself. Each needs the PIN; none needs a touch.")
 
             if !info.supportsConfiguration {
@@ -53,6 +55,9 @@ struct AuthenticatorSettingsView: View {
         }
         .disabled(isBusy)
         .onAppear { pendingMinimum = max(currentMinimum + 1, PinPolicy.ctapFloor + 1) }
+        .onChange(of: isRaising) { updateDraftState() }
+        .onChange(of: confirming?.id) { updateDraftState() }
+        .onDisappear { hasDraft = false }
         .alert(item: $confirming) { confirmation in confirmationAlert(confirmation) }
     }
 
@@ -255,20 +260,22 @@ struct AuthenticatorSettingsView: View {
         Divider()
     }
 
+    private func updateDraftState() { hasDraft = isRaising || confirming != nil }
+
     private func confirmationAlert(_ confirmation: Confirmation) -> Alert {
         switch confirmation {
         case .minimumPIN(let value):
-            return Alert(title: Text("Raise the minimum PIN length to \(value)?"),
+            return Alert(title: Text("Raise minimum PIN to \(value) on \(deviceName)?"),
                          message: Text("This cannot be undone. The minimum can never be lowered again, on this key, by any software. If your current PIN is shorter than \(value) the key will demand a new one before it does anything else."),
                          primaryButton: .destructive(Text("Raise")) { onRaiseMinimumPIN(value) },
                          secondaryButton: .cancel())
         case .forcePINChange:
-            return Alert(title: Text("Require a new PIN?"),
+            return Alert(title: Text("Require a new PIN on \(deviceName)?"),
                          message: Text("The key will refuse every operation — including generating passwords — until you set a new PIN."),
                          primaryButton: .destructive(Text("Require")) { onForcePINChange() },
                          secondaryButton: .cancel())
         case .enterpriseAttestation:
-            return Alert(title: Text("Enable enterprise attestation?"),
+            return Alert(title: Text("Enable enterprise attestation on \(deviceName)?"),
                          message: Text("This cannot be undone. The key will be able to identify itself individually to relying parties that request it."),
                          primaryButton: .destructive(Text("Enable")) { onEnableEnterpriseAttestation() },
                          secondaryButton: .cancel())

@@ -4,6 +4,13 @@ import FidoPassCore
 /// Account creation/import form. Portable is the default; imports adopt the backup identity.
 struct EnrollView: View {
     @ObservedObject var store: PanelStore
+    @ObservedObject private var inventory: InventoryStore
+    @State private var showsAdvanced = false
+
+    init(store: PanelStore) {
+        self.store = store
+        self.inventory = store.inventory
+    }
 
     private enum Field: Hashable { case accountId, importText, identity }
     @FocusState private var focus: Field?
@@ -12,13 +19,13 @@ struct EnrollView: View {
 
     /// Only fields that are on screen: Tab must not stop at one that is not there.
     private var fields: [Field] {
-        switch draft.mode {
-        case .import:
-            return [.accountId, .importText, .identity]
-        case .portable, .local:
-            return [.accountId, .identity]
-        }
+        var visible: [Field] = [.accountId]
+        if draft.mode == .import { visible.append(.importText) }
+        if showsIdentity && showsAdvanced { visible.append(.identity) }
+        return visible
     }
+
+    private var showsIdentity: Bool { draft.mode != .import || draft.parsedBackup != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,6 +41,16 @@ struct EnrollView: View {
         }
         .tabFocusChain(fields, focus: $focus)
         .onAppear { focus = .accountId }
+        .onChange(of: draft.mode) {
+            showsAdvanced = false
+            focus = draft.mode == .import ? .importText : .accountId
+        }
+        .onChange(of: draft.importIsLegacy) {
+            if draft.importIsLegacy { showsAdvanced = true }
+        }
+        .onChange(of: showsAdvanced) {
+            if !showsAdvanced, focus == .identity { focus = .accountId }
+        }
     }
 
     private var form: some View {
@@ -60,7 +77,14 @@ struct EnrollView: View {
                 importFields
             }
 
-            identityFields
+            if showsIdentity { identityFields }
+
+            if store.selectedKeyIsFull {
+                Text("The last read found no free credential slots on this key.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Manage this key…") { store.openManager() }.buttonStyle(.link)
+            }
 
             if let step = store.enrollStep {
                 Label(step, systemImage: "hourglass").font(.caption).foregroundStyle(.secondary)
@@ -131,12 +155,19 @@ struct EnrollView: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.tertiary)
 
-            IdentityFieldView(hex: $store.enrollDraft.identityHex,
-                              identity: draft.identity,
-                              error: draft.identityError,
-                              onRandomise: { store.randomiseEnrollIdentity() },
-                              onSubmit: { Task { await store.createAccount() } })
-                .focused($focus, equals: .identity)
+            if let identity = draft.identity {
+                IdentityFingerprintView(identity: identity, style: .swatch)
+                    .help(identity.groupedHex)
+            }
+            DisclosureGroup("Advanced: choose an identity", isExpanded: $showsAdvanced) {
+                IdentityFieldView(hex: $store.enrollDraft.identityHex,
+                                  identity: draft.identity,
+                                  error: draft.identityError,
+                                  onRandomise: { store.randomiseEnrollIdentity() },
+                                  onSubmit: { Task { await store.createAccount() } })
+                    .focused($focus, equals: .identity)
+                    .padding(.top, 5)
+            }.font(.caption)
 
             Text(identityHint)
                 .font(.caption2)

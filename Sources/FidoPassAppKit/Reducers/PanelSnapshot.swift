@@ -21,4 +21,5 @@ struct PanelSnapshot: Equatable {
     /// to do with one is delete it. `⏎` must not pretend otherwise.
     var incompleteRefs: Set<AccountRef> = []
     var selection: AccountRef?
+    var hasValidLabel = true
 }

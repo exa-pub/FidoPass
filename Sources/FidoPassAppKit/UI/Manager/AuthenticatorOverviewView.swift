@@ -8,8 +8,24 @@ struct AuthenticatorOverviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ManagerSectionHeader(title: "Overview",
-                                 note: "Everything this authenticator reports about itself. Read without a PIN and without a touch.")
+                                 note: "PIN, accounts and storage for the selected key. Use Read key to update this information.")
 
+            group("Ready to use") {
+                ManagerRow(label: "PIN", value: info.forcePINChange ? "change required" : (info.hasPIN ? "configured" : "set a PIN to begin"))
+                ManagerRow(label: "Accounts and credentials", value: inventory.map { "\($0.credentialCount) total across all services" } ?? "unlock and read the key to list them")
+                ManagerRow(label: "Free credential slots", value: (inventory?.residentKeysRemaining ?? info.remainingResidentKeys).map(String.init) ?? "not reported")
+                if let bytes = inventory?.largeBlobArrayBytes {
+                    ManagerRow(label: "Account record storage", value: "\(bytes) B used · limit \(info.limits.maxLargeBlob) B")
+                }
+            }
+
+            DisclosureGroup("Technical details") { technicalDetails }
+                .font(.caption).padding(.top, 16)
+        }
+    }
+
+    private var technicalDetails: some View {
+        VStack(alignment: .leading, spacing: 0) {
             group("Identity") {
                 ManagerRow(label: "Model (AAGUID)", value: info.aaguid ?? "not reported",
                            monospaced: info.aaguid != nil, copyable: info.aaguid != nil)
@@ -57,7 +73,7 @@ struct AuthenticatorOverviewView: View {
 
             group("Storage") {
                 ManagerRow(label: "Free credential slots",
-                           value: info.remainingResidentKeys.map(String.init) ?? "not reported")
+                           value: (inventory?.residentKeysRemaining ?? info.remainingResidentKeys).map(String.init) ?? "not reported")
                 if let inventory {
                     ManagerRow(label: "Discoverable credentials", value: "\(inventory.credentialCount)")
                     ManagerRow(label: "Relying parties", value: "\(inventory.relyingParties.count)")

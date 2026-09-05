@@ -8,7 +8,14 @@ import FidoPassCore
 struct UnlockView: View {
     @ObservedObject var store: PanelStore
     @ObservedObject var devices: DeviceStore
+    @ObservedObject private var preferences: Preferences
     @FocusState private var pinFocused: Bool
+
+    init(store: PanelStore, devices: DeviceStore) {
+        self.store = store
+        self.devices = devices
+        self.preferences = store.preferences
+    }
 
     private var retries: Int? { devices.selectedState?.pinRetriesRemaining }
 
@@ -19,7 +26,7 @@ struct UnlockView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Enter the key PIN. It is kept in memory for five minutes, then asked again.")
+                Text("Enter the key PIN. It stays in memory for \(Preferences.timeoutLabel(preferences.lockTimeout)) of inactivity. Each use starts the countdown again.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -33,9 +40,16 @@ struct UnlockView: View {
                 Button("Unlock") { Task { await store.submitPin() } }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(store.pinDraft.isEmpty || store.isWorking)
+                    .disabled(store.pinDraft.isEmpty || store.isWorking || store.isCheckingPINStatus)
             }
 
+            if store.isCheckingPINStatus {
+                Text("Checking this key…").font(.caption).foregroundStyle(.secondary)
+            } else if devices.selectedState?.hasPIN == nil {
+                Button("Check key") { Task { await store.checkPINStatus() } }
+                    .buttonStyle(.link)
+                    .disabled(store.isWorking)
+            }
             if let retries { PinAttemptsLabel(remaining: retries) }
         }
         .padding(.horizontal, PanelMetrics.padding)

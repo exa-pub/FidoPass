@@ -42,10 +42,6 @@ final class MessageEncryptStore: ObservableObject {
     /// The sealed message as a link, or empty.
     @Published private(set) var sealed = ""
     @Published private(set) var status: Status = .empty
-    /// The account the key on screen was issued for, when the panel opened this window —
-    /// so the window can say whose key it is, and warn when that account is not backed up.
-    @Published private(set) var issuedFor: Account?
-
     private let sealer: MessageSealing
     private var keyWork: Task<Void, Never>?
     private var sealWork: Task<Void, Never>?
@@ -53,20 +49,19 @@ final class MessageEncryptStore: ObservableObject {
     /// the user editing it.
     private var applyingProgrammaticEdit = false
 
-    init(sealer: MessageSealing, prefilled: EncryptionKeyURL? = nil, issuedFor: Account? = nil) {
+    init(sealer: MessageSealing, prefilled: EncryptionKeyURL? = nil) {
         self.sealer = sealer
-        if let prefilled { adopt(prefilled, issuedFor: issuedFor) }
+        if let prefilled { adopt(prefilled) }
     }
 
     /// A key that is known to be valid — just issued, or clicked as a link. No debounce and no
     /// re-reading: the fingerprint is already in it.
-    func adopt(_ key: EncryptionKeyURL, issuedFor account: Account?) {
+    func adopt(_ key: EncryptionKeyURL) {
         keyWork?.cancel()
         applyingProgrammaticEdit = true
         keyText = key.absoluteString
         applyingProgrammaticEdit = false
         self.key = key
-        self.issuedFor = account
         keyStatus = .valid(key.fingerprint)
         reseal()
     }
@@ -86,8 +81,6 @@ final class MessageEncryptStore: ObservableObject {
         keyWork?.cancel()
         dropSealed()
         key = nil
-        // Whatever key the panel issued, the user is now typing another one.
-        issuedFor = nil
         guard !keyText.isEmpty else {
             keyStatus = .empty
             dropSealed()

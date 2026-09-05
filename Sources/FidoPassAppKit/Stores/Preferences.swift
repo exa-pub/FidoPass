@@ -72,6 +72,12 @@ final class Preferences: ObservableObject {
         self.lastUsed = Self.read(LastUsed.self, from: defaults, key: Key.lastUsed)
     }
 
+    nonisolated static func timeoutLabel(_ timeout: TimeInterval) -> String {
+        let minutes = Int(timeout / 60)
+        if minutes == 60 { return "1 hour" }
+        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+    }
+
     // MARK: - Last used
 
     func remember(accountId: String, label: String, device: FidoDevice, credentialId: String? = nil) {

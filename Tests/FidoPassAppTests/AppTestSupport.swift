@@ -45,6 +45,9 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     /// account.
     var backupValue = PortableBackup(masterKey: Data(repeating: 0x42, count: 32),
                                      identity: AccountIdentity(hex: "42424242424242424242424242424242"))!
+    var statusGate: BlockingGate?
+    var statusError: Error?
+    var enrollError: Error?
     var enumerateError: Error?
     var listDevicesError: Error?
     /// When set, `enumerateAccounts` blocks until the gate is opened.
@@ -152,6 +155,7 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     }
 
     static func info(supportsCredentialManagement: Bool = true,
+                     remainingResidentKeys: Int = 92,
                      options: [AuthenticatorInfo.Option] = [.init(name: "credMgmt", value: true),
                                                             .init(name: "authnrCfg", value: true),
                                                             .init(name: "alwaysUv", value: false),
@@ -186,7 +190,7 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
                                                            maxRPIDsForMinPINLength: 1),
                           minPINLength: 4,
                           forcePINChange: false,
-                          remainingResidentKeys: 92,
+                          remainingResidentKeys: remainingResidentKeys,
                           uvAttempts: nil,
                           uvModalities: [])
     }
@@ -213,7 +217,9 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     }
 
     func status(devicePath: String) throws -> DeviceStatus {
+        statusGate?.wait()
         statusCallCount += 1
+        if let statusError { throw statusError }
         return statusByPath[devicePath] ?? DeviceStatus(pinRetriesRemaining: 5,
                                                         hasPIN: true,
                                                         supportsHmacSecret: true,
@@ -232,6 +238,7 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
 
     func enroll(accountId: String, kind: AccountKind, identity: AccountIdentity, devicePath: String, askPIN: @escaping @Sendable () -> String?) throws -> AccountHandle {
         enrollCalls.append((accountId, kind, identity, nil))
+        if let enrollError { throw enrollError }
         let account = Account.v2Fixture(id: accountId, kind: kind, identity: identity)
         accountsByPath[devicePath, default: []].append(account)
         return AccountHandle(account: account, devicePath: devicePath)
@@ -244,6 +251,7 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
                         imported: PortableBackup?,
                         onStep: @escaping @Sendable (PortableEnrollmentStep) -> Void) throws -> (AccountHandle, PortableBackup?) {
         enrollCalls.append((accountId, .portable, identity, imported))
+        if let enrollError { throw enrollError }
         onStep(.creatingCredential)
         onStep(.derivingBackupKey)
         onStep(.savingRecord)
@@ -304,8 +312,10 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         accountsByPath[copy.devicePath]?.removeAll { $0 == copy.account }
     }
 
+    var generateError: Error?
     func generatePassword(_ handle: AccountHandle, label: String, pinProvider: @escaping @Sendable () -> String?) throws -> String {
         generateCalls.append((handle.id, label))
+        if let generateError { throw generateError }
         return generatedPassword
     }
 
@@ -404,24 +414,27 @@ final class RecordingWindowRouter: WindowRouter {
     private(set) var panelOpened = 0
     private(set) var panelClosed = 0
     private(set) var managerOpened = 0
+    private(set) var managerPaths: [String?] = []
     private(set) var preferencesOpened = 0
     #if FIDOPASS_VIRTUAL_KEYS
     private(set) var virtualDevicesOpened = 0
     #endif
     private(set) var decryptorClosed = 0
     private(set) var quitRequested = 0
+    private(set) var sharedEncryptionKeys: [(key: EncryptionKeyURL, account: Account)] = []
     private(set) var openedEncryptors: [(key: EncryptionKeyURL?, account: Account?)] = []
     private(set) var openedDecryptors: [MessageDecryptStore] = []
     private(set) var savedSheets: [RecoverySheet] = []
 
     func openPanel() { panelOpened += 1 }
     func closePanel() { panelClosed += 1 }
-    func openManager() { managerOpened += 1 }
+    func openManager(devicePath: String?) { managerOpened += 1; managerPaths.append(devicePath) }
     func openPreferences() { preferencesOpened += 1 }
     #if FIDOPASS_VIRTUAL_KEYS
     func openVirtualDevices() { virtualDevicesOpened += 1 }
     #endif
-    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?) { openedEncryptors.append((key, account)) }
+    func openEncryptionKey(_ key: EncryptionKeyURL, for account: Account) { sharedEncryptionKeys.append((key, account)) }
+    func openEncryptor(with key: EncryptionKeyURL?) { openedEncryptors.append((key, nil)) }
     func openDecryptor(_ store: MessageDecryptStore) { openedDecryptors.append(store) }
     func closeDecryptor() { decryptorClosed += 1 }
     func saveRecoverySheet(_ sheet: RecoverySheet) { savedSheets.append(sheet) }

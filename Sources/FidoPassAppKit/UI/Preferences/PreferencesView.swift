@@ -10,6 +10,7 @@ struct PreferencesView: View {
     @ObservedObject var labels: LabelStore
     @ObservedObject var hotkey: HotkeyRegistration
     let launchAtLogin: LaunchAtLoginService
+    @State private var confirmsClearHistory = false
 
     var body: some View {
         Form {
@@ -39,7 +40,7 @@ struct PreferencesView: View {
             Section {
                 Picker("Lock the key after", selection: $preferences.lockTimeout) {
                     ForEach(Preferences.lockTimeoutChoices, id: \.self) { timeout in
-                        Text(Self.timeoutLabel(timeout)).tag(timeout)
+                        Text(Preferences.timeoutLabel(timeout)).tag(timeout)
                     }
                 }
             } header: {
@@ -73,7 +74,7 @@ struct PreferencesView: View {
             }
 
             Section {
-                if labels.histories.isEmpty {
+                if !labels.hasHistory {
                     Text("No labels used yet")
                         .foregroundStyle(.secondary)
                 } else {
@@ -88,7 +89,7 @@ struct PreferencesView: View {
                         }
                         ForEach(group.entries) { entry in
                             LabeledContent {
-                                Text(entry.labels.joined(separator: ", "))
+                                Text(entry.labels.map(LabelDisplay.text).joined(separator: ", "))
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.trailing)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -99,9 +100,13 @@ struct PreferencesView: View {
                         }
                     }
 
+                    if labels.hasLegacyHistory {
+                        Text("Unassigned labels from an earlier version are also stored on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     HStack {
                         Spacer()
-                        Button("Clear label history") { labels.clearAll() }
+                        Button("Clear label history…") { confirmsClearHistory = true }
                     }
                 }
             } header: {
@@ -130,7 +135,13 @@ struct PreferencesView: View {
 
         }
         .formStyle(.grouped)
-        .frame(width: 460)
+        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+        .alert("Clear label history?", isPresented: $confirmsClearHistory) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear history", role: .destructive) { labels.clearAll() }
+        } message: {
+            Text("This removes labels for \(labels.histories.count) account records\(labels.hasLegacyHistory ? " and unassigned legacy labels" : "") from this Mac. A forgotten label can make its password impossible to reproduce. Save the recovery sheets you need from each account’s menu first. Accounts on your keys are kept.")
+        }
     }
 
     /// One key's histories, under the name that key gave when they were recorded — which is
@@ -162,15 +173,6 @@ struct PreferencesView: View {
             case (nil, true):        return KeyGroup(signature: signature, title: "Unknown key", entries: entries)
             }
         }
-    }
-
-    private static func timeoutLabel(_ timeout: TimeInterval) -> String {
-        let minutes = Int(timeout / 60)
-        if minutes % 60 == 0 {
-            let hours = minutes / 60
-            return hours == 1 ? "1 hour" : "\(hours) hours"
-        }
-        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
 
     private var preselectionDescription: String {

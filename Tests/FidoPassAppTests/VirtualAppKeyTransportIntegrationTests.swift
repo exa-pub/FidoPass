@@ -102,6 +102,10 @@ final class VirtualAppKeyTransportIntegrationTests: AppTestCase {
         XCTAssertNil(container.reset.error)
         XCTAssertNil(container.reset.flow)
         XCTAssertFalse(container.devices.states.values.first?.hasPIN ?? true)
+        XCTAssertEqual(container.manager.device?.path, container.devices.devices.first?.path)
+        XCTAssertEqual(container.manager.tab, .overview)
+        XCTAssertNotNil(container.manager.notice)
+        XCTAssertNil(container.manager.sheet)
     }
 
     func testMissingBundledHelperShowsAnErrorWithoutDevices() async {

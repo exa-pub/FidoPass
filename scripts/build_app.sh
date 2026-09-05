@@ -38,8 +38,8 @@ FRAMEWORKS_DIR="${CONTENTS}/Frameworks"
 bash scripts/build_dependencies.sh
 DEPS_PREFIX="$PROJECT_ROOT/.build/native-dependencies/$(uname -m)/prefix"
 export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
-swift build -c release --product "$PRODUCT" "${SWIFT_ARGS[@]}"
-SWIFT_BIN_DIR="$(swift build -c release --show-bin-path "${SWIFT_ARGS[@]}")"
+swift build -c release --product "$PRODUCT" ${SWIFT_ARGS[@]+"${SWIFT_ARGS[@]}"}
+SWIFT_BIN_DIR="$(swift build -c release --show-bin-path ${SWIFT_ARGS[@]+"${SWIFT_ARGS[@]}"})"
 if [[ "$VIRTUAL_KEYS" == 1 ]]; then
   MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS" OPENSSL_DIR="$DEPS_PREFIX" bash scripts/build_test_authenticator.sh --release
 fi

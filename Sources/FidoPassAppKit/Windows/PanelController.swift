@@ -18,6 +18,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     private let touchGate: TouchGate
     private var statusItem: NSStatusItem?
     private var panel: PanelWindow?
+    private var recoverySavePanel: NSSavePanel?
     private var hosting: NSHostingController<PanelRootView>?
     // Removed in `deinit`, which is not isolated; never touched anywhere else.
     nonisolated(unsafe) private var resignObserver: NSObjectProtocol?
@@ -74,7 +75,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         menu.addItem(withTitle: "Open FidoPass", action: #selector(menuOpen), keyEquivalent: "").target = self
         let copy = NSMenuItem(title: copyItemTitle, action: #selector(menuCopyPassword), keyEquivalent: "")
         copy.target = self
-        copy.isEnabled = store.selection != nil
+        copy.isEnabled = store.selection != nil && store.labelEditor.canGenerate
         menu.addItem(copy)
         menu.addItem(.separator())
         menu.addItem(withTitle: "New account…", action: #selector(menuNewAccount), keyEquivalent: "").target = self
@@ -116,7 +117,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     @objc private func menuQuit() { store.quit() }
 
     @objc private func menuCopyPassword() {
-        guard let ref = store.selection else { show(); return }
+        guard let ref = store.selection, store.labelEditor.canGenerate else { show(); return }
         show(intent: .copyPassword(ref, label: store.labelEditor.current))
     }
 
@@ -254,29 +255,32 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: - Recovery sheet
 
-    /// Runs as a sheet on the HUD panel.
-    ///
-    /// A modal save panel from an accessory app would drop the HUD behind it and, because
-    /// the panel loses key, close it outright — losing the screen the user started from.
+    /// A standalone system panel owns its geometry independently of the narrow HUD.
     func presentSavePanel(for sheet: RecoverySheet) {
-        guard let panel else { return }
+        guard recoverySavePanel == nil else { return }
+        guard let panel else {
+            store.recoverySheetFinished(saved: false)
+            return
+        }
         let savePanel = NSSavePanel()
+        recoverySavePanel = savePanel
         savePanel.nameFieldStringValue = sheet.suggestedFileName
         savePanel.allowedContentTypes = [.plainText]
         savePanel.message = "This sheet contains no passwords, PIN or backup key."
-        savePanel.beginSheetModal(for: panel) { [weak self] response in
+        savePanel.begin { [weak self, weak savePanel] response in
             Task { @MainActor in
-                guard let self else { return }
-                guard response == .OK, let url = savePanel.url else {
-                    self.store.recoverySheetFinished(saved: false)
-                    return
+                guard let self, let savePanel, self.recoverySavePanel === savePanel else { return }
+                var saved = false
+                var failure: String?
+                if response == .OK, let url = savePanel.url {
+                    do {
+                        try sheet.render().write(to: url, atomically: true, encoding: .utf8)
+                        saved = true
+                    } catch { failure = error.localizedDescription }
                 }
-                do {
-                    try sheet.render().write(to: url, atomically: true, encoding: .utf8)
-                    self.store.recoverySheetFinished(saved: true)
-                } catch {
-                    self.store.recoverySheetFinished(saved: false, failure: error.localizedDescription)
-                }
+                self.recoverySavePanel = nil
+                panel.makeKeyAndOrderFront(nil)
+                self.store.recoverySheetFinished(saved: saved, failure: failure)
             }
         }
     }

@@ -24,6 +24,7 @@ final class AccountStore: ObservableObject {
 
     private var lifetimes: [String: OperationLease] = [:]
     private var loading = OperationLease()
+    var onMutation: ((String) -> Void)?
     var onAuthenticationFailure: ((String) -> Void)?
 
     private func lifetime(for path: String) -> OperationLease {
@@ -53,6 +54,7 @@ final class AccountStore: ObservableObject {
     }
 
     private func mutation<T: Sendable>(path: String, _ body: @escaping @Sendable (KeyAccountBackend) throws -> T) async throws -> T {
+        onMutation?(path)
         do { return try await run(path: path, body) }
         catch {
             guard !(error is CancellationError) else { throw error }

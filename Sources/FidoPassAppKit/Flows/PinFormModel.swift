@@ -17,6 +17,8 @@ final class PinFormModel: ObservableObject {
     @Published var new = "" { didSet { bindIfNeeded() } }
     @Published var confirm = "" { didSet { bindIfNeeded() } }
 
+    @Published private(set) var currentFocusRequest = 0
+
     private(set) var boundPath: String?
     private var boundLease: OperationLease?
     private func bindIfNeeded() {
@@ -95,6 +97,7 @@ final class PinFormModel: ObservableObject {
     @discardableResult
     func submit(followUp: () async -> Void = {}) async throws -> Bool {
         guard canSubmit, let device = device() else { return false }
+        let formLease = boundLease
         let currentPIN = current
         let newPIN = new
         do {
@@ -110,7 +113,10 @@ final class PinFormModel: ObservableObject {
                 await followUp()
             }
         } catch {
-            if mode == .change { current = "" }
+            if mode == .change, formLease?.isValid == true, boundLease === formLease, boundPath == device.path {
+                current = ""
+                currentFocusRequest += 1
+            }
             throw error
         }
         return true

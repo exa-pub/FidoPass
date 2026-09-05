@@ -7,6 +7,64 @@ import TestSupport
 @MainActor
 final class PanelStoreTests: AppTestCase {
 
+    func testThreeNewKeysEachProbeTheirOwnPINState() async {
+        let backend = MockKeyBackend()
+        let store = AppTestFactory.makeStore(backend: backend)
+        for index in 1...3 {
+            let device = MockKeyBackend.device(path: "key-\(index)")
+            backend.devices = [device]
+            backend.statusByPath[device.path] = DeviceStatus(pinRetriesRemaining: nil, hasPIN: false,
+                supportsHmacSecret: true, remainingResidentKeys: 10)
+            await store.devices.refresh()
+            store.pinDraft = "1"
+            await store.pinDraftDidChange()
+            XCTAssertEqual(store.effectiveRoute, .setPIN)
+            store.pinForm.new = "1234"
+            store.pinForm.confirm = "1234"
+            await store.setInitialPIN()
+            XCTAssertEqual(store.effectiveRoute, .accounts)
+        }
+    }
+
+    func testAnEmptyLabelBlocksTheDefaultActionAndBackend() async {
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        store.setLabel("vault")
+        store.labelEditor.draftChanged("")
+        XCTAssertEqual(store.primaryAction, .editLabel)
+        await store.copyPassword(for: store.selection)
+        XCTAssertTrue(backend.generateCalls.isEmpty)
+        XCTAssertNotNil(store.labelEditor.issue)
+        XCTAssertTrue(store.labelEditor.escape())
+        XCTAssertEqual(store.labelEditor.current, "vault")
+        XCTAssertNil(store.labelEditor.issue)
+        XCTAssertNil(store.error)
+    }
+
+    func testExactLabelMatchesRequestHistoryAndRecovery() async throws {
+        let (store, backend, _) = await AppTestFactory.unlockedStore()
+        let ref = try XCTUnwrap(store.selection)
+        store.labelEditor.draftChanged(" vault ")
+        await store.copyPassword(for: ref)
+        XCTAssertTrue(backend.generateCalls.isEmpty)
+        store.labelEditor.keepExactLabel()
+        await store.copyPassword(for: ref)
+        XCTAssertEqual(backend.generateCalls.map(\.label), [" vault "])
+        XCTAssertEqual(store.labels.recent.first, " vault ")
+        store.saveRecoverySheet(for: ref)
+        XCTAssertEqual((store.router as? RecordingWindowRouter)?.savedSheets.last?.labels, [" vault "])
+    }
+
+    func testClearingHistoryAlsoClearsPreselectionAndVisibleLabel() async {
+        let (store, _, _) = await AppTestFactory.unlockedStore()
+        await store.copyPassword(for: store.selection, label: "archive")
+        store.labels.clearAll()
+        XCTAssertTrue(store.labels.recent.isEmpty)
+        XCTAssertNil(store.preferences.lastUsed)
+        XCTAssertEqual(store.labelEditor.draft, "default")
+        XCTAssertNil(store.generation.result)
+        XCTAssertFalse(store.visibleAccounts.isEmpty)
+    }
+
     // MARK: - Unlock and the pending intent
 
     /// The zero-click path: the HUD is opened *in order to* copy something, the key turns
@@ -1023,7 +1081,7 @@ final class PanelDecryptorLifetimeTests: AppTestCase {
 @MainActor
 final class PanelMessageTests: AppTestCase {
 
-    func testIssuingAKeyIsOneTouchAndOpensTheSendingWindowWithIt() async throws {
+    func testIssuingAKeyIsOneTouchAndOpensItsOwnSharingWindow() async throws {
         let (store, backend, device) = await AppTestFactory.unlockedStore()
         let router = store.router as! RecordingWindowRouter
         let vault = AccountRef(accountId: "vault", devicePath: device.path)
@@ -1031,9 +1089,10 @@ final class PanelMessageTests: AppTestCase {
         await store.issueEncryptionKey(for: vault)
 
         XCTAssertEqual(backend.deriveMessageKeyCalls.map(\.accountId), ["vault"], "one touch")
-        XCTAssertEqual(router.openedEncryptors.count, 1)
-        XCTAssertEqual(router.openedEncryptors.first?.account?.id, "vault")
-        let key = try XCTUnwrap(router.openedEncryptors.first?.key)
+        XCTAssertTrue(router.openedEncryptors.isEmpty, "sharing must not replace a sender draft")
+        XCTAssertEqual(router.sharedEncryptionKeys.count, 1)
+        XCTAssertEqual(router.sharedEncryptionKeys.first?.account.id, "vault")
+        let key = try XCTUnwrap(router.sharedEncryptionKeys.first?.key)
         XCTAssertEqual(key.nonce, backend.deriveMessageKeyCalls.first?.nonce, "the link carries the nonce the key was derived for")
         XCTAssertEqual(router.panelClosed, 1, "the window takes over from the panel")
         XCTAssertNil(store.touch)
@@ -1050,7 +1109,7 @@ final class PanelMessageTests: AppTestCase {
         await store.issueEncryptionKey(for: vault)
         await store.issueEncryptionKey(for: vault)
 
-        let keys = router.openedEncryptors.compactMap(\.key)
+        let keys = router.sharedEncryptionKeys.map(\.key)
         XCTAssertEqual(keys.count, 2)
         XCTAssertNotEqual(keys[0].nonce, keys[1].nonce)
         XCTAssertNotEqual(keys[0].publicKey, keys[1].publicKey)
@@ -1129,9 +1188,14 @@ extension PanelStoreTests {
         let task = Task { await panel.revealPassword(for: panel.selection) }
         try await waitUntil { backend.generationGate.hasEntered }
         panel.abandonTouch()
+        XCTAssertTrue(panel.touchGate.isWorking)
+        XCTAssertTrue(panel.touchGate.isCancelling)
+        XCTAssertNotNil(panel.busyTitle)
         backend.generationGate.open()
         await task.value
         XCTAssertTrue(panel.generation.result == nil, "Abandoned generation was published")
+        XCTAssertFalse(panel.touchGate.isWorking)
+        XCTAssertFalse(panel.touchGate.isCancelling)
     }
 
     func testLockMustDiscardGenerationResult() async throws {
@@ -1143,6 +1207,33 @@ extension PanelStoreTests {
         backend.generationGate.open()
         await task.value
         XCTAssertTrue(panel.generation.result == nil, "Generation repopulated a locked session")
+    }
+
+    func testLabelEditDuringGenerationDiscardsLateResultAndAllowsNextAttempt() async throws {
+        let (panel, backend) = await delayedPanel()
+        defer { backend.generationGate.open() }
+        let task = Task { await panel.copyPassword(for: panel.selection) }
+        try await waitUntil { backend.generationGate.hasEntered }
+        panel.labelEditor.setEditing(true)
+        panel.labelEditor.draftChanged("disk")
+        backend.generationGate.open()
+        await task.value
+        XCTAssertNil(panel.generation.result)
+        XCTAssertNil(panel.generation.busyRef)
+        await panel.copyPassword(for: panel.selection)
+        XCTAssertEqual(panel.generation.result?.label, "disk")
+    }
+
+    func testValidGenerationClearsPreviousAttemptError() async {
+        let (panel, backend, _) = await AppTestFactory.unlockedStore()
+        backend.generateError = FidoPassError.invalidState("Previous attempt failed")
+        await panel.copyPassword(for: panel.selection)
+        XCTAssertNotNil(panel.error)
+        backend.generateError = nil
+        panel.setLabel("vault")
+        await panel.copyPassword(for: panel.selection)
+        XCTAssertNil(panel.error)
+        XCTAssertEqual(panel.generation.result?.label, "vault")
     }
 
     func testAccountReloadMustNotResurrectDroppedAccounts() async throws {

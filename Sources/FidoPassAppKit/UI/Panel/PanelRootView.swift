@@ -28,7 +28,7 @@ struct PanelRootView: View {
         VStack(spacing: 0) {
             if let touch = touchGate.panelPrompt {
                 TouchOverlayView(prompt: touch, onCancel: touchGate.abandonTouch)
-            } else if touchGate.isWorking, let title = touchGate.panelBusyTitle {
+            } else if touchGate.isWorking, !store.isCheckingPINStatus, let title = touchGate.panelBusyTitle {
                 PanelWaitingView(title: title, message: store.selectedDevice?.displayName)
             } else {
                 PanelHeaderView(store: store, devices: devices, accounts: accounts)

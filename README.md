@@ -35,7 +35,11 @@ by Apple.
 5. Enter a label, such as `vault`, and press **Copy password**. Touch the key when prompted.
 
 Labels are part of the password: `vault` and `Vault` produce different results. Preserve
-the exact label when using an account on another Mac.
+the exact label when using an account on another Mac. Empty input blocks generation; Escape
+restores the last confirmed label. New labels with surrounding whitespace require a choice:
+**Use without surrounding whitespace** reproduces the earlier UI behaviour, while **Keep
+exact label** uses those bytes as typed. Saved history is always used unchanged. Tabs, line
+breaks and invisible control characters are rejected in new labels.
 
 The PIN stays in memory for five minutes of inactivity by default; change the timeout in
 Preferences. Locking the Mac or disconnecting the key clears the cached PIN. Failed PIN
@@ -78,7 +82,8 @@ The HUD can remember the last account and keeps label history separately, per ac
 | **⌘D** | Open the receiving window for the unlocked key |
 | **⌘L** | Lock the selected key |
 
-Key settings, PIN changes and reset are in the FIDO manager, opened from the menu-bar menu.
+Key settings, PIN changes and reset are in the FIDO manager. Use **Manage this key…** in the
+HUD to open the selected key; finish or cancel any existing form before switching keys.
 
 ## Encrypted messages
 

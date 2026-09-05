@@ -77,7 +77,7 @@ final class GenerationStore: ObservableObject {
         if current.ref != ref || !current.label.utf8.elementsEqual(label.utf8) { result = nil }
     }
 
-    func clearResult() { lifetime.invalidate(); lifetime = OperationLease(); result = nil }
+    func clearResult() { lifetime.invalidate(); lifetime = OperationLease(); result = nil; busyRef = nil }
 
     /// Drops the on-screen result for a key that is no longer usable.
     ///

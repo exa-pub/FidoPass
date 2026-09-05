@@ -10,18 +10,17 @@ struct PanelHeaderView: View {
         HStack(spacing: 9) {
             avatar
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if devices.devices.count > 1 {
+                    keySwitcher
+                } else {
+                    Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                }
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-
-            if devices.devices.count > 1 { keySwitcher }
 
             if store.isSelectedKeyUnlocked {
                 Button(action: store.lockSelectedKey) {
@@ -34,7 +33,7 @@ struct PanelHeaderView: View {
             Menu {
                 Button("New account…") { store.show(.enroll) }
                     .disabled(!store.isSelectedKeyUnlocked)
-                Button("Manager…") { store.openManager() }
+                Button("Manage this key…") { store.openManager() }
                     .disabled(devices.devices.isEmpty)
                 Button("Refresh") { Task { await store.refresh() } }
                 Divider()
@@ -91,22 +90,14 @@ struct PanelHeaderView: View {
     }
 
     private var keySwitcher: some View {
-        HStack(spacing: 3) {
+        Picker("Security key", selection: Binding(get: { devices.selectedPath ?? "" }, set: { store.selectKey(path: $0) })) {
             ForEach(devices.devices, id: \.path) { device in
-                Button {
-                    store.selectKey(path: device.path)
-                } label: {
-                    Image(systemName: devices.state(for: device.path)?.unlocked == true ? "key.fill" : "key.slash.fill")
-                        .font(.system(size: 10))
-                        .frame(width: 20, height: 18)
-                }
-                .buttonStyle(.plain)
-                .background {
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(device.path == devices.selectedPath ? Color.accentColor.opacity(0.2) : .clear)
-                }
-                .help(device.displayName)
+                Text("\(device.displayName) · \(devices.state(for: device.path)?.unlocked == true ? "Unlocked" : "Locked")")
+                    .tag(device.path)
             }
         }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .help("Choose the key for this HUD. \(store.selectedDevice?.identityLabel ?? "")")
     }
 }

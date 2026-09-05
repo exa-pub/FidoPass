@@ -40,7 +40,7 @@ struct VirtualDevicesView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
-        .frame(minWidth: 560, minHeight: 280)
+        .frame(minWidth: 360, minHeight: 180)
         .alert("Remove virtual device?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
             Button("Cancel", role: .cancel) { removing = nil }
             Button("Remove", role: .destructive) {

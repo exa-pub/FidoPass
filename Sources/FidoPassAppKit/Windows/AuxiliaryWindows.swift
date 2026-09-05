@@ -14,6 +14,7 @@ final class AuxiliaryWindows {
     private let hotkey: HotkeyRegistration
     private let launchAtLogin: LaunchAtLoginService
 
+    private var encryptionKeyWindow: NSWindow?
     private var encryptorWindow: NSWindow?
     private var encryptStore: MessageEncryptStore?
     private var decryptorWindow: NSWindow?
@@ -31,15 +32,24 @@ final class AuxiliaryWindows {
 
     // MARK: - Messages
 
-    /// The sending window. One at a time: a key arriving while it is open — issued by the
-    /// panel, or clicked as a link — goes into the window that is there.
-    func showEncryptor(key: EncryptionKeyURL?, issuedFor account: Account?) {
+    func showEncryptionKey(_ key: EncryptionKeyURL, for account: Account) {
+        encryptionKeyWindow?.close()
+        let view = ShareEncryptionKeyView(key: key, account: account)
+            .environment(\.clipboard, container.clipboard)
+        let window = makeWindow(title: "Share encryption key", content: AnyView(view), size: nil, resizable: false)
+        onClose(of: window) { [weak self] in self?.encryptionKeyWindow = nil }
+        encryptionKeyWindow = window
+        present(window)
+    }
+
+    /// A clicked recipient key fills the sender; issuing our own key never touches it.
+    func showEncryptor(key: EncryptionKeyURL?) {
         if let encryptorWindow, let encryptStore {
-            if let key { encryptStore.adopt(key, issuedFor: account) }
+            if let key { encryptStore.adopt(key) }
             present(encryptorWindow)
             return
         }
-        let store = MessageEncryptStore(sealer: container.accounts.messages, prefilled: key, issuedFor: account)
+        let store = MessageEncryptStore(sealer: container.accounts.messages, prefilled: key)
         let view = EncryptMessageView(store: store)
             .environment(\.clipboard, container.clipboard)
         let window = makeWindow(title: "Encrypt a message",
@@ -100,10 +110,12 @@ final class AuxiliaryWindows {
                                    labels: container.labels,
                                    hotkey: hotkey,
                                    launchAtLogin: launchAtLogin)
+        let visible = (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
         let window = makeWindow(title: "FidoPass Settings",
                                 content: AnyView(view),
-                                size: nil,
-                                resizable: false)
+                                size: NSSize(width: 460, height: min(640, visible.height - 80)),
+                                resizable: true)
+        window.setFrame(WindowPlacement.clamped(window.frame, to: visible), display: false)
         onClose(of: window) { [weak self] in self?.preferencesWindow = nil }
         preferencesWindow = window
         present(window)
@@ -114,8 +126,8 @@ final class AuxiliaryWindows {
     /// The manager is a window rather than a HUD screen: the panel is 340pt wide and
     /// optimised for the shortest path to a password, and a table of every credential on a
     /// key is neither of those things.
-    func showAuthenticatorManager() {
-        Task { await container.manager.managerDidOpen() }
+    func showAuthenticatorManager(devicePath: String? = nil) {
+        Task { await container.manager.managerDidOpen(devicePath: devicePath) }
         if let managerWindow {
             present(managerWindow)
             return

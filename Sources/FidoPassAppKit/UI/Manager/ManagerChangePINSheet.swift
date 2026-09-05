@@ -20,7 +20,7 @@ struct ManagerChangePINSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Change PIN").font(.system(size: 15, weight: .semibold))
+            Text("Change PIN — \(store.device?.displayName ?? "Key")").font(.system(size: 15, weight: .semibold))
 
             if forced {
                 Label("This key requires a new PIN. It will refuse everything else until the PIN is changed.",
@@ -50,7 +50,7 @@ struct ManagerChangePINSheet: View {
             PinRuleFooter(form: form)
             if let retries { PinAttemptsLabel(remaining: retries) }
             if let error = store.pinError {
-                Text(error.fullText(retriesRemaining: retries))
+                Text(error.fullText())
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -68,6 +68,7 @@ struct ManagerChangePINSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+        .onChange(of: form.currentFocusRequest) { currentFocused = true }
         .onAppear {
             currentFocused = true
             KeyboardLayoutService.preferEnglishLayoutIfNeeded()

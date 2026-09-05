@@ -12,36 +12,41 @@ struct CredentialDetailView: View {
             ManagerRow(label: "Relying party", value: credential.rpId, copyable: true)
             ManagerRow(label: "User name", value: credential.userName.display)
             ManagerRow(label: "Display name", value: credential.userDisplayName ?? "—")
-            ManagerRow(label: "User id (hex)", value: credential.userIdHex.isEmpty ? "—" : credential.userIdHex,
-                       monospaced: true, copyable: !credential.userIdHex.isEmpty)
-            if let utf8 = credential.userIdUTF8, !utf8.isEmpty {
-                ManagerRow(label: "User id (as text)", value: utf8)
-            }
-            if credential.isFidoPassCredential {
-                identityRow
-            }
-            ManagerRow(label: "Credential id", value: credential.credentialIdB64, monospaced: true, copyable: true)
-            ManagerRow(label: "Algorithm",
-                       value: credential.coseAlgorithm.map { "\(AuthenticatorInfo.algorithmName(cose: $0)) (\($0))" } ?? "not reported")
-            ManagerRow(label: "Credential protection",
-                       value: credential.credentialProtection?.summary ?? "not reported")
-            ManagerRow(label: "Large blob key",
-                       value: credential.hasLargeBlobKey ? "present — withheld" : "absent")
-            if let record = credential.record {
-                ManagerRow(label: "Account record", value: recordDescription(record))
-            }
-
-            if let publicKey = credential.publicKeyB64 {
-                DisclosureGroup("Public key (\(publicKey.count) chars base64)", isExpanded: $showsPublicKey) {
-                    Text(publicKey)
-                        .font(.system(size: 10, design: .monospaced))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 4)
+            DisclosureGroup("Technical details") {
+                VStack(alignment: .leading, spacing: 0) {
+                ManagerRow(label: "User id (hex)", value: credential.userIdHex.isEmpty ? "—" : credential.userIdHex,
+                           monospaced: true, copyable: !credential.userIdHex.isEmpty)
+                if let utf8 = credential.userIdUTF8, !utf8.isEmpty {
+                    ManagerRow(label: "User id (as text)", value: utf8)
                 }
-                .font(.caption)
-                .padding(.top, 10)
-            }
+                if credential.isFidoPassCredential {
+                    identityRow
+                }
+                ManagerRow(label: "Credential id", value: credential.credentialIdB64, monospaced: true, copyable: true)
+                ManagerRow(label: "Algorithm",
+                           value: credential.coseAlgorithm.map { "\(AuthenticatorInfo.algorithmName(cose: $0)) (\($0))" } ?? "not reported")
+                ManagerRow(label: "Credential protection",
+                           value: credential.credentialProtection?.summary ?? "not reported")
+                ManagerRow(label: "Large blob key",
+                           value: credential.hasLargeBlobKey ? "present — withheld" : "absent")
+                if let record = credential.record {
+                    ManagerRow(label: "Account record", value: recordDescription(record))
+                }
+
+                if let publicKey = credential.publicKeyB64 {
+                    DisclosureGroup("Public key (\(publicKey.count) chars base64)", isExpanded: $showsPublicKey) {
+                        Text(publicKey)
+                            .font(.system(size: 10, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 4)
+                    }
+                    .font(.caption)
+                    .padding(.top, 10)
+                }
+
+                }
+            }.font(.caption).padding(.top, 12)
 
             if case .portableKeyMaterialWithheld = credential.userName {
                 Label("This v1 portable account stores key material in its user name. Use the HUD to export its backup or migrate the account.",

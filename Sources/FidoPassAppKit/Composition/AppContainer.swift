@@ -88,18 +88,29 @@ final class AppContainer {
                               decryptor: decryptor,
                               router: router)
 
+        labelStore.onCleared = { [weak self] in
+            guard let self else { return }
+            self.preferences.forgetLastUsed()
+            self.panel.labelEditor.focus(self.panel.labelTarget(for: self.panel.selection))
+            self.generation.clearResult()
+        }
+
         settings.$lockTimeout
             .dropFirst()
             .sink { [weak deviceStore] ttl in deviceStore?.setPinTTL(ttl) }
             .store(in: &subscriptions)
         inventoryStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
         generationStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
+        accountStore.onMutation = { [weak inventoryStore] path in inventoryStore?.invalidateCapacity(on: path) }
         accountStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
         deviceStore.onKeyClosed = { [weak self] path in self?.keyDidClose(path) }
         deviceStore.onSessionLocked = { [weak self] in self?.sessionDidLock() }
         deviceStore.onArmedKeyAppeared = { [weak reset] device in reset?.armedKeyAppeared(device) }
         deviceStore.onResetArmingExpired = { [weak reset] in reset?.armingExpired() }
-        reset.onCompleted = { [weak self] in self?.panel.resetDidComplete() }
+        reset.onCompleted = { [weak self] device in
+            self?.panel.resetDidComplete()
+            self?.manager.resetDidComplete(on: device)
+        }
     }
 
     // MARK: - Reactions that cross store boundaries

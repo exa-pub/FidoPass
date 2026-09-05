@@ -42,6 +42,10 @@ final class LabelStore: ObservableObject {
     @Published private(set) var recent: [String] = []
 
     private var entries: [Entry] = []
+    var onCleared: (() -> Void)?
+
+    var hasLegacyHistory: Bool { userDefaults.object(forKey: Self.legacyStorageKey) != nil }
+    var hasHistory: Bool { !entries.isEmpty || hasLegacyHistory }
     nonisolated static let deletionKey = "labelHistory.deletions.v1"
     private let userDefaults: UserDefaults
 
@@ -74,16 +78,15 @@ final class LabelStore: ObservableObject {
 
     /// Records against the operation’s account, independent of the current focus.
     func use(_ label: String, in target: LabelTarget) {
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !label.isEmpty else { return }
 
         let credentialId = target.scope.credentialId
         var entry = entries.first { $0.credentialId == credentialId }
             ?? Entry(credentialId: credentialId, accountId: target.accountId, labels: [], usedAt: .distantPast)
         entry.deviceSignature = target.deviceSignature
         if let name = target.deviceName { entry.deviceName = name }
-        entry.labels.removeAll { $0.utf8.elementsEqual(trimmed.utf8) }
-        entry.labels.insert(trimmed, at: 0)
+        entry.labels.removeAll { $0.utf8.elementsEqual(label.utf8) }
+        entry.labels.insert(label, at: 0)
         if entry.labels.count > Self.limit { entry.labels.removeLast(entry.labels.count - Self.limit) }
         entry.usedAt = Date()
 
@@ -132,6 +135,7 @@ final class LabelStore: ObservableObject {
         entries.removeAll()
         recent = []
         save()
+        onCleared?()
     }
 
     // MARK: - Storage

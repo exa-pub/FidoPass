@@ -14,6 +14,7 @@ final class InventoryStore: ObservableObject {
         var infoError: PresentedError?
         var inventoryError: PresentedError?
         var isReading = false
+        var capacityReadAt: Date?
         /// True when the credential list was not read because the key is locked, as opposed
         /// to having failed. The difference decides whether the UI offers "unlock" or "retry".
         var needsUnlock = false
@@ -41,6 +42,16 @@ final class InventoryStore: ObservableObject {
 
     func reading(for path: String) -> Reading { readings[path] ?? Reading() }
 
+    /// A short-lived hint only. Authenticator validation remains authoritative.
+    func knownFreeSlots(on path: String, now: Date = Date()) -> Int? {
+        let reading = reading(for: path)
+        guard let date = reading.capacityReadAt, now.timeIntervalSince(date) < 30,
+              reading.infoError == nil, reading.inventoryError == nil, !reading.isReading else { return nil }
+        return reading.inventory?.residentKeysRemaining ?? reading.info?.remainingResidentKeys
+    }
+
+    func invalidateCapacity(on path: String) { readings[path]?.capacityReadAt = nil }
+
     // MARK: - Reading
 
     /// Reads what the key says about itself, and — when the key is unlocked — its credentials.
@@ -59,6 +70,7 @@ final class InventoryStore: ObservableObject {
 
         do {
             reading.info = try await worker.device(validity: token) { try $0.inspect(devicePath: path) }
+            reading.capacityReadAt = Date()
         } catch {
             reading.infoError = PresentedError(error)
         }
@@ -68,6 +80,7 @@ final class InventoryStore: ObservableObject {
             reading.needsUnlock = false
             do {
                 reading.inventory = try await worker.device(validity: token) { try $0.inventory(devicePath: path, pin: pin) }
+                reading.capacityReadAt = Date()
             } catch {
                 if token.isValid, KeyFailurePolicy.invalidatesPINSession(error) { onAuthenticationFailure?(path) }
                 reading.inventoryError = PresentedError(error)
@@ -106,6 +119,7 @@ final class InventoryStore: ObservableObject {
 
         do {
             reading.inventory = try await worker.device(validity: token) { try $0.inventory(devicePath: path, pin: pin) }
+            reading.capacityReadAt = Date()
         } catch {
             if token.isValid, KeyFailurePolicy.invalidatesPINSession(error) { onAuthenticationFailure?(path) }
             reading.inventoryError = PresentedError(error)
@@ -132,6 +146,7 @@ final class InventoryStore: ObservableObject {
         readings[path] = reading
         do {
             reading.info = try await worker.device(validity: token) { try $0.inspect(devicePath: path) }
+            reading.capacityReadAt = Date()
             reading.infoError = nil
         } catch {
             reading.infoError = PresentedError(error)

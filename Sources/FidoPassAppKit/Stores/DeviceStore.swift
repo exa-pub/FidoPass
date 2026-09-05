@@ -533,12 +533,15 @@ final class DeviceStore: ObservableObject {
     /// opens it with `kIOHIDOptionsTypeSeizeDevice`, which locks every other process out for
     /// the duration. So this is never called because a key appeared: a key plugged in to be
     /// reset with an external tool has to stay free. Only a request from the user gets here.
-    func refreshStatus(for device: FidoDevice) async {
+    @discardableResult
+    func refreshStatus(for device: FidoDevice, validity: OperationLease? = nil) async -> Bool {
         let path = device.path
         let token = lease(for: path)
-        guard let status = try? await worker.device(validity: token, { try $0.status(devicePath: path) }),
+        guard validity?.isValid != false,
+              let status = try? await worker.device(validity: token, { try $0.status(devicePath: path) }),
+              validity?.isValid != false,
               token.isValid, KeyOperationContext.lease?.isValid != false,
-              var state = states[path] else { return }
+              var state = states[path] else { return false }
         state.pinRetriesRemaining = status.pinRetriesRemaining
         state.hasPIN = status.hasPIN
         state.minPINLength = status.minPINLength
@@ -546,5 +549,6 @@ final class DeviceStore: ObservableObject {
         state.aaguid = status.aaguid
         state.supportsLargeBlobs = status.supportsLargeBlobs
         states[path] = state
+        return true
     }
 }

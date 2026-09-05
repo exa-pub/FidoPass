@@ -29,7 +29,7 @@ final class ResetCoordinator: ObservableObject {
     /// or a later step of the wizard — can tell whether it has finished.
     private(set) var task: Task<Void, Never>?
     /// The key was erased. Whoever shows the account list wants to know.
-    var onCompleted: (() -> Void)?
+    var onCompleted: ((FidoDevice) -> Void)?
 
     private var lifetime = OperationLease()
     private let devices: DeviceStore
@@ -62,7 +62,7 @@ final class ResetCoordinator: ObservableObject {
         lifetime.invalidate()
         let token = OperationLease()
         lifetime = token
-        try await touchGate.withBusy("Reading key…", surface: .manager) { await devices.refreshStatus(for: device) }
+        _ = try await touchGate.withBusy("Reading key…", surface: .manager) { await devices.refreshStatus(for: device) }
         try KeyOperationContext.check(token)
         guard devices.state(for: device.path) != nil else { throw CancellationError() }
 
@@ -146,7 +146,7 @@ final class ResetCoordinator: ObservableObject {
             for scope in scopes { labels.forget(scope) }
             preferences.forgetLastUsed()
             self.flow = nil
-            onCompleted?()
+            onCompleted?(device)
         } catch {
             guard token.isValid, !(error is CancellationError) else { return }
             self.flow?.stage = .retry

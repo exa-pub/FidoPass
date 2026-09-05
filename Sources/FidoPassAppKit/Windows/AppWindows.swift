@@ -21,14 +21,18 @@ final class AppWindows: WindowRouter {
     func openPanel() { panel?.show() }
     func openPanelForIncomingLink() { panel?.show(readKey: false) }
     func closePanel() { panel?.hide() }
-    func openManager() { auxiliary?.showAuthenticatorManager() }
+    func openManager(devicePath: String?) { auxiliary?.showAuthenticatorManager(devicePath: devicePath) }
     func openPreferences() { auxiliary?.showPreferences() }
     #if FIDOPASS_VIRTUAL_KEYS
     func openVirtualDevices() { virtualDevices?.show() }
     #endif
 
-    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?) {
-        auxiliary?.showEncryptor(key: key, issuedFor: account)
+    func openEncryptionKey(_ key: EncryptionKeyURL, for account: Account) {
+        auxiliary?.showEncryptionKey(key, for: account)
+    }
+
+    func openEncryptor(with key: EncryptionKeyURL?) {
+        auxiliary?.showEncryptor(key: key)
     }
 
     func openDecryptor(_ store: MessageDecryptStore) {

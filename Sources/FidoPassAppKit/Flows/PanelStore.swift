@@ -11,6 +11,8 @@ final class PanelStore: ObservableObject {
     @Published private(set) var statusText: String?
     @Published var selection: AccountRef?
     @Published var pinDraft: String = ""
+    @Published private(set) var isCheckingPINStatus = false
+    private var statusRequestedForPath: String?
     @Published var backup: PortableBackup?
     @Published var enrollStep: String?
     @Published var migrationDraft = MigrationDraft()
@@ -80,6 +82,7 @@ final class PanelStore: ObservableObject {
             .removeDuplicates(by: { $0.utf8.elementsEqual($1.utf8) })
             .sink { [weak self] label in
                 guard let self, let selection = self.selection else { return }
+                if self.generation.busyRef != nil { self.generation.clearResult() }
                 self.generation.invalidateResult(unless: selection, label: label)
             }
             .store(in: &subscriptions)
@@ -99,6 +102,11 @@ final class PanelStore: ObservableObject {
     /// go on serving what is already on it. `nil` from the key reads as "yes": only a
     /// definite refusal closes anything.
     var selectedKeyHoldsRecords: Bool { devices.selectedState?.supportsLargeBlobs != false }
+
+    var selectedKeyIsFull: Bool {
+        guard let path = devices.selectedPath else { return false }
+        return inventory.knownFreeSlots(on: path) == 0
+    }
 
     var visibleAccounts: [AccountHandle] {
         guard let path = devices.selectedPath else { return [] }
@@ -132,7 +140,8 @@ final class PanelStore: ObservableObject {
                     accountRefs: visibleAccounts.map(AccountRef.init),
                     legacyRefs: Set(visibleAccounts.filter { isMigratable($0) }.map(AccountRef.init)),
                     incompleteRefs: Set(visibleAccounts.filter { !$0.account.canDerive }.map(AccountRef.init)),
-                    selection: selection)
+                    selection: selection,
+                    hasValidLabel: labelEditor.canGenerate)
     }
 
     /// A v1 portable account on a key that can take the v2 copy. On a key without a
@@ -202,6 +211,8 @@ final class PanelStore: ObservableObject {
     }
 
     func panelDidClose() {
+        statusTask?.cancel()
+        statusText = nil
         clearAccountFlow()
         lifetime.invalidate()
         lifetime = OperationLease()
@@ -209,6 +220,8 @@ final class PanelStore: ObservableObject {
         generation.clearResult()
         enrollDraft.importText = ""
         pinDraft = ""
+        statusRequestedForPath = nil
+        isCheckingPINStatus = false
         pinForm.clear()
         error = nil
         backup = nil
@@ -385,7 +398,8 @@ final class PanelStore: ObservableObject {
         case .accounts:
             guard !devices.devices.isEmpty else { return [] }
             guard !visibleAccounts.isEmpty else { return ["⌘N new account"] }
-            if labelEditor.isEditing { return ["⏎ copy", "esc done"] }
+            if !labelEditor.canGenerate { return ["choose a valid label", "esc undo edit"] }
+            if labelEditor.isEditing { return ["⏎ copy", "esc undo edit"] }
             var hints = ["⏎ copy", "⌘⏎ show"]
             if visibleAccounts.count > 1 { hints.append("↑↓ account") }
             if !labels.chips.isEmpty { hints.append("←→ label") }
@@ -396,33 +410,46 @@ final class PanelStore: ObservableObject {
 
     // MARK: - Unlock
 
-    private var statusRequestedForDraft = false
-
-    /// Probes unknown PIN state on the first typed character. Typing is a user request;
-    /// merely showing the unlock screen after hot-plug must not seize the key.
+    /// The first typed character is an explicit request, scoped to this key and form.
     func pinDraftDidChange() async {
-        guard !pinDraft.isEmpty else {
-            statusRequestedForDraft = false
-            return
-        }
-        guard !statusRequestedForDraft,
-              let device = selectedDevice,
+        guard !pinDraft.isEmpty, let device = selectedDevice,
+              statusRequestedForPath != device.path,
               devices.state(for: device.path)?.hasPIN == nil else { return }
-        statusRequestedForDraft = true
-        await devices.refreshStatus(for: device)
+        await checkPINStatus()
+    }
+
+    func checkPINStatus() async {
+        guard !isWorking, !isCheckingPINStatus, let device = selectedDevice else { return }
+        let token = lifetime
+        statusRequestedForPath = device.path
+        error = nil
+        isCheckingPINStatus = true
+        let succeeded = (try? await touchGate.withBusy("Checking this key…") {
+            await devices.refreshStatus(for: device, validity: token)
+        }) ?? false
+        guard token.isValid, devices.selectedPath == device.path else { return }
+        isCheckingPINStatus = false
+        if !succeeded {
+            error = .plain("Could not read this key’s PIN status. Check the connection and try Check key again.")
+        }
     }
 
     func submitPin() async {
         // A PIN attempt is a scarce resource: eight consecutive failures kill the key for
         // good. Return can reach here twice — the field's submit action and the default
         // button — and two attempts must never be spent on one keypress.
-        guard !isWorking else { return }
+        guard !isWorking, !isCheckingPINStatus else { return }
         guard let device = selectedDevice, !pinDraft.isEmpty else { return }
+        let token = lifetime
         let pin = pinDraft
+        if devices.state(for: device.path)?.hasPIN == nil { await checkPINStatus() }
+        guard token.isValid, devices.selectedPath == device.path,
+              devices.state(for: device.path)?.hasPIN == true else { return }
         do {
             try await touchGate.withBusy("Checking the PIN…") {
                 try await devices.unlock(device, pin: pin)
                 pinDraft = ""
+                statusRequestedForPath = nil
                 error = nil
                 await reloadAccountsIfNeeded()
                 restoreSelectionIfNeeded()
@@ -451,6 +478,8 @@ final class PanelStore: ObservableObject {
                 route = .accounts
             }
             guard accepted else { return }
+            pinDraft = ""
+            statusRequestedForPath = nil
             setStatus("PIN set — this key is ready to use")
             await runPendingIntentIfPossible()
         } catch {
@@ -503,6 +532,8 @@ final class PanelStore: ObservableObject {
     private func generate(for ref: AccountRef?, label: String?, reveal: Bool) async {
         guard !isWorking, generation.busyRef == nil else { return }
         guard let ref, let account = accounts.account(ref) else { return }
+        // Validation belongs to the live editor, so Escape also removes its warning.
+        guard label != nil || labelEditor.canGenerate else { return }
         guard isSelectedKeyUnlocked else {
             requestIntent(reveal ? .revealPassword(ref, label: label ?? labelEditor.current)
                                  : .copyPassword(ref, label: label ?? labelEditor.current))
@@ -522,7 +553,7 @@ final class PanelStore: ObservableObject {
             beginMigration(ref)
             return
         }
-        let usedLabel = (label ?? labelEditor.current).trimmingCharacters(in: .whitespacesAndNewlines)
+        let usedLabel = label ?? labelEditor.current
         guard !usedLabel.isEmpty else {
             error = .plain("Enter a label first — it is part of the derivation.")
             return
@@ -532,11 +563,12 @@ final class PanelStore: ObservableObject {
         // its history included — otherwise the chips would go on describing the previous
         // account while the result on screen belongs to this one. The label itself is left
         // alone: it is the one this generation is running with.
+        error = nil
         selection = ref
         labels.focus(labelTarget(for: ref))
         do {
             let password = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
-                                                                 message: "Keep it in contact until the password appears.",
+                                                                 message: "“\(ref.accountId)” · label “\(LabelDisplay.text(usedLabel))”",
                                                                  deviceName: selectedDevice?.displayName ?? "Security key")) {
                 try await self.generation.generate(account, label: usedLabel)
             }
@@ -576,8 +608,8 @@ final class PanelStore: ObservableObject {
 
     // MARK: - Messages
 
-    /// Issues an encryption key for an account: one touch, then the sending window opens
-    /// with the link in it. Every press mints a new key — a new nonce — and every key ever
+    /// Issues an encryption key for an account: one touch, then its public sharing window.
+    /// Every press mints a new key — a new nonce — and every key ever
     /// issued keeps working, because a message carries the nonce it was sealed under.
     func issueEncryptionKey(for ref: AccountRef) async {
         guard !isWorking else { return }
@@ -605,7 +637,7 @@ final class PanelStore: ObservableObject {
             // Only the link leaves here. The private half is for opening messages, which is
             // the other window's business and another touch.
             key.wipe()
-            router.openEncryptor(with: key.url, issuedFor: account.account)
+            router.openEncryptionKey(key.url, for: account.account)
             router.closePanel()
             setStatus("Encryption key issued — share the link, compare the emoji")
         } catch {
@@ -616,7 +648,7 @@ final class PanelStore: ObservableObject {
     /// The sending window, empty or with a key that was clicked as a link. Needs no security
     /// key at all.
     func openEncryptor(with key: EncryptionKeyURL? = nil) {
-        router.openEncryptor(with: key, issuedFor: nil)
+        router.openEncryptor(with: key)
     }
 
     /// The receiving window for the selected key — after the PIN, if the key is locked.
@@ -683,7 +715,7 @@ final class PanelStore: ObservableObject {
 
     /// Opens the manager window. Reads nothing by itself — the window asks first.
     func openManager() {
-        router.openManager()
+        router.openManager(devicePath: devices.selectedPath)
         router.closePanel()
     }
 
@@ -705,9 +737,13 @@ final class PanelStore: ObservableObject {
     /// held for it; this is only what the panel itself was showing.
     func keyDidClose(_ path: String) {
         if devices.selectedPath == path || selection?.devicePath == path {
+            statusTask?.cancel()
+            statusText = nil
             lifetime.invalidate()
             lifetime = OperationLease()
             pinDraft = ""
+            statusRequestedForPath = nil
+            isCheckingPINStatus = false
             pinForm.clear()
             clearAccountFlow()
             if touchGate.surface == .panel { touchGate.abandonTouch() }

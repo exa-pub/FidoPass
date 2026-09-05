@@ -9,6 +9,7 @@ struct LabelTextField: NSViewRepresentable {
     /// Put the caret at the end rather than the start when focus arrives programmatically.
     var caretAtEnd: Bool
     var onSubmit: () -> Void
+    var onCancel: () -> Void
     /// Left arrow pressed with the caret at the start and nothing selected.
     var onExitLeft: () -> Void
     /// Right arrow pressed with the caret at the end and nothing selected.
@@ -32,7 +33,7 @@ struct LabelTextField: NSViewRepresentable {
         context.coordinator.parent = self
         // While a field editor is live it owns the text. Assigning `stringValue` underneath
         // it resets the selection and takes the caret with it.
-        if nsView.currentEditor() == nil, nsView.stringValue != text {
+        if (nsView.currentEditor() == nil || !isFocused), !nsView.stringValue.utf8.elementsEqual(text.utf8) {
             nsView.stringValue = text
         }
 
@@ -146,7 +147,7 @@ struct LabelTextField: NSViewRepresentable {
                 parent.onSubmit()
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
-                parent.isFocused = false
+                parent.onCancel()
                 return true
             default:
                 return false

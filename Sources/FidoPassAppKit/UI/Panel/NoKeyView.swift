@@ -17,7 +17,7 @@ struct NoKeyView: View {
                 .foregroundStyle(.secondary)
             Text("No security key connected")
                 .font(.system(size: 13, weight: .semibold))
-            Text("FidoPass keeps nothing on this Mac — the accounts live on the key, and a password exists only while it is on screen.")
+            Text("Accounts live on your key. FidoPass stores settings and label history on this Mac, but never saves passwords or PINs to disk. Copied secrets have a separate clipboard expiry.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

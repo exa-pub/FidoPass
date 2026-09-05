@@ -1,8 +1,8 @@
 import Foundation
 
 enum ManagerTab: String, Hashable, CaseIterable, Identifiable {
-    case credentials
     case overview
+    case credentials
     case settings
 
     var id: String { rawValue }

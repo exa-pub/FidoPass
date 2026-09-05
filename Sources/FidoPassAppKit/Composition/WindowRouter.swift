@@ -7,15 +7,14 @@ protocol WindowRouter: AnyObject {
     func openPanel()
     func openPanelForIncomingLink()
     func closePanel()
-    func openManager()
+    func openManager(devicePath: String?)
     func openPreferences()
     #if FIDOPASS_VIRTUAL_KEYS
     func openVirtualDevices()
     #endif
-    /// The sending window, optionally with a key already in it — the one the panel just
-    /// issued for `account`, or one clicked as a link. One window; a second call fills the
-    /// one that is open.
-    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?)
+    /// Public-key sharing and message composition have independent windows.
+    func openEncryptionKey(_ key: EncryptionKeyURL, for account: Account)
+    func openEncryptor(with key: EncryptionKeyURL?)
     /// The receiving window, over the store that binds it to a key. One window; a store
     /// that is already on screen is brought to the front.
     func openDecryptor(_ store: MessageDecryptStore)
@@ -26,5 +25,6 @@ protocol WindowRouter: AnyObject {
 }
 
 extension WindowRouter {
+    func openManager() { openManager(devicePath: nil) }
     func openPanelForIncomingLink() { openPanel() }
 }

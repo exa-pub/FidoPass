@@ -12,13 +12,25 @@ struct ManagerRow: View {
     @State private var copied = false
     @Environment(\.clipboard) private var clipboard
 
+    private var displayValue: String {
+        guard monospaced, value.count > 32, !value.contains(" ") else { return value }
+        var groups: [String] = []
+        var start = value.startIndex
+        while start < value.endIndex {
+            let end = value.index(start, offsetBy: 16, limitedBy: value.endIndex) ?? value.endIndex
+            groups.append(String(value[start..<end]))
+            start = end
+        }
+        return groups.joined(separator: " ")
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 190, alignment: .leading)
-            Text(value)
+            Text(displayValue)
                 .font(monospaced ? .system(size: 11, design: .monospaced) : .system(size: 12))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)

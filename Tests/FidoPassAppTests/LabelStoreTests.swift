@@ -65,17 +65,14 @@ final class LabelStoreTests: AppTestCase {
         XCTAssertEqual(store.recent.count, LabelStore.limit)
     }
 
-    /// Whitespace around a label would derive a different password from the one the user
-    /// thinks they typed.
     @MainActor
-    func testLabelsAreTrimmedAndBlanksIgnored() {
+    func testHistoryPreservesTheActualInputBytesAndIgnoresOnlyEmptyLabels() {
         let store = Self.makeStore()
         store.focus(Self.vault)
         store.use("  work  ", in: Self.vault)
-        XCTAssertEqual(store.recent, ["work"])
-
         store.use("   ", in: Self.vault)
-        XCTAssertEqual(store.recent, ["work"], "a blank label is not a label")
+        store.use("", in: Self.vault)
+        XCTAssertEqual(store.recent, ["   ", "  work  "])
     }
 
     // MARK: - Accounts with no history yet

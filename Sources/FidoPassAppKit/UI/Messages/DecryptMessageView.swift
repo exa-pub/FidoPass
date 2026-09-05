@@ -41,6 +41,8 @@ struct DecryptMessageView: View {
             }
             if let prompt = touchGate.decryptorPrompt {
                 TouchInlineView(prompt: prompt, onCancel: store.abandonTouch)
+            } else if touchGate.isCancelling, touchGate.surface == .decryptor {
+                Label("Finishing cancelled operation…", systemImage: "hourglass").font(.caption)
             } else {
                 HStack(spacing: 10) {
                     statusLabel

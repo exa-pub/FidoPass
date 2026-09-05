@@ -24,7 +24,8 @@ enum PanelReducer {
     /// incomplete credential derives nothing, and `⏎` does nothing for it.
     private static func generateOrMigrate(_ ref: AccountRef, _ snapshot: PanelSnapshot) -> PanelPrimaryAction {
         if snapshot.incompleteRefs.contains(ref) { return .chooseAccount }
-        return snapshot.legacyRefs.contains(ref) ? .migrate(ref) : .generateAndCopy(ref)
+        if snapshot.legacyRefs.contains(ref) { return .migrate(ref) }
+        return snapshot.hasValidLabel ? .generateAndCopy(ref) : .editLabel
     }
 
     /// Picks the account the HUD should open on.

@@ -17,7 +17,9 @@ final class ManagerStore: ObservableObject {
     private var lifetime = OperationLease()
     private var requestedPath: String?
     private var receivedAppearance = false
-    @Published var tab: ManagerTab = .credentials
+    @Published var tab: ManagerTab = .overview
+    @Published var hasSettingsDraft = false
+    @Published private(set) var notice: String?
     @Published var selectedCredential: String?
     @Published var sheet: Sheet?
     @Published private(set) var isApplying = false
@@ -52,11 +54,13 @@ final class ManagerStore: ObservableObject {
         pinForm.device = { [weak self] in self?.device }
     }
 
-    func managerDidOpen() async {
-        if chosenPath == nil || device == nil { chosenPath = devices.devices.first?.path }
-        requestedPath = device?.path
-        receivedAppearance = true
-        await deviceDidAppear()
+    var hasPendingForm: Bool {
+        sheet != nil || !pinForm.isEmpty || hasSettingsDraft || (touchGate.isWorking && touchGate.surface == .manager)
+    }
+
+    func managerDidOpen(devicePath: String? = nil) async {
+        let path = devicePath ?? device?.path ?? devices.devices.first?.path
+        if let path { await selectDevice(path: path) }
     }
 
     func managerDidClose() {
@@ -66,6 +70,12 @@ final class ManagerStore: ObservableObject {
     }
 
     func selectDevice(path: String) async {
+        guard devices.state(for: path) != nil else { return }
+        if path != chosenPath, hasPendingForm {
+            notice = "Finish or cancel the form for \(device?.displayName ?? "the previous key") before switching keys."
+            return
+        }
+        notice = nil
         chosenPath = path
         requestedPath = path
         receivedAppearance = true
@@ -73,13 +83,22 @@ final class ManagerStore: ObservableObject {
     }
 
     func keyDidClose(_ path: String) {
-        if chosenPath == path || pinForm.boundPath == path { clearForms() }
+        if chosenPath == path || pinForm.boundPath == path {
+            clearForms()
+            if devices.state(for: path) == nil {
+                chosenPath = nil
+                requestedPath = nil
+                receivedAppearance = true
+                notice = "The selected key disconnected. Choose a connected key to continue."
+            }
+        }
     }
 
     private func clearForms() {
         lifetime.invalidate()
         lifetime = OperationLease()
         pinForm.clear()
+        hasSettingsDraft = false
         pinError = nil
         settingsError = nil
         selectedCredential = nil
@@ -88,10 +107,10 @@ final class ManagerStore: ObservableObject {
 
     // MARK: - The key on screen
 
-    /// The key the window shows: the chosen one, or the first while there is only one.
+    /// The selected key; only the first appearance may fall back to the first device.
     var device: FidoDevice? {
-        if let chosenPath { return devices.devices.first(where: { $0.path == chosenPath }) }
-        return devices.devices.first
+        guard let chosenPath else { return receivedAppearance ? nil : devices.devices.first }
+        return devices.devices.first(where: { $0.path == chosenPath })
     }
 
     var keyState: DeviceStore.KeyState? {
@@ -112,6 +131,7 @@ final class ManagerStore: ObservableObject {
     /// Services the requested appearance once. Skip reads while reset owns the key.
     func deviceDidAppear() async {
         if !receivedAppearance {
+            if chosenPath == nil { chosenPath = devices.devices.first?.path }
             receivedAppearance = true
             requestedPath = device?.path
         }
@@ -126,7 +146,7 @@ final class ManagerStore: ObservableObject {
 
     /// ⌘R — a deliberate re-read.
     func read() async {
-        guard let device else { return }
+        guard let device, !isResetting else { return }
         try? await touchGate.withBusy("Reading key…", surface: .manager) {
             await inventory.read(device)
             if let info = inventory.reading(for: device.path).info { devices.adoptInfo(info, for: device.path) }
@@ -150,25 +170,26 @@ final class ManagerStore: ObservableObject {
 
     // MARK: - Authenticator settings
 
-    func toggleAlwaysUV() async {
-        await apply { device in _ = try await self.devices.toggleAlwaysUV(for: device) }
+    func toggleAlwaysUV(expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in _ = try await self.devices.toggleAlwaysUV(for: device) }
     }
 
-    func raiseMinimumPIN(to length: Int) async {
-        await apply { device in try await self.devices.setMinimumPINLength(for: device, length: length) }
+    func raiseMinimumPIN(to length: Int, expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in try await self.devices.setMinimumPINLength(for: device, length: length) }
     }
 
-    func forcePINChange() async {
-        await apply { device in try await self.devices.forcePINChange(for: device) }
+    func forcePINChange(expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in try await self.devices.forcePINChange(for: device) }
     }
 
-    func enableEnterpriseAttestation() async {
-        await apply { device in try await self.devices.enableEnterpriseAttestation(for: device) }
+    func enableEnterpriseAttestation(expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in try await self.devices.enableEnterpriseAttestation(for: device) }
     }
 
     /// Applies a setting and reads back the result; alwaysUv toggles rather than sets a value.
-    private func apply(_ operation: (FidoDevice) async throws -> Void) async {
-        guard let device, !isApplying, !touchGate.isWorking else { return }
+    private func apply(expectedPath: String?, _ operation: (FidoDevice) async throws -> Void) async {
+        guard let device, isUnlocked, !isApplying, !touchGate.isWorking,
+              expectedPath == nil || expectedPath == device.path else { return }
         let token = lifetime
         settingsError = nil
         isApplying = true
@@ -231,6 +252,15 @@ final class ManagerStore: ObservableObject {
     func cancelReset() {
         reset.cancel()
         sheet = nil
+    }
+
+    func resetDidComplete(on device: FidoDevice) {
+        chosenPath = device.path
+        clearForms()
+        sheet = nil
+        tab = .overview
+        requestedPath = nil
+        notice = "\(device.displayName) erased. Set a new PIN, then read the key to see its empty account list."
     }
 
     /// The wizard ended — the key was erased, or the flow was cancelled elsewhere.

@@ -35,6 +35,23 @@ final class SecurePinVaultTests: AppTestCase {
 }
 
 extension SecurePinVaultTests {
+    func testOneFiveAndSixtyMinuteTimeoutsRestartAfterUse() {
+        for ttl: TimeInterval in [60, 300, 3600] {
+            let scheduler = ManualPinTimer()
+            let vault = SecurePinVault(now: { scheduler.now }, timerFactory: { _, _, fire in scheduler.append(fire); return {} })
+            let token = vault.store(pin: "1234", ttl: ttl)
+            XCTAssertNotNil(vault.pin(for: token))
+            scheduler.advance(ttl - 1)
+            XCTAssertNotNil(vault.pin(for: token, extending: ttl))
+            scheduler.advance(1)
+            scheduler.fire(0)
+            XCTAssertNotNil(vault.pin(for: token), "An old timer must not expire a session extended by use")
+            scheduler.advance(ttl - 1)
+            scheduler.fire(1)
+            XCTAssertNil(vault.pin(for: token), "The configured inactivity interval must be respected")
+        }
+    }
+
     func testCancelledTimerDeliveryCannotExpireAnExtendedToken() {
         let scheduler = ManualPinTimer()
         let vault = SecurePinVault(now: { scheduler.now }, timerFactory: { _, _, fire in scheduler.append(fire); return {} })

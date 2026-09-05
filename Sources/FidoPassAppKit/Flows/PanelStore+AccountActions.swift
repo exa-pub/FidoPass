@@ -11,8 +11,13 @@ extension PanelStore {
               let path = devices.selectedPath,
               let device = selectedDevice,
               selectedKeyHoldsRecords else { return }
+        guard !selectedKeyIsFull else {
+            error = .plain("This key has no free credential slots. Open Manage this key to review its accounts, or read the key again if its contents changed.")
+            return
+        }
         let draft = enrollDraft
         let flowLease = accountFlowLease
+        error = nil
 
         do {
             let created = try await withTouchPrompt(TouchPrompt(title: "Touch your security key",
@@ -32,6 +37,8 @@ extension PanelStore {
                     }
                 }
             }
+            try KeyOperationContext.check(flowLease)
+            error = nil
             enrollStep = nil
             enrollDraft = EnrollDraft()
             select(AccountRef(created.0))
@@ -51,6 +58,7 @@ extension PanelStore {
                 }
             }
         } catch {
+            guard flowLease.isValid else { return }
             enrollStep = nil
             present(error)
         }
@@ -225,6 +233,7 @@ extension PanelStore {
     }
 
     func saveRecoverySheet(for ref: AccountRef) {
+        guard !isShowingSystemPanel else { return }
         guard let account = accounts.account(ref) else { return }
         let description = devices.state(for: ref.devicePath).map { "\($0.device.displayName) — \($0.device.identityLabel)" }
         let known = labelTarget(for: ref).map { labels.labels(for: $0.scope) } ?? []

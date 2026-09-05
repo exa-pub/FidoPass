@@ -15,6 +15,8 @@ final class TouchGate: ObservableObject {
     /// What the app is doing while it makes the user wait, when no key touch is involved.
     @Published private(set) var busyTitle: String?
 
+    @Published private(set) var isCancelling = false
+
     private var owner: OperationLease?
 
     init() {}
@@ -49,6 +51,7 @@ final class TouchGate: ObservableObject {
         self.surface = surface
         self.prompt = prompt
         busyTitle = title
+        isCancelling = false
         isWorking = true
         defer {
             if owner === token {
@@ -56,6 +59,7 @@ final class TouchGate: ObservableObject {
                 self.prompt = nil
                 busyTitle = nil
                 isWorking = false
+                isCancelling = false
             }
         }
         return try await KeyOperationContext.$lease.withValue(token) {
@@ -79,9 +83,11 @@ final class TouchGate: ObservableObject {
     /// so the operation itself finishes in the background — its result is simply discarded
     /// and never reaches the clipboard.
     func abandonTouch() {
-        owner?.invalidate()
+        guard let owner else { return }
+        owner.invalidate()
         prompt = nil
-        busyTitle = nil
+        isCancelling = true
+        busyTitle = "Finishing cancelled operation…"
         // Ownership lasts until the synchronous call actually returns.
     }
 }
