@@ -202,7 +202,6 @@ FIDOPASS_VIRTUAL_KEYS=1 bash scripts/test_keys.sh
 ## License
 
 [MIT](LICENSE). Bundled libfido2 is BSD-2-Clause, libcbor is MIT, OpenSSL is Apache-2.0,
-and [Sparkle](https://sparkle-project.org) is MIT. The
-[vendored Argon2 implementation](Sources/CArgon2/README.md) is CC0-1.0 / Apache-2.0.
+and [Sparkle](https://sparkle-project.org) is MIT. The [vendored Argon2 implementation](Sources/CArgon2/README.md) is CC0-1.0 / Apache-2.0.
 Their license texts are included in the app resources. OpenSK is Apache-2.0 and used only
 by tests.
