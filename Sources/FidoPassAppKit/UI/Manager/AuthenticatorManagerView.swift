@@ -47,12 +47,6 @@ struct AuthenticatorManagerView: View {
                 ManagerResetSheet(store: store, touchGate: touchGate)
             }
         }
-        .background {
-            // The same explicit read is available from the keyboard on every tab.
-            Button("") { Task { await store.read() } }
-                .keyboardShortcut("r", modifiers: [.command])
-                .opacity(0)
-        }
     }
 
     // MARK: - Header
@@ -79,6 +73,14 @@ struct AuthenticatorManagerView: View {
                 if store.reading.isReading || store.isApplying {
                     ProgressView().controlSize(.small)
                 }
+                Button("Refresh key information", systemImage: "arrow.clockwise") {
+                    Task { await store.read() }
+                }
+                .labelStyle(.iconOnly)
+                .keyboardShortcut("r", modifiers: [.command])
+                .help("Refresh key information (⌘R)")
+                .accessibilityIdentifier("manager.refresh")
+                .disabled(store.device == nil || touchGate.isWorking || store.isResetting)
             }
 
             // Only the locked state earns a line. Unlocked is the ordinary case, and a badge
@@ -138,14 +140,7 @@ struct AuthenticatorManagerView: View {
         case .overview:
             if let info = reading.info {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        AuthenticatorOverviewView(info: info, inventory: reading.inventory)
-                        HStack {
-                            Button(store.keyState?.hasPIN == false ? "Set PIN…" : "Open accounts…") { store.requestUnlock() }
-                            Button("Read key") { Task { await store.read() } }
-                            Button("Key settings") { store.tab = .settings }
-                        }.disabled(touchGate.isWorking)
-                    }
+                    AuthenticatorOverviewView(info: info, inventory: reading.inventory)
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

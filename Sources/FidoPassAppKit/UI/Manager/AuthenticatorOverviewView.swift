@@ -8,7 +8,7 @@ struct AuthenticatorOverviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ManagerSectionHeader(title: "Overview",
-                                 note: "PIN, accounts and storage for the selected key. Use Read key to update this information.")
+                                 note: "PIN, accounts and storage for the selected key.")
 
             group("Ready to use") {
                 ManagerRow(label: "PIN", value: info.forcePINChange ? "change required" : (info.hasPIN ? "configured" : "set a PIN to begin"))
@@ -150,4 +150,3 @@ struct AuthenticatorOverviewView: View {
         content()
     }
 }
-
