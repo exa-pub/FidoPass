@@ -1,5 +1,9 @@
 // swift-tools-version:6.0
 import PackageDescription
+import Foundation
+
+let virtualKeys = ProcessInfo.processInfo.environment["FIDOPASS_VIRTUAL_KEYS"] == "1"
+let appSettings: [SwiftSetting] = [.swiftLanguageMode(.v6)] + (virtualKeys ? [.define("FIDOPASS_VIRTUAL_KEYS")] : [])
 
 let package = Package(
     name: "FidoPass",
@@ -37,6 +41,12 @@ let package = Package(
         // imported by tests as one module and assembled from one entry point.
         .target(
             name: "FidoPassAppKit",
+            dependencies: [.byName(name: "FidoPassCore")] + (virtualKeys ? [.byName(name: "FidoPassVirtualKeys")] : []),
+            exclude: virtualKeys ? [] : ["VirtualKeys"],
+            swiftSettings: appSettings
+        ),
+        .target(
+            name: "FidoPassVirtualKeys",
             dependencies: ["FidoPassCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -51,19 +61,19 @@ let package = Package(
         ),
         .target(
             name: "TestSupport",
-            dependencies: ["FidoPassCore"],
+            dependencies: ["FidoPassCore", "FidoPassVirtualKeys"],
             path: "Tests/TestSupport",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FidoPassCoreTests",
-            dependencies: ["FidoPassCore", "TestSupport"],
+            dependencies: ["FidoPassCore", "FidoPassVirtualKeys", "TestSupport"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "FidoPassAppTests",
-            dependencies: ["FidoPassAppKit", "FidoPassCore", "TestSupport"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            dependencies: ["FidoPassAppKit", "FidoPassCore", "FidoPassVirtualKeys", "TestSupport"],
+            swiftSettings: appSettings
         )
     ]
 )

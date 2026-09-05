@@ -1,6 +1,7 @@
 import XCTest
 import FidoPassCore
 import TestSupport
+import FidoPassVirtualKeys
 @testable import FidoPassAppKit
 
 @MainActor
@@ -10,7 +11,7 @@ final class AppKeyTransportIntegrationTests: AppTestCase {
            ProcessInfo.processInfo.environment["FIDOPASS_REQUIRE_KEY_TESTS"] != "1" {
             throw XCTSkip("Run scripts/test_keys.sh")
         }
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let core = registry.core
         let path = try XCTUnwrap(core.listDevices().first?.path)
         // Fixture preparation is confined to the virtual key's own worker.

@@ -152,6 +152,29 @@ credentials described in [scripts/notarize.sh](scripts/notarize.sh).
 For contributions, start with [AGENTS.md](AGENTS.md) and the
 [OpenSK test harness](tools/test-authenticator/README.md).
 
+### Virtual keys
+
+Build the same app with OpenSK devices in place of USB keys:
+
+```sh
+bash scripts/build_app.sh --virtual-keys
+open .build/release/FidoPass.app
+```
+
+The Virtual Devices panel lets you add/remove keys, connect/disconnect them and grant each
+requested touch. Set PINs and manage accounts through the usual HUD and manager. Disconnecting
+preserves a key's accounts; removing it or quitting the app discards its RAM-backed storage.
+The app name, preferences, shortcuts and `fidopass://` links stay the same. Build again without
+`--virtual-keys` to use physical keys.
+
+Building this mode also needs the [pinned Rust toolchain](tools/test-authenticator/README.md#run).
+The finished bundle includes the helper and runs without Rust or the checkout. It exposes no
+system HID devices, so browsers and other FIDO clients cannot see these virtual keys.
+
+```sh
+FIDOPASS_VIRTUAL_KEYS=1 bash scripts/test_keys.sh
+```
+
 ## License
 
 [MIT](LICENSE). Bundled libfido2 is BSD-2-Clause, libcbor is MIT, and OpenSSL is Apache-2.0.

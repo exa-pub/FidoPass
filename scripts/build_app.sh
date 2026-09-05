@@ -5,6 +5,20 @@ SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 cd "${PROJECT_ROOT}"
 
+VIRTUAL_KEYS=0
+SWIFT_ARGS=()
+for argument in "$@"; do
+  case "$argument" in
+    --virtual-keys) VIRTUAL_KEYS=1 ;;
+    *) SWIFT_ARGS+=("$argument") ;;
+  esac
+done
+if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+  export FIDOPASS_VIRTUAL_KEYS=1
+else
+  unset FIDOPASS_VIRTUAL_KEYS
+fi
+
 PRODUCT=FidoPassApp
 # Derive bundle version from the latest tag.
 RAW_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
@@ -24,11 +38,20 @@ FRAMEWORKS_DIR="${CONTENTS}/Frameworks"
 bash scripts/build_dependencies.sh
 DEPS_PREFIX="$PROJECT_ROOT/.build/native-dependencies/$(uname -m)/prefix"
 export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
-swift build -c release "$@"
+swift build -c release --product "$PRODUCT" "${SWIFT_ARGS[@]}"
+SWIFT_BIN_DIR="$(swift build -c release --show-bin-path "${SWIFT_ARGS[@]}")"
+if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+  MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS" OPENSSL_DIR="$DEPS_PREFIX" bash scripts/build_test_authenticator.sh --release
+fi
 
 rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RES_DIR}" "${FRAMEWORKS_DIR}"
-cp "${BUILD_DIR}/${PRODUCT}" "${MACOS_DIR}/${PRODUCT}"
+cp "${SWIFT_BIN_DIR}/${PRODUCT}" "${MACOS_DIR}/${PRODUCT}"
+
+if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+  mkdir -p "${CONTENTS}/Helpers"
+  cp .build/test-authenticator/target/release/fidopass-test-authenticator "${CONTENTS}/Helpers/"
+fi
 
 # Copy icon (expects it already generated)
 cp Sources/FidoPassApp/Resources/AppIcon.icns "${RES_DIR}/AppIcon.icns"
@@ -78,15 +101,19 @@ bundle_dependency() {
   done < <(direct_dependencies "$target")
 }
 
-# Ensure the executable looks inside the bundled Frameworks directory.
-install_name_tool -add_rpath "@executable_path/../Frameworks" "${MACOS_DIR}/${PRODUCT}" 2>/dev/null || true
-
-# Start from the executable and pull in the transitive closure.
-while IFS= read -r dep; do
-  is_bundleable "$dep" || continue
-  bundle_dependency "$dep"
-  install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "${MACOS_DIR}/${PRODUCT}"
-done < <(direct_dependencies "${MACOS_DIR}/${PRODUCT}")
+# Both executables resolve their bundled dependencies through the same Frameworks directory.
+EXECUTABLES=("${MACOS_DIR}/${PRODUCT}")
+if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+  EXECUTABLES+=("${CONTENTS}/Helpers/fidopass-test-authenticator")
+fi
+for binary in "${EXECUTABLES[@]}"; do
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$binary" 2>/dev/null || true
+  while IFS= read -r dep; do
+    is_bundleable "$dep" || continue
+    bundle_dependency "$dep"
+    install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$binary"
+  done < <(direct_dependencies "$binary")
+done
 
 # Write Info.plist
 cat > "${CONTENTS}/Info.plist" <<PLIST
@@ -94,6 +121,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>FidoPassVirtualKeys</key><integer>${VIRTUAL_KEYS}</integer>
   <key>CFBundleName</key><string>FidoPass</string>
   <key>CFBundleDisplayName</key><string>FidoPass</string>
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
@@ -139,6 +167,9 @@ if command -v codesign >/dev/null 2>&1; then
       codesign "${CODESIGN_FLAGS[@]}" "$dylib"
     done < <(find "$FRAMEWORKS_DIR" -type f -name '*.dylib' -print0)
   fi
+  if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+    codesign "${CODESIGN_FLAGS[@]}" "${CONTENTS}/Helpers/fidopass-test-authenticator"
+  fi
   # Record source versions and hashes after signing the embedded libraries.
   MANIFEST="${RES_DIR}/DEPENDENCIES.txt"
   {
@@ -153,6 +184,11 @@ if command -v codesign >/dev/null 2>&1; then
       printf '  %-24s %s\n' "$(basename "$lib")" "$(shasum -a 256 "$lib" | awk '{print $1}')"
     done
     echo
+    if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+      echo "OpenSK helper (Rust 1.94.1, e161e95944871ccf719945738a272e718076c1df):"
+      printf '  fidopass-test-authenticator %s\n' "$(shasum -a 256 "${CONTENTS}/Helpers/fidopass-test-authenticator" | awk '{print $1}')"
+      echo
+    fi
     echo "Vendored sources:"
     echo "  argon2 reference implementation, P-H-C/phc-winner-argon2 @ f57e61e (Sources/CArgon2)"
     echo
@@ -161,6 +197,17 @@ if command -v codesign >/dev/null 2>&1; then
     echo "  SHA-256 source pins: scripts/build_dependencies.sh"
   } > "$MANIFEST"
   cp -R "$DEPS_PREFIX/licenses" "$RES_DIR/DependencyLicenses"
+
+  if [[ "$VIRTUAL_KEYS" == 1 ]]; then
+    rust_host="$(rustc +1.94.1 -vV | sed -n 's/^host: //p')"
+    metadata="$(mktemp -t fidopass-cargo-metadata)"
+    trap 'rm -f "$metadata"' EXIT
+    cargo +1.94.1 metadata --locked --format-version 1 --filter-platform "$rust_host" \
+      --manifest-path tools/test-authenticator/Cargo.toml > "$metadata"
+    python3 scripts/copy_opensk_licenses.py "$metadata" "$RES_DIR"
+    rm -f "$metadata"
+    trap - EXIT
+  fi
 
   # Nested libraries are already signed; sign the outer bundle last.
   codesign "${CODESIGN_FLAGS[@]}" "$APP_DIR"
@@ -179,7 +226,7 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "Hardened runtime: enabled"
 fi
 
-python3 scripts/verify_bundle.py "$APP_DIR"
+python3 scripts/verify_bundle.py "$APP_DIR" --virtual-keys "$VIRTUAL_KEYS"
 
 echo "Bundled libraries:"
 ls -1 "${FRAMEWORKS_DIR}"

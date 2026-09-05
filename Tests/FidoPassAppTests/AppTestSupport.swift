@@ -405,6 +405,9 @@ final class RecordingWindowRouter: WindowRouter {
     private(set) var panelClosed = 0
     private(set) var managerOpened = 0
     private(set) var preferencesOpened = 0
+    #if FIDOPASS_VIRTUAL_KEYS
+    private(set) var virtualDevicesOpened = 0
+    #endif
     private(set) var decryptorClosed = 0
     private(set) var quitRequested = 0
     private(set) var openedEncryptors: [(key: EncryptionKeyURL?, account: Account?)] = []
@@ -415,6 +418,9 @@ final class RecordingWindowRouter: WindowRouter {
     func closePanel() { panelClosed += 1 }
     func openManager() { managerOpened += 1 }
     func openPreferences() { preferencesOpened += 1 }
+    #if FIDOPASS_VIRTUAL_KEYS
+    func openVirtualDevices() { virtualDevicesOpened += 1 }
+    #endif
     func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?) { openedEncryptors.append((key, account)) }
     func openDecryptor(_ store: MessageDecryptStore) { openedDecryptors.append(store) }
     func closeDecryptor() { decryptorClosed += 1 }

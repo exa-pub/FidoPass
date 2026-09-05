@@ -11,6 +11,9 @@ final class AppWindows: WindowRouter {
 
     var panel: PanelController?
     var auxiliary: AuxiliaryWindows?
+    #if FIDOPASS_VIRTUAL_KEYS
+    var virtualDevices: VirtualDevicesController?
+    #endif
     weak var container: AppContainer?
 
     init() {}
@@ -20,6 +23,9 @@ final class AppWindows: WindowRouter {
     func closePanel() { panel?.hide() }
     func openManager() { auxiliary?.showAuthenticatorManager() }
     func openPreferences() { auxiliary?.showPreferences() }
+    #if FIDOPASS_VIRTUAL_KEYS
+    func openVirtualDevices() { virtualDevices?.show() }
+    #endif
 
     func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?) {
         auxiliary?.showEncryptor(key: key, issuedFor: account)

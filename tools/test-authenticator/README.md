@@ -1,7 +1,8 @@
 # OpenSK test authenticator
 
 OpenSK runs in a child process behind libfido2’s test transport. It needs no physical key,
-virtual HID device or elevated privileges and is excluded from app bundles.
+virtual HID device or elevated privileges. It is included only in app bundles built with
+`bash scripts/build_app.sh --virtual-keys`; ordinary bundles use physical keys.
 
 ## Run
 
@@ -22,29 +23,37 @@ been built. `FIDOPASS_REQUIRE_KEY_TESTS=1` makes absence an error. Set
 
 The app and tests use the same FidoPassCore and libfido2. Package-scoped Swift protocols
 inject enumeration and a connection without exposing C handles. Unknown paths cannot fall
-back to system enumeration or HID. Every registry owns isolated child processes. Explicit
-power cycling changes the path, preserves RAM-backed flash and resets volatile CTAP state.
+back to system enumeration or HID. The shared `FidoPassVirtualKeys` module owns the transport
+and device lifecycle; `TestSupport` adds deterministic fixtures and fault injection. Every
+registry owns isolated child processes. Explicit power cycling changes the path, preserves RAM-backed flash and resets volatile CTAP state.
 
 ## Protocol and ownership
 
-Each frame has a four-byte big-endian length, protocol version 1, an opcode and an eight-byte
-request id, then a payload. The maximum frame is 65,536 bytes. One request is outstanding
-per child; replies must echo the header. `0x80` is a payload-free waiting-for-touch event.
+Each frame has a four-byte big-endian length, protocol version 2, an opcode and an eight-byte
+request id, then a payload. The maximum frame is 65,536 bytes. One ordinary request is outstanding
+per child; replies must echo the header. Initialization supplies a 32-byte seed, profile,
+presence mode, clock mode and four-byte big-endian touch timeout (1–30,000 ms).
+`0x80` and `0x81` mark the start and end of presence, with the CTAP request id and an
+eight-byte touch id. A grant (opcode 9) must match both ids and never pre-approves a later touch.
 Opcodes: 0 initializes seed/profile; 1 processes CTAP; 2 power cycles; 3 advances virtual
 milliseconds; 4 selects presence mode; 5 prepares a released v1 fixture; 6 processes a
 64-byte HID packet; 7 deliberately hangs for the watchdog test. Opcode 9 grants presence
-through an independent reader and has no response, so it works while CTAP waits.
+through an independent reader and has no response, so it works while CTAP waits. Opcode 10
+disconnects and cancels presence without destroying storage; power-cycle re-enables the key.
+Parent EOF terminates the helper, including a hung engine.
 
-Swift launches via `posix_spawn` with an empty environment and private pipes. Nonblocking
-I/O and monotonic deadlines bound reads/writes. Failed framing, EOF and timeout close the
-session; timeout kills and reaps the child with `waitpid`. No run loop is required for
+Swift launches via `posix_spawn` with an empty environment and private pipes. A dedicated
+reader publishes replies and presence events. Nonblocking I/O and monotonic deadlines bound
+requests/writes; stopping never waits behind a CTAP read. Failed framing, EOF and timeout
+close the session; timeout kills and reaps the child with `waitpid`. No run loop is required for
 cleanup. Logs contain command identifiers and test outcomes only, never CTAP payloads,
 PINs, PRF outputs or backup material. stdout is binary IPC; stderr is discarded and the
 Rust panic hook emits no input. No authenticator state is serialized to files.
 
 Presence modes: immediate approval, virtual timeout, decline, and a controlled wait with
-a five-second wall-clock ceiling. A test waits for the explicit event before closing or
-locking a surface, then grants the touch. Hiding an app prompt never aborts OpenSK work.
+a five-second wall-clock ceiling in tests (30 seconds in the app). The app synchronizes
+OpenSK time with a monotonic clock; tests advance time explicitly. A test waits for the
+explicit event before closing or locking a surface, then grants the touch. Hiding an app prompt never aborts OpenSK work.
 
 Profiles: default OpenSK; enterprise configuration with synthetic attestation material;
 two resident slots; 1 KiB large-blob capacity. These customize the actual engine. Enterprise

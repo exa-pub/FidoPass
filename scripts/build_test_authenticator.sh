@@ -1,5 +1,5 @@
 #!/bin/bash
-# Developer/CI infrastructure only; never called by build_app.sh or release packaging.
+# Used by transport tests and build_app.sh --virtual-keys.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 revision=e161e95944871ccf719945738a272e718076c1df
@@ -14,4 +14,4 @@ if [ "$(git -C "$source_dir" rev-parse HEAD)" != "$revision" ] || [ -n "$(git -C
     exit 1
 fi
 export CARGO_TARGET_DIR="$root/.build/test-authenticator/target"
-cargo +1.94.1 build --locked --manifest-path "$root/tools/test-authenticator/Cargo.toml"
+cargo +1.94.1 build --locked --manifest-path "$root/tools/test-authenticator/Cargo.toml" "$@"

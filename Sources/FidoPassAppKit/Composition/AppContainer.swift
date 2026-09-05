@@ -33,7 +33,8 @@ final class AppContainer {
          labels: LabelStore? = nil,
          clipboard: ClipboardService? = nil,
          emptyConfirmationDelay: Duration = .milliseconds(700),
-         enableMonitors: Bool = true) {
+         enableMonitors: Bool = true,
+         enableDeviceMonitor: Bool = true) {
         let settings = preferences ?? Preferences()
         // One worker for the whole app: a security key is exclusive, and serialising every
         // call through a single object is what keeps two windows from reaching for it at once.
@@ -42,7 +43,8 @@ final class AppContainer {
         let deviceStore = DeviceStore(worker: worker,
                                       pinTTL: settings.lockTimeout,
                                       emptyConfirmationDelay: emptyConfirmationDelay,
-                                      enableMonitors: enableMonitors)
+                                      enableMonitors: enableMonitors,
+                                      enableDeviceMonitor: enableDeviceMonitor)
         let accountStore = AccountStore(worker: worker,
                                         pin: { [weak deviceStore] path in deviceStore?.pin(for: path) },
                                         pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })

@@ -3,6 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bash scripts/build_test_authenticator.sh
+CARGO_TARGET_DIR="$PWD/.build/test-authenticator/target" cargo +1.94.1 test --locked \
+  --manifest-path tools/test-authenticator/Cargo.toml
 export FIDOPASS_TEST_AUTHENTICATOR="$PWD/.build/test-authenticator/target/debug/fidopass-test-authenticator"
 export FIDOPASS_REQUIRE_KEY_TESTS=1
 log="$(mktemp -t fidopass-key-tests)"

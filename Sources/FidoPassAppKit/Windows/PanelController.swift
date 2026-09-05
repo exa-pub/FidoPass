@@ -7,6 +7,11 @@ import UniformTypeIdentifiers
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
 
+    #if FIDOPASS_VIRTUAL_KEYS
+    var virtualDevicesWindow: (() -> NSWindow?)?
+    nonisolated(unsafe) private var virtualFocusObserver: NSObjectProtocol?
+    #endif
+
     private let store: PanelStore
     private let devices: DeviceStore
     private let generation: GenerationStore
@@ -85,6 +90,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Lock key", action: #selector(menuLock), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Preferences…", action: #selector(menuPreferences), keyEquivalent: ",").target = self
+        #if FIDOPASS_VIRTUAL_KEYS
+        menu.addItem(withTitle: "Virtual Devices…", action: #selector(menuVirtualDevices), keyEquivalent: "").target = self
+        #endif
         menu.addItem(withTitle: "Quit FidoPass", action: #selector(menuQuit), keyEquivalent: "q").target = self
 
         statusItem?.menu = menu
@@ -96,6 +104,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard let selection = store.selection else { return "Copy password" }
         return "Copy password for \(selection.accountId)"
     }
+
+    #if FIDOPASS_VIRTUAL_KEYS
+    @objc private func menuVirtualDevices() { store.openVirtualDevices() }
+    #endif
 
     @objc private func menuOpen() { show() }
     @objc private func menuNewAccount() { show(intent: .enroll) }
@@ -183,12 +195,24 @@ final class PanelController: NSObject, NSWindowDelegate {
                                                                queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleResignKey() }
         }
+        #if FIDOPASS_VIRTUAL_KEYS
+        virtualFocusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
+                                                                      object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.panel?.isKeyWindow != true else { return }
+                self.handleResignKey()
+            }
+        }
+        #endif
         return panel
     }
 
     /// Clicking away closes the HUD — unless it is in the middle of something the user
     /// cannot get back with one click.
     private func handleResignKey() {
+        #if FIDOPASS_VIRTUAL_KEYS
+        if let virtual = virtualDevicesWindow?(), virtual.isKeyWindow { return }
+        #endif
         guard !isSticky else { return }
         hide()
     }
@@ -259,5 +283,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     deinit {
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        #if FIDOPASS_VIRTUAL_KEYS
+        if let virtualFocusObserver { NotificationCenter.default.removeObserver(virtualFocusObserver) }
+        #endif
     }
 }

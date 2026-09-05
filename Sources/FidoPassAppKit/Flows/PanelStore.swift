@@ -691,6 +691,12 @@ final class PanelStore: ObservableObject {
         router.openPreferences()
     }
 
+    #if FIDOPASS_VIRTUAL_KEYS
+    func openVirtualDevices() {
+        router.openVirtualDevices()
+    }
+    #endif
+
     func quit() {
         router.quit()
     }

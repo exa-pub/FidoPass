@@ -2,6 +2,7 @@ import XCTest
 import Foundation
 @testable import FidoPassCore
 import TestSupport
+import FidoPassVirtualKeys
 
 final class KeyTransportIntegrationTests: XCTestCase {
     override func setUpWithError() throws {
@@ -12,7 +13,7 @@ final class KeyTransportIntegrationTests: XCTestCase {
     }
 
     func testRealCoreLocalAccountRoundTrip() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let core = registry.core
         let path = try XCTUnwrap(core.listDevices().first?.path)
         XCTAssertFalse(try core.status(devicePath: path).hasPIN)
@@ -31,7 +32,7 @@ final class KeyTransportIntegrationTests: XCTestCase {
     }
 
     func testPortableBackupAcrossIndependentKeys() throws {
-        let registry = try VirtualDeviceRegistry(count: 2)
+        let registry = try TestVirtualDeviceRegistry(count: 2)
         let core = registry.core
         let paths = try core.listDevices().map(\.path)
         for path in paths { try core.setInitialPIN(devicePath: path, newPIN: "1234") }
@@ -45,13 +46,13 @@ final class KeyTransportIntegrationTests: XCTestCase {
     }
 
     func testUnknownPathNeverFallsBackToHardware() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         XCTAssertThrowsError(try registry.core.status(devicePath: "ioreg://not-a-test-device"))
         XCTAssertEqual(registry.openCount, 0)
     }
 
     func testIdentityCollisionCannotReplaceExistingCredential() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let core = registry.core
         let path = try XCTUnwrap(core.listDevices().first?.path)
         try core.setInitialPIN(devicePath: path, newPIN: "1234")
@@ -64,7 +65,7 @@ final class KeyTransportIntegrationTests: XCTestCase {
     }
 
     func testFailedPreflightNeverCreatesCredential() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let core = registry.core
         let path = try XCTUnwrap(core.listDevices().first?.path)
         try core.setInitialPIN(devicePath: path, newPIN: "1234")
@@ -74,7 +75,7 @@ final class KeyTransportIntegrationTests: XCTestCase {
     }
 
     func testLostCreationReplyLeavesObservableCredential() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let core = registry.core
         let path = try XCTUnwrap(core.listDevices().first?.path)
         try core.setInitialPIN(devicePath: path, newPIN: "1234")
@@ -87,7 +88,7 @@ final class KeyTransportIntegrationTests: XCTestCase {
     }
 
     func testPowerCycleChangesPathButPreservesCredentialsAndPermitsReset() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let core = registry.core
         let oldPath = try XCTUnwrap(core.listDevices().first?.path)
         try core.setInitialPIN(devicePath: oldPath, newPIN: "1234")
@@ -103,8 +104,8 @@ final class KeyTransportIntegrationTests: XCTestCase {
 }
 
 extension KeyTransportIntegrationTests {
-    private func prepared(profile: OpenSKHostClient.Profile = .standard, hid: Bool = false) throws -> (VirtualDeviceRegistry, FidoPassCore, String) {
-        let registry = try VirtualDeviceRegistry(profile: profile, hid: hid)
+    private func prepared(profile: OpenSKHostClient.Profile = .standard, hid: Bool = false) throws -> (TestVirtualDeviceRegistry, FidoPassCore, String) {
+        let registry = try TestVirtualDeviceRegistry(profile: profile, hid: hid)
         let core = registry.core
         let path = try XCTUnwrap(core.listDevices().first?.path)
         try core.setInitialPIN(devicePath: path, newPIN: "1234")
@@ -140,7 +141,7 @@ extension KeyTransportIntegrationTests {
     }
 
     func testMalformedOpenReplyClosesItsContext() throws {
-        let registry = try VirtualDeviceRegistry()
+        let registry = try TestVirtualDeviceRegistry()
         let path = try XCTUnwrap(registry.core.listDevices().first?.path)
         for _ in 0..<2 { try registry.inject(.malformed(command: 4, reply: Data([0, 0xff])), path: path) }
         XCTAssertThrowsError(try registry.core.status(devicePath: path))
@@ -269,7 +270,7 @@ extension KeyTransportIntegrationTests {
         try await withThrowingTaskGroup(of: Void.self) { group in
             for index in 0..<4 {
                 group.addTask {
-                    let registry = try VirtualDeviceRegistry()
+                    let registry = try TestVirtualDeviceRegistry()
                     let core = registry.core
                     let path = try XCTUnwrap(core.listDevices().first?.path)
                     let pin = "1234\(index)"

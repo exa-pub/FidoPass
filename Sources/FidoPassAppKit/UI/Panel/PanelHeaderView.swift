@@ -47,6 +47,9 @@ struct PanelHeaderView: View {
                     .disabled(!store.isSelectedKeyUnlocked)
                 Divider()
                 Button("Preferences…") { store.openPreferences() }
+                #if FIDOPASS_VIRTUAL_KEYS
+                Button("Virtual Devices…") { store.openVirtualDevices() }
+                #endif
                 Button("Quit FidoPass") { store.quit() }
             } label: {
                 Image(systemName: "ellipsis.circle")

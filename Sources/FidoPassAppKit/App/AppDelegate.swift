@@ -1,12 +1,26 @@
 import AppKit
 import Combine
+#if FIDOPASS_VIRTUAL_KEYS
+import FidoPassVirtualKeys
+#endif
 
 /// AppKit entry point. The custom HUD supports global shortcuts, PIN focus and save panels.
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private let windows = AppWindows()
+    #if FIDOPASS_VIRTUAL_KEYS
+    private let helperURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fidopass-test-authenticator")
+    private lazy var virtualRegistry = VirtualDeviceRegistry(executable: helperURL)
+    private lazy var container = AppContainer(backend: LiveKeyBackend(core: virtualRegistry.core),
+                                               router: windows, emptyConfirmationDelay: .zero,
+                                               enableDeviceMonitor: false)
+    private lazy var virtualDevices = VirtualDeviceStore(registry: virtualRegistry, devices: container.devices,
+                                                        executable: helperURL)
+    private lazy var virtualWindow = VirtualDevicesController(store: virtualDevices)
+    #else
     private lazy var container = AppContainer(router: windows)
+    #endif
     private lazy var hud = PanelController(container: container)
     private lazy var hotkey = HotkeyRegistration(preferences: container.preferences,
                                                  registrar: GlobalHotkeyService()) { [weak self] in
@@ -34,6 +48,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             .store(in: &subscriptions)
         installMainMenu()
         hud.installStatusItem()
+        #if FIDOPASS_VIRTUAL_KEYS
+        windows.virtualDevices = virtualWindow
+        hud.virtualDevicesWindow = { [weak self] in self?.virtualWindow.window }
+        virtualWindow.show()
+        #endif
         // Registers the shortcut, and keeps it registered as Preferences change.
         _ = hotkey
 
@@ -55,6 +74,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     public func applicationWillTerminate(_ notification: Notification) {
         // Quitting is not a reason to leave a derived password behind on the clipboard.
         container.generation.clearClipboard()
+        #if FIDOPASS_VIRTUAL_KEYS
+        virtualRegistry.stop()
+        #endif
     }
 
     /// A minimal main menu.
@@ -75,6 +97,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         manager.keyEquivalentModifierMask = [.command, .shift]
         manager.target = self
         appMenu.addItem(manager)
+        #if FIDOPASS_VIRTUAL_KEYS
+        let virtual = NSMenuItem(title: "Virtual Devices…", action: #selector(showVirtualDevices), keyEquivalent: "")
+        virtual.target = self
+        appMenu.addItem(virtual)
+        #endif
         let encrypt = NSMenuItem(title: "Encrypt a message…", action: #selector(encryptMessage), keyEquivalent: "e")
         encrypt.keyEquivalentModifierMask = [.command, .shift]
         encrypt.target = self
@@ -103,6 +130,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
 
         NSApp.mainMenu = mainMenu
     }
+
+    #if FIDOPASS_VIRTUAL_KEYS
+    @objc private func showVirtualDevices() { windows.openVirtualDevices() }
+    #endif
 
     @objc private func showManager() {
         auxiliary.showAuthenticatorManager()

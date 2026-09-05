@@ -9,6 +9,9 @@ protocol WindowRouter: AnyObject {
     func closePanel()
     func openManager()
     func openPreferences()
+    #if FIDOPASS_VIRTUAL_KEYS
+    func openVirtualDevices()
+    #endif
     /// The sending window, optionally with a key already in it — the one the panel just
     /// issued for `account`, or one clicked as a link. One window; a second call fills the
     /// one that is open.

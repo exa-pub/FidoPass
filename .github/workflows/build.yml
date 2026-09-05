@@ -69,6 +69,22 @@ jobs:
       - name: Required OpenSK integration tests
         run: bash scripts/test_keys.sh
 
+      - name: Required virtual-app integration tests
+        run: FIDOPASS_VIRTUAL_KEYS=1 bash scripts/test_keys.sh -Xswiftc -warnings-as-errors
+
+      - name: Verify virtual bundle and restored archive
+        run: |
+          bash scripts/build_app.sh --virtual-keys
+          python3 scripts/test_virtual_bundle.py .build/release/FidoPass.app
+          cp .build/release/FidoPass.app/Contents/Info.plist "$RUNNER_TEMP/virtual-info.plist"
+          archive="$RUNNER_TEMP/FidoPass-virtual.zip"
+          ditto -c -k --sequesterRsrc --keepParent .build/release/FidoPass.app "$archive"
+          restored="$(mktemp -d)"
+          ditto -x -k "$archive" "$restored"
+          python3 scripts/verify_bundle.py "$restored/FidoPass.app" --virtual-keys 1
+          python3 scripts/test_virtual_bundle.py "$restored/FidoPass.app"
+          rm -rf "$restored" "$archive"
+
       - name: Resolve Swift dependencies
         run: swift package resolve
 
@@ -145,6 +161,18 @@ jobs:
       - name: Build .app bundle
         # Signs ad-hoc, or with Developer ID when the step above exported an identity.
         run: bash ./scripts/build_app.sh
+
+      - name: Verify physical build mode and shared app identity
+        run: |
+          python3 scripts/verify_bundle.py .build/release/FidoPass.app --virtual-keys 0
+          python3 - <<'PY'
+          import os, pathlib, plistlib
+          virtual = plistlib.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'virtual-info.plist').read_bytes())
+          physical = plistlib.loads(pathlib.Path('.build/release/FidoPass.app/Contents/Info.plist').read_bytes())
+          virtual.pop('FidoPassVirtualKeys')
+          physical.pop('FidoPassVirtualKeys')
+          assert virtual == physical, 'Virtual mode changed the app identity or system integration'
+          PY
 
       - name: Verify the bundle records the modern SDK
         run: |

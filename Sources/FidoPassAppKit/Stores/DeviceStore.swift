@@ -65,6 +65,7 @@ final class DeviceStore: ObservableObject {
     private func invalidate(_ path: String) { leases.removeValue(forKey: path)?.invalidate() }
 
     private var pendingRefresh = false
+    private var listingRevision: UInt64 = 0
     private let worker: KeyWorker
     private let pinVault: SecurePinVault
     /// How long the PIN stays in the vault without being used. Settable: the user can change
@@ -79,14 +80,17 @@ final class DeviceStore: ObservableObject {
          pinVault: SecurePinVault = SecurePinVault(defaultTTL: 300),
          pinTTL: TimeInterval = 300,
          emptyConfirmationDelay: Duration = .milliseconds(700),
-         enableMonitors: Bool = true) {
+         enableMonitors: Bool = true,
+         enableDeviceMonitor: Bool = true) {
         self.worker = worker
         self.pinVault = pinVault
         self.pinTTL = pinTTL
         self.emptyConfirmationDelay = emptyConfirmationDelay
         guard enableMonitors else { return }
-        deviceMonitor = DeviceMonitorService { [weak self] in
-            Task { @MainActor in await self?.refresh() }
+        if enableDeviceMonitor {
+            deviceMonitor = DeviceMonitorService { [weak self] in
+                Task { @MainActor in await self?.refresh() }
+            }
         }
         sessionMonitor = SessionLockMonitor { [weak self] in
             Task { @MainActor in self?.handleSessionLock() }
@@ -141,15 +145,26 @@ final class DeviceStore: ObservableObject {
         }
     }
 
+    /// Applies an authoritative presence event without waiting behind a key operation.
+    func replaceConnectedDevices(_ devices: [FidoDevice]) {
+        listingRevision += 1
+        refreshError = nil
+        apply(devices)
+    }
+
     private func performRefresh() async {
+        let revision = listingRevision
         let listed: [FidoDevice]
         do {
             listed = try await worker.device { try $0.listDevices() }
         } catch {
+            guard revision == listingRevision else { return }
             // An enumeration error does not prove disconnection; retain sessions and accounts.
             refreshError = PresentedError(error)
             return
         }
+
+        guard revision == listingRevision else { return }
 
         // A key that has just been touched drops off the HID registry for a moment while it
         // re-enumerates, and one empty read in that window is noise, not an unplug. Confirm
@@ -160,9 +175,11 @@ final class DeviceStore: ObservableObject {
             do {
                 confirmation = try await worker.device { try $0.listDevices() }
             } catch {
+                guard revision == listingRevision else { return }
                 refreshError = PresentedError(error)
                 return
             }
+            guard revision == listingRevision else { return }
             let confirmed = confirmation
             guard confirmed.isEmpty else {
                 refreshError = nil
