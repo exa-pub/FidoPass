@@ -30,6 +30,7 @@ final class ManagerStore: ObservableObject {
     /// The change-PIN form. The panel has its own for bootstrap; sharing one was a defect.
     let pinForm: PinFormModel
     let reset: ResetCoordinator
+    let temporaryUV: TemporaryUVStore
 
     private let devices: DeviceStore
     private let inventory: InventoryStore
@@ -40,11 +41,13 @@ final class ManagerStore: ObservableObject {
          inventory: InventoryStore,
          touchGate: TouchGate,
          reset: ResetCoordinator,
+         temporaryUV: TemporaryUVStore,
          router: WindowRouter) {
         self.devices = devices
         self.inventory = inventory
         self.touchGate = touchGate
         self.reset = reset
+        self.temporaryUV = temporaryUV
         self.router = router
         self.pinForm = PinFormModel(mode: .change,
                                     devices: devices,
@@ -170,8 +173,11 @@ final class ManagerStore: ObservableObject {
 
     // MARK: - Authenticator settings
 
-    func toggleAlwaysUV(expectedPath: String? = nil) async {
-        await apply(expectedPath: expectedPath) { device in _ = try await self.devices.toggleAlwaysUV(for: device) }
+    func setAlwaysUV(_ enabled: Bool, expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in
+            _ = try await self.devices.setAlwaysUV(enabled, for: device)
+            self.temporaryUV.stop(for: device.path)
+        }
     }
 
     func raiseMinimumPIN(to length: Int, expectedPath: String? = nil) async {
@@ -186,7 +192,7 @@ final class ManagerStore: ObservableObject {
         await apply(expectedPath: expectedPath) { device in try await self.devices.enableEnterpriseAttestation(for: device) }
     }
 
-    /// Applies a setting and reads back the result; alwaysUv toggles rather than sets a value.
+    /// Applies the requested setting and reads back the result.
     private func apply(expectedPath: String?, _ operation: (FidoDevice) async throws -> Void) async {
         guard let device, isUnlocked, !isApplying, !touchGate.isWorking,
               expectedPath == nil || expectedPath == device.path else { return }

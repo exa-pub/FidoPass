@@ -86,6 +86,11 @@ final class SecurePinVault: @unchecked Sendable {
         }
     }
 
+    /// Observing expiration must neither disclose the PIN nor renew its lifetime.
+    func expiration(for token: Token) -> Date? {
+        queue.sync { entries[token]?.expiration }
+    }
+
     func extend(token: Token, ttl: TimeInterval? = nil) {
         queue.async(flags: .barrier) {
             guard var entry = self.entries[token] else { return }

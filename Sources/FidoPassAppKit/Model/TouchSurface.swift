@@ -11,4 +11,6 @@ enum TouchSurface: Equatable, Sendable {
     /// The receiving window: deriving a message key is its business, and the panel is not
     /// held open by it.
     case decryptor
+    /// App-owned maintenance; closing a window must not abandon its restoration.
+    case temporaryUV
 }

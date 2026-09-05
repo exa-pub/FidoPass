@@ -9,7 +9,7 @@ struct AuthenticatorSettingsView: View {
     @Binding var hasDraft: Bool
     let isUnlocked: Bool
     let onUnlock: () -> Void
-    let onToggleAlwaysUV: () -> Void
+    let onToggleAlwaysUV: (Bool) -> Void
     let onRaiseMinimumPIN: (Int) -> Void
     let onForcePINChange: () -> Void
     let onEnableEnterpriseAttestation: () -> Void
@@ -136,7 +136,7 @@ struct AuthenticatorSettingsView: View {
                 explanation: "With this on the key asks for its PIN on every operation, even ones a website said could be done without it. FidoPass already requires the PIN, so this mainly affects other software using the same key. Reversible.",
                 supported: info.canToggleAlwaysUV,
                 unsupportedNote: "This key does not offer the alwaysUv option.") {
-            Toggle("", isOn: Binding(get: { info.alwaysUV }, set: { _ in onToggleAlwaysUV() }))
+            Toggle("", isOn: Binding(get: { info.alwaysUV }, set: { onToggleAlwaysUV($0) }))
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .disabled(!isUnlocked)

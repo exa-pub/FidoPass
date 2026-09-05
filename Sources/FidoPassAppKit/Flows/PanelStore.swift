@@ -36,6 +36,7 @@ final class PanelStore: ObservableObject {
     /// The one door to the key. Shared with the manager; the panel draws only its own waits.
     let touchGate: TouchGate
     let decryptor: DecryptorCoordinator
+    let temporaryUV: TemporaryUVStore
     /// The windows. A window, not a route, for anything that has to survive the panel closing
     /// behind it — the manager, the message windows — and for the panel itself.
     let router: WindowRouter
@@ -58,6 +59,7 @@ final class PanelStore: ObservableObject {
          preferences: Preferences,
          touchGate: TouchGate,
          decryptor: DecryptorCoordinator,
+         temporaryUV: TemporaryUVStore,
          router: WindowRouter) {
         self.devices = devices
         self.accounts = accounts
@@ -67,6 +69,7 @@ final class PanelStore: ObservableObject {
         self.preferences = preferences
         self.touchGate = touchGate
         self.decryptor = decryptor
+        self.temporaryUV = temporaryUV
         self.router = router
         self.pinForm = PinFormModel(mode: .bootstrap,
                                     devices: devices,
@@ -490,6 +493,15 @@ final class PanelStore: ObservableObject {
     func lockSelectedKey() {
         guard let path = devices.selectedPath else { return }
         devices.lock(path: path)
+    }
+
+    func temporaryUVAction() {
+        guard temporaryUV.canPerformAction(for: selectedDevice) else { return }
+        if temporaryUV.device != nil {
+            Task { await temporaryUV.restore() }
+        } else if let device = selectedDevice {
+            Task { await temporaryUV.start(for: device) }
+        }
     }
 
     private func runPendingIntentIfPossible() async {

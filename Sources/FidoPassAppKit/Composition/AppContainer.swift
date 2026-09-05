@@ -18,6 +18,7 @@ final class AppContainer {
     let decryptor: DecryptorCoordinator
     let router: WindowRouter
     let reset: ResetCoordinator
+    let temporaryUV: TemporaryUVStore
     /// The menu-bar panel's store.
     let panel: PanelStore
     /// The manager window's store. Reads nothing until that window opens.
@@ -32,6 +33,7 @@ final class AppContainer {
          preferences: Preferences? = nil,
          labels: LabelStore? = nil,
          clipboard: ClipboardService? = nil,
+         temporaryUVDuration: Duration = .seconds(60),
          emptyConfirmationDelay: Duration = .milliseconds(700),
          enableMonitors: Bool = true,
          enableDeviceMonitor: Bool = true) {
@@ -55,6 +57,8 @@ final class AppContainer {
                                             pin: { [weak deviceStore] path in deviceStore?.pin(for: path) })
         let labelStore = labels ?? LabelStore()
         let touchGate = TouchGate()
+        let temporaryUV = TemporaryUVStore(devices: deviceStore, gate: touchGate,
+                                            duration: temporaryUVDuration)
         let decryptor = DecryptorCoordinator(router: router)
         let reset = ResetCoordinator(devices: deviceStore,
                                      accounts: accountStore,
@@ -70,6 +74,7 @@ final class AppContainer {
         self.labels = labelStore
         self.clipboard = clipboard
         self.touchGate = touchGate
+        self.temporaryUV = temporaryUV
         self.decryptor = decryptor
         self.router = router
         self.reset = reset
@@ -77,6 +82,7 @@ final class AppContainer {
                                     inventory: inventoryStore,
                                     touchGate: touchGate,
                                     reset: reset,
+                                    temporaryUV: temporaryUV,
                                     router: router)
         self.panel = PanelStore(devices: deviceStore,
                               accounts: accountStore,
@@ -86,7 +92,26 @@ final class AppContainer {
                               preferences: settings,
                               touchGate: touchGate,
                               decryptor: decryptor,
+                              temporaryUV: temporaryUV,
                               router: router)
+
+        temporaryUV.canBegin = { [weak self] in
+            guard let self else { return false }
+            return !self.manager.hasPendingForm && !self.reset.isResetting
+        }
+        temporaryUV.onConfigurationChanged = { [weak inventoryStore, weak deviceStore] device in
+            // Only refresh a manager snapshot that already exists; the HUD needs no extra read.
+            guard inventoryStore?.reading(for: device.path).info != nil else { return }
+            await inventoryStore?.refreshInfo(device)
+            if let info = inventoryStore?.reading(for: device.path).info {
+                deviceStore?.adoptInfo(info, for: device.path)
+            }
+        }
+        touchGate.$isWorking
+            .dropFirst()
+            .filter { !$0 }
+            .sink { [weak temporaryUV] _ in Task { await temporaryUV?.restoreIfDue() } }
+            .store(in: &subscriptions)
 
         labelStore.onCleared = { [weak self] in
             guard let self else { return }
@@ -120,6 +145,7 @@ final class AppContainer {
     /// Order matters: the panel is told last, once every store it reads from has already
     /// dropped what it held for this key.
     private func keyDidClose(_ path: String) {
+        temporaryUV.stop(for: path)
         // The wizard first: it is waiting for exactly this.
         reset.keyDidClose(path)
         // An open receiving window holds derived keys for this key's accounts. Locking has

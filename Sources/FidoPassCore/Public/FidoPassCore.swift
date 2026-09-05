@@ -113,6 +113,10 @@ public final class FidoPassCore: Sendable {
 
     // MARK: - Authenticator settings
 
+    public func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange {
+        try configuration.setAlwaysUV(enabled: enabled, devicePath: devicePath, pin: pin)
+    }
+
     /// Flips `alwaysUv` and returns the state the key reports afterwards. Reversible.
     @discardableResult
     public func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool {

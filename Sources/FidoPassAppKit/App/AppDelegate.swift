@@ -72,6 +72,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        container.temporaryUV.stop()
         // Quitting is not a reason to leave a derived password behind on the clipboard.
         container.generation.clearClipboard()
         #if FIDOPASS_VIRTUAL_KEYS

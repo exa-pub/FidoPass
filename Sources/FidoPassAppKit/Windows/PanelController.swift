@@ -72,6 +72,7 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private func showStatusMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         menu.addItem(withTitle: "Open FidoPass", action: #selector(menuOpen), keyEquivalent: "").target = self
         let copy = NSMenuItem(title: copyItemTitle, action: #selector(menuCopyPassword), keyEquivalent: "")
         copy.target = self
@@ -89,6 +90,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         menu.addItem(withTitle: "Save recovery sheet…", action: #selector(menuRecoverySheet), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Backup key…", action: #selector(menuBackupKey), keyEquivalent: "").target = self
         menu.addItem(.separator())
+        if let title = store.temporaryUV.menuTitle(for: store.selectedDevice) {
+            let temporaryUV = NSMenuItem(title: title, action: #selector(menuTemporaryUV), keyEquivalent: "")
+            temporaryUV.target = self
+            temporaryUV.isEnabled = store.temporaryUV.canPerformAction(for: store.selectedDevice)
+            menu.addItem(temporaryUV)
+        }
         menu.addItem(withTitle: "Lock key", action: #selector(menuLock), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Preferences…", action: #selector(menuPreferences), keyEquivalent: ",").target = self
         #if FIDOPASS_VIRTUAL_KEYS
@@ -113,6 +120,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     @objc private func menuOpen() { show() }
     @objc private func menuNewAccount() { show(intent: .enroll) }
     @objc private func menuLock() { store.lockSelectedKey() }
+    @objc private func menuTemporaryUV() { store.temporaryUVAction() }
     @objc private func menuPreferences() { store.openPreferences() }
     @objc private func menuQuit() { store.quit() }
 

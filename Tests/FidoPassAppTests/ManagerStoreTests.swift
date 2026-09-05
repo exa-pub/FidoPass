@@ -152,9 +152,9 @@ final class ManagerStoreTests: AppTestCase {
         let manager = AppTestFactory.manager(for: store)
         let before = backend.inspectCallCount
 
-        await manager.toggleAlwaysUV()
+        await manager.setAlwaysUV(true)
 
-        XCTAssertEqual(backend.configCalls, ["toggleAlwaysUV"])
+        XCTAssertEqual(backend.configCalls, ["setAlwaysUV(true)"])
         XCTAssertEqual(backend.inspectCallCount, before + 1)
         XCTAssertNil(manager.settingsError)
         XCTAssertFalse(manager.isApplying)

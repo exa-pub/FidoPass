@@ -110,6 +110,22 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     private(set) var configCalls: [String] = []
     var alwaysUVByPath: [String: Bool] = [:]
     var configError: Error?
+    var configErrorAfterMutation: Error?
+    var configGate: BlockingGate?
+
+    func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange {
+        configGate?.wait()
+        configCalls.append("setAlwaysUV(\(enabled))")
+        guard pins[devicePath] == pin else { throw MockKeyBackend.wrongPin }
+        if let configError { throw configError }
+        let previous = alwaysUVByPath[devicePath] ?? infoByPath[devicePath]?.alwaysUV ?? false
+        alwaysUVByPath[devicePath] = enabled
+        if let configErrorAfterMutation {
+            self.configErrorAfterMutation = nil
+            throw configErrorAfterMutation
+        }
+        return AlwaysUVChange(previous: previous, enabled: enabled)
+    }
 
     func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool {
         configCalls.append("toggleAlwaysUV")
@@ -141,7 +157,38 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
     func inspect(devicePath: String) throws -> AuthenticatorInfo {
         inspectCallCount += 1
         if let inspectError { throw inspectError }
-        return infoByPath[devicePath] ?? MockKeyBackend.info()
+        let info = infoByPath[devicePath] ?? MockKeyBackend.info()
+        guard let enabled = alwaysUVByPath[devicePath] else { return info }
+        let options = info.options.filter { $0.name != "alwaysUv" } + [.init(name: "alwaysUv", value: enabled)]
+        return AuthenticatorInfo(
+            isFIDO2: info.isFIDO2,
+            ctapHIDProtocol: info.ctapHIDProtocol,
+            ctapHIDVersion: info.ctapHIDVersion,
+            capabilities: info.capabilities,
+            supportsPIN: info.supportsPIN,
+            supportsUV: info.supportsUV,
+            supportsCredentialManagement: info.supportsCredentialManagement,
+            supportsCredentialProtection: info.supportsCredentialProtection,
+            supportsPermissions: info.supportsPermissions,
+            hasPIN: info.hasPIN,
+            hasUV: info.hasUV,
+            pinRetriesRemaining: info.pinRetriesRemaining,
+            uvRetriesRemaining: info.uvRetriesRemaining,
+            versions: info.versions,
+            extensions: info.extensions,
+            options: options,
+            aaguid: info.aaguid,
+            pinProtocols: info.pinProtocols,
+            algorithms: info.algorithms,
+            transports: info.transports,
+            certifications: info.certifications,
+            firmwareVersion: info.firmwareVersion,
+            limits: info.limits,
+            minPINLength: info.minPINLength,
+            forcePINChange: info.forcePINChange,
+            remainingResidentKeys: info.remainingResidentKeys,
+            uvAttempts: info.uvAttempts,
+            uvModalities: info.uvModalities)
     }
 
     func inventory(devicePath: String, pin: String) throws -> CredentialInventory {
@@ -220,12 +267,16 @@ class MockKeyBackend: KeyBackend, @unchecked Sendable {
         statusGate?.wait()
         statusCallCount += 1
         if let statusError { throw statusError }
-        return statusByPath[devicePath] ?? DeviceStatus(pinRetriesRemaining: 5,
+        var status = statusByPath[devicePath] ?? DeviceStatus(pinRetriesRemaining: 5,
                                                         hasPIN: true,
                                                         supportsHmacSecret: true,
                                                         supportsLargeBlobs: true,
                                                         remainingResidentKeys: 20,
                                                         aaguid: aaguid)
+        let info = infoByPath[devicePath] ?? Self.info()
+        status.supportsConfiguration = info.supportsConfiguration
+        status.alwaysUV = alwaysUVByPath[devicePath] ?? info.option("alwaysUv")
+        return status
     }
 
     func enumerateAccounts(devicePath: String, pin: String) throws -> [AccountHandle] {
@@ -450,6 +501,7 @@ enum AppTestFactory {
 
     @MainActor static func cleanUp() {
         for container in retained {
+            container.temporaryUV.stop()
             container.panel.panelDidClose()
             container.manager.managerDidClose()
             container.devices.lockAll()
@@ -472,7 +524,8 @@ enum AppTestFactory {
     /// touch the developer's real settings.
     @MainActor
     static func makeContainer(backend: KeyBackend,
-                              suite: String = "HUDTests-\(UUID().uuidString)") -> AppContainer {
+                              suite: String = "HUDTests-\(UUID().uuidString)",
+                              temporaryUVDuration: Duration = .seconds(60)) -> AppContainer {
         let defaults = makeDefaults(suite: suite)
         let preferences = Preferences(defaults: defaults)
         let labels = LabelStore(userDefaults: defaults)
@@ -481,6 +534,7 @@ enum AppTestFactory {
                                      preferences: preferences,
                                      labels: labels,
                                      clipboard: ClipboardService(pasteboard: MemoryPasteboard()),
+                                     temporaryUVDuration: temporaryUVDuration,
                                      emptyConfirmationDelay: .milliseconds(1),
                                      enableMonitors: false)
         retained.append(container)

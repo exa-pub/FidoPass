@@ -168,7 +168,7 @@ struct AuthenticatorManagerView: View {
                         hasDraft: $store.hasSettingsDraft,
                         isUnlocked: store.isUnlocked,
                         onUnlock: { store.requestUnlock() },
-                        onToggleAlwaysUV: { Task { await store.toggleAlwaysUV(expectedPath: path) } },
+                        onToggleAlwaysUV: { enabled in Task { await store.setAlwaysUV(enabled, expectedPath: path) } },
                         onRaiseMinimumPIN: { length in Task { await store.raiseMinimumPIN(to: length, expectedPath: path) } },
                         onForcePINChange: { Task { await store.forcePINChange(expectedPath: path) } },
                         onEnableEnterpriseAttestation: { Task { await store.enableEnterpriseAttestation(expectedPath: path) } },

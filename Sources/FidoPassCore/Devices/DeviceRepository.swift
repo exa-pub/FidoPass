@@ -87,7 +87,9 @@ final class DeviceRepository: DeviceAccessing, Sendable {
                              remainingResidentKeys: info.remainingResidentKeys,
                              minPINLength: info.minPINLength,
                              forcePINChange: info.forcePINChange,
-                             aaguid: info.aaguid)
+                             aaguid: info.aaguid,
+                             supportsConfiguration: info.option("authnrCfg") == true,
+                             alwaysUV: info.option("alwaysUv"))
             }
         }
     }

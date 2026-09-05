@@ -13,6 +13,7 @@ struct PanelRootView: View {
     @ObservedObject private var labels: LabelStore
     @ObservedObject private var touchGate: TouchGate
     @ObservedObject private var labelEditor: LabelEditor
+    @ObservedObject private var temporaryUV: TemporaryUVStore
 
     init(store: PanelStore) {
         self.store = store
@@ -22,6 +23,7 @@ struct PanelRootView: View {
         self.accounts = store.accounts
         self.generation = store.generation
         self.labels = store.labels
+        self.temporaryUV = store.temporaryUV
     }
 
     var body: some View {
@@ -31,15 +33,19 @@ struct PanelRootView: View {
             } else if touchGate.isWorking, !store.isCheckingPINStatus, let title = touchGate.panelBusyTitle {
                 PanelWaitingView(title: title, message: store.selectedDevice?.displayName)
             } else {
-                PanelHeaderView(store: store, devices: devices, accounts: accounts)
+                PanelHeaderView(store: store, devices: devices, accounts: accounts, temporaryUV: temporaryUV)
                 Divider()
+                if temporaryUV.device != nil {
+                    TemporaryUVStatusView(store: temporaryUV)
+                        .disabled(touchGate.isWorking)
+                }
                 content
                 // One strip at the bottom: what just happened, or — when nothing did — what
                 // the keyboard can do here. Both are `PanelMetrics.footerHeight` tall, so a
                 // status expiring does not resize the panel; `PanelFooterTests` pins it.
-                if store.statusText != nil || store.error != nil {
-                    PanelFooterView(status: store.statusText,
-                                    error: store.error,
+                if statusText != nil || store.error != nil || temporaryUV.error != nil {
+                    PanelFooterView(status: statusText,
+                                    error: store.error ?? temporaryUV.error,
                                     retriesRemaining: devices.selectedState?.pinRetriesRemaining)
                 } else {
                     PanelHintsView(hints: store.keyboardHints)
@@ -54,6 +60,10 @@ struct PanelRootView: View {
                 .stroke(Color.primary.opacity(0.12))
         }
         .background { keyboardShortcuts }
+    }
+
+    private var statusText: String? {
+        store.statusText ?? (temporaryUV.phase == .paused ? "Keep the key connected and FidoPass running." : nil)
     }
 
     @ViewBuilder

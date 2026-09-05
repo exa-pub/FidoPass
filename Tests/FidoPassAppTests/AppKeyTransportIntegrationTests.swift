@@ -6,6 +6,38 @@ import FidoPassVirtualKeys
 
 @MainActor
 final class AppKeyTransportIntegrationTests: AppTestCase {
+    func testTemporaryUVTimerRestoresActualOpenSKSetting() async throws {
+        if !FileManager.default.isExecutableFile(atPath: OpenSKHostClient.executable.path),
+           ProcessInfo.processInfo.environment["FIDOPASS_REQUIRE_KEY_TESTS"] != "1" {
+            throw XCTSkip("Run scripts/test_keys.sh")
+        }
+        let registry = try TestVirtualDeviceRegistry()
+        let path = try XCTUnwrap(registry.core.listDevices().first?.path)
+        let worker = KeyWorker(backend: LiveKeyBackend(core: registry.core))
+        try await worker.admin {
+            try $0.setInitialPIN(devicePath: path, newPIN: "1234")
+            _ = try $0.setAlwaysUV(enabled: true, devicePath: path, pin: "1234")
+        }
+        let app = AppTestFactory.makeContainer(backend: LiveKeyBackend(core: registry.core), temporaryUVDuration: .milliseconds(100))
+        await app.panel.prepareForDisplay()
+        app.panel.pinDraft = "1234"
+        await app.panel.submitPin()
+        let device = try XCTUnwrap(app.panel.selectedDevice)
+        await app.temporaryUV.start(for: device)
+        XCTAssertEqual(app.temporaryUV.phase, .paused)
+        let paused = try await worker.device { try $0.status(devicePath: path) }
+        XCTAssertEqual(paused.alwaysUV, false)
+        app.panel.panelDidClose()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while app.temporaryUV.device != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(app.temporaryUV.phase, .idle)
+        let restored = try await worker.device { try $0.status(devicePath: path) }
+        XCTAssertEqual(restored.alwaysUV, true)
+        XCTAssertEqual(registry.openCount, registry.closeCount)
+    }
+
     func testAbandonedLiveEnrollmentCanCommitWithoutResurrectingClosedPanel() async throws {
         if !FileManager.default.isExecutableFile(atPath: OpenSKHostClient.executable.path),
            ProcessInfo.processInfo.environment["FIDOPASS_REQUIRE_KEY_TESTS"] != "1" {

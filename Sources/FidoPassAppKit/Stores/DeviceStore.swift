@@ -35,6 +35,8 @@ final class DeviceStore: ObservableObject {
         /// Whether the key has a large-blob store, which every new account's record needs.
         /// `nil` until the key has been asked; only a definite `false` closes anything.
         var supportsLargeBlobs: Bool?
+        var supportsConfiguration: Bool?
+        var alwaysUV: Bool?
 
         /// The rules to enforce in a PIN field for this key.
         var pinPolicy: PinPolicy { PinPolicy(minimumCodePoints: minPINLength ?? PinPolicy.ctapFloor) }
@@ -209,7 +211,9 @@ final class DeviceStore: ObservableObject {
                                             minPINLength: old?.minPINLength,
                                             forcePINChange: old?.forcePINChange ?? false,
                                             aaguid: old?.aaguid,
-                                            supportsLargeBlobs: old?.supportsLargeBlobs)
+                                            supportsLargeBlobs: old?.supportsLargeBlobs,
+                                            supportsConfiguration: old?.supportsConfiguration,
+                                            alwaysUV: old?.alwaysUV)
         }
 
         // A key that vanished takes its state with it, which would strand its vault token
@@ -339,6 +343,22 @@ final class DeviceStore: ObservableObject {
         let token = lease(for: path)
         guard let pin = pin(for: path) else { throw KeyLockedError() }
         return try await authenticatedAdmin(path: path, token: token) { try $0.toggleAlwaysUV(devicePath: path, pin: pin) }
+    }
+
+    func setAlwaysUV(_ enabled: Bool, for device: FidoDevice, extendingPIN: Bool = true) async throws -> AlwaysUVChange {
+        let path = device.path
+        let token = lease(for: path)
+        guard let pin = pin(for: path, extendingSession: extendingPIN) else { throw KeyLockedError() }
+        let result = try await authenticatedAdmin(path: path, token: token) {
+            try $0.setAlwaysUV(enabled: enabled, devicePath: path, pin: pin)
+        }
+        try KeyOperationContext.check(token)
+        states[path]?.alwaysUV = result.enabled
+        return result
+    }
+
+    func pinExpiration(for path: String) -> Date? {
+        states[path]?.pinToken.flatMap { pinVault.expiration(for: $0) }
     }
 
     func setMinimumPINLength(for device: FidoDevice, length: Int) async throws {
@@ -501,9 +521,9 @@ final class DeviceStore: ObservableObject {
 
     // MARK: - PIN access
 
-    func pin(for path: String) -> String? {
+    func pin(for path: String, extendingSession: Bool = true) -> String? {
         guard let token = states[path]?.pinToken else { return nil }
-        guard let pin = pinVault.pin(for: token, extending: pinTTL) else {
+        guard let pin = pinVault.pin(for: token, extending: extendingSession ? pinTTL : nil) else {
             handlePinExpiration(for: path)
             return nil
         }
@@ -524,6 +544,8 @@ final class DeviceStore: ObservableObject {
         state.minPINLength = info.minPINLength
         state.forcePINChange = info.forcePINChange
         state.hasPIN = info.option("clientPin")
+        state.supportsConfiguration = info.supportsConfiguration
+        state.alwaysUV = info.option("alwaysUv")
         states[path] = state
     }
 
@@ -548,6 +570,8 @@ final class DeviceStore: ObservableObject {
         state.forcePINChange = status.forcePINChange
         state.aaguid = status.aaguid
         state.supportsLargeBlobs = status.supportsLargeBlobs
+        state.supportsConfiguration = status.supportsConfiguration
+        state.alwaysUV = status.alwaysUV
         states[path] = state
         return true
     }

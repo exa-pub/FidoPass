@@ -3,6 +3,9 @@ import Foundation
 /// CTAP 2.1 authenticatorConfig operations. Require a PIN and no touch.
 /// Minimum PIN length and enterprise attestation have irreversible effects without reset.
 public protocol DeviceConfiguring: Sendable {
+    /// Reads, changes only if needed, then verifies the requested state on the same handle.
+    func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange
+
     /// Flips `alwaysUv`: whether the key insists on user verification for *every* operation,
     /// including ones a relying party asked to be allowed without it.
     ///

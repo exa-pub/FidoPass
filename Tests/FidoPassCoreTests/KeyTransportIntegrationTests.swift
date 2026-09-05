@@ -191,6 +191,42 @@ extension KeyTransportIntegrationTests {
         XCTAssertTrue(try core.status(devicePath: path).forcePINChange)
     }
 
+    func testRequireUVDesiredStateSurvivesPowerCycleAndLostReplies() throws {
+        let (registry, core, path) = try prepared()
+        let enabled = try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234")
+        XCTAssertEqual(enabled, AlwaysUVChange(previous: false, enabled: true))
+        let count = registry.commands.filter { $0 == 0x0d }.count
+        XCTAssertFalse(try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234").changed)
+        XCTAssertEqual(registry.commands.filter { $0 == 0x0d }.count, count)
+        XCTAssertEqual(try core.status(devicePath: path).alwaysUV, true)
+
+        try registry.inject(.loseReply(command: 0x0d), path: path)
+        XCTAssertThrowsError(try core.setAlwaysUV(enabled: false, devicePath: path, pin: "1234"))
+        XCTAssertEqual(try core.status(devicePath: path).alwaysUV, false)
+        XCTAssertTrue(try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234").changed)
+
+        _ = try core.setAlwaysUV(enabled: false, devicePath: path, pin: "1234")
+        try registry.inject(.loseReply(command: 0x0d), path: path)
+        XCTAssertThrowsError(try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234"))
+        let afterLostReply = registry.commands.filter { $0 == 0x0d }.count
+        XCTAssertFalse(try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234").changed)
+        XCTAssertEqual(registry.commands.filter { $0 == 0x0d }.count, afterLostReply)
+
+        let replugged = try registry.powerCycle(path: path)
+        XCTAssertEqual(try core.status(devicePath: replugged).alwaysUV, true)
+        XCTAssertEqual(registry.openCount, registry.closeCount)
+    }
+
+    func testRequireUVMalformedInfoAndRefusedCommandDoNotReportSuccess() throws {
+        let (registry, core, path) = try prepared()
+        try registry.inject(.malformed(command: 4, reply: Data([0xff])), path: path)
+        XCTAssertThrowsError(try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234"))
+        XCTAssertFalse(registry.commands.contains(0x0d))
+        try registry.inject(.reject(command: 0x0d, status: 0x27), path: path)
+        XCTAssertThrowsError(try core.setAlwaysUV(enabled: true, devicePath: path, pin: "1234"))
+        XCTAssertEqual(try core.status(devicePath: path).alwaysUV, false)
+    }
+
     func testTouchTimeoutAndExpiredResetAreDifferentEngineResponses() throws {
         let (registry, core, path) = try prepared()
         let host = try registry.host(path: path)

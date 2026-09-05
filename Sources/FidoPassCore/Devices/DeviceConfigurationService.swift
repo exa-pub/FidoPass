@@ -12,13 +12,35 @@ final class DeviceConfigurationService: DeviceConfiguring, Sendable {
 
     @discardableResult
     func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool {
+        try changeAlwaysUV(enabled: nil, devicePath: devicePath, pin: pin).enabled
+    }
+
+    func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange {
+        try changeAlwaysUV(enabled: enabled, devicePath: devicePath, pin: pin)
+    }
+
+    private func changeAlwaysUV(enabled: Bool?, devicePath: String, pin: String) throws -> AlwaysUVChange {
         try deviceRepository.withOpenedDevice(path: devicePath) { device, _ in
+            try Libfido2Context.check(fido_dev_set_timeout(device, 5_000), operation: "config timeout")
+            let previous = try Self.alwaysUV(on: device)
+            let target = enabled ?? !previous
+            guard previous != target else { return AlwaysUVChange(previous: previous, enabled: previous) }
             let rc = try PinScope.withPIN(pin) { fido_dev_toggle_always_uv(device, $0) }
             try Self.check(rc, setting: "always require user verification")
+            let actual = try Self.alwaysUV(on: device)
+            guard actual == target else {
+                throw FidoPassError.invalidState("The key did not confirm the requested Require UV setting")
+            }
+            return AlwaysUVChange(previous: previous, enabled: actual)
+        }
+    }
 
-            // The request says "flip", not "set to true", so the new state is whatever the
-            // key now reports — asking is the only way to know which way it went.
-            return try CborInfo.with(device: device) { $0.option("alwaysUv") ?? false }
+    private static func alwaysUV(on device: OpaquePointer) throws -> Bool {
+        try CborInfo.with(device: device) { info in
+            guard info.option("authnrCfg") == true, let enabled = info.option("alwaysUv") else {
+                throw FidoPassError.unsupported("This key does not offer configurable Require UV")
+            }
+            return enabled
         }
     }
 

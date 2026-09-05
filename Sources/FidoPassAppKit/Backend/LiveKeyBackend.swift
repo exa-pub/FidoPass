@@ -106,6 +106,10 @@ struct LiveKeyBackend: KeyBackend {
         try core.toggleAlwaysUV(devicePath: devicePath, pin: pin)
     }
 
+    func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange {
+        try core.setAlwaysUV(enabled: enabled, devicePath: devicePath, pin: pin)
+    }
+
     func setMinimumPINLength(devicePath: String, length: Int, pin: String) throws {
         try core.setMinimumPINLength(devicePath: devicePath, length: length, pin: pin)
     }

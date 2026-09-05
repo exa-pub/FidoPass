@@ -5,6 +5,7 @@ struct PanelHeaderView: View {
     @ObservedObject var store: PanelStore
     @ObservedObject var devices: DeviceStore
     @ObservedObject var accounts: AccountStore
+    @ObservedObject var temporaryUV: TemporaryUVStore
 
     var body: some View {
         HStack(spacing: 9) {
@@ -42,6 +43,11 @@ struct PanelHeaderView: View {
                 Button("Decrypt a message…") { store.openDecryptor() }
                     .disabled(!store.isSelectedKeyUnlocked)
                 Divider()
+                if let title = temporaryUV.menuTitle(for: store.selectedDevice) {
+                    Button(title, action: store.temporaryUVAction)
+                        .disabled(!temporaryUV.canPerformAction(for: store.selectedDevice))
+                        .help("FidoPass will try to restore Require UV after one minute. Keep the app running and the key connected.")
+                }
                 Button("Lock now") { store.lockSelectedKey() }
                     .disabled(!store.isSelectedKeyUnlocked)
                 Divider()

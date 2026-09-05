@@ -66,6 +66,7 @@ protocol KeyAdminBackend: Sendable {
     func resetDevice(devicePath: String, expectedAAGUID: String?) throws
     // Authenticator settings. All need the PIN, none needs a touch.
     func toggleAlwaysUV(devicePath: String, pin: String) throws -> Bool
+    func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange
     func setMinimumPINLength(devicePath: String, length: Int, pin: String) throws
     func forcePINChange(devicePath: String, pin: String) throws
     func enableEnterpriseAttestation(devicePath: String, pin: String) throws
