@@ -390,7 +390,7 @@ final class PanelStore: ObservableObject {
         case .enroll:
             return ["⏎ create", "esc cancel"]
         case .backupKey:
-            return ["esc back"]
+            return ["⏎ copy backup key", "esc back"]
         case .confirmDelete:
             return ["esc cancel"]
         case .migrate:

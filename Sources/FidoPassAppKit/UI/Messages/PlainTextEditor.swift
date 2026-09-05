@@ -9,6 +9,7 @@ struct PlainTextEditor: NSViewRepresentable {
     var isEditable: Bool = true
     var monospaced: Bool = false
     var isMasked: Bool = false
+    var isSingleLine: Bool = false
 
     func makeNSView(context: Context) -> NSScrollView {
         let storage = NSTextStorage()
@@ -16,14 +17,16 @@ struct PlainTextEditor: NSViewRepresentable {
         storage.addLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
+        container.maximumNumberOfLines = isSingleLine ? 1 : 0
+        container.lineBreakMode = isSingleLine ? .byTruncatingMiddle : .byWordWrapping
         layoutManager.addTextContainer(container)
 
         let textView = SecretTextView(frame: .zero, textContainer: container)
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
+        textView.isVerticallyResizable = !isSingleLine
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
+        textView.autoresizingMask = isSingleLine ? [.width, .height] : [.width]
 
         textView.clipboard = clipboard
         textView.delegate = context.coordinator
@@ -51,7 +54,7 @@ struct PlainTextEditor: NSViewRepresentable {
 
         let scrollView = NSScrollView()
         scrollView.documentView = textView
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = !isSingleLine
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         return scrollView

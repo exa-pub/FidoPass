@@ -229,7 +229,7 @@ extension PanelStore {
             error = .plain("Could not write to the clipboard.")
             return
         }
-        setStatus("Backup key copied — store it offline, not in a password manager")
+        error = nil
     }
 
     func saveRecoverySheet(for ref: AccountRef) {
