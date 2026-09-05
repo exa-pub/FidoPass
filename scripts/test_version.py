@@ -30,6 +30,8 @@ def version(repo):
 
 
 def expect(actual, **fields):
+    if actual is None:
+        sys.exit(f'version.sh failed where {fields} was expected')
     for key, value in fields.items():
         if actual.get(f'FIDOPASS_{key}') != value:
             sys.exit(f'{key}: expected {value!r}, got {actual.get("FIDOPASS_" + key)!r} in {actual}')
@@ -56,12 +58,17 @@ def main():
         after, _ = version(repo)
         expect(after, VERSION='0.17.0-dev.2', BUILD='0.17.0.2', IS_RELEASE='0', TAG='')
 
-        # Uncommitted changes are visible in the version and never a release.
+        # Uncommitted changes to tracked files are visible in the version and never a release;
+        # an untracked file is not a change.
         (repo / 'three').write_text('changed')
         dirty, _ = version(repo)
         expect(dirty, VERSION='0.17.0-dev.2.dirty', BUILD='0.17.0.2', IS_RELEASE='0')
         assert dirty['FIDOPASS_COMMIT'].endswith('-dirty')
         git(repo, 'checkout', '--', 'three')
+        (repo / 'scratch').write_text('untracked')
+        clean_again, _ = version(repo)
+        expect(clean_again, VERSION='0.17.0-dev.2')
+        (repo / 'scratch').unlink()
 
         # A dirty tree on the tag itself is not that release either.
         commit(repo, 'four')
@@ -72,18 +79,40 @@ def main():
         git(repo, 'checkout', '--', 'four')
 
         # Prereleases are releases with a suffix, spelt for Sparkle's comparator in the build
-        # number; lightweight tags count too.
+        # number.
         prerelease, _ = version(repo)
         expect(prerelease, VERSION='0.18.0-beta.1', BUILD='0.18.0b1', IS_RELEASE='1', IS_PRERELEASE='1',
                TAG='v0.18.0-beta.1')
-        commit(repo, 'five')
-        git(repo, 'tag', 'v0.18.0')
-        lightweight, _ = version(repo)
-        expect(lightweight, VERSION='0.18.0', BUILD='0.18.0', IS_RELEASE='1', IS_PRERELEASE='0', TAG='v0.18.0')
 
-        # A tag that is not a version is refused rather than guessed at.
+        # The release is cut from the very commit the beta was tested on. The release tag wins
+        # over the beta whatever its type or age — here a lightweight tag against an annotated
+        # one, the shape `git describe` would get wrong — and a newer rc still loses to it.
+        git(repo, 'tag', 'v0.18.0')
+        promoted, _ = version(repo)
+        expect(promoted, VERSION='0.18.0', BUILD='0.18.0', IS_RELEASE='1', IS_PRERELEASE='0', TAG='v0.18.0')
+        git(repo, 'tag', '-a', 'v0.18.0-rc.1', '-m', 'rc')
+        promoted, _ = version(repo)
+        expect(promoted, VERSION='0.18.0', TAG='v0.18.0')
+
+        # Work after that commit is named after the release, not after the betas beside it.
+        commit(repo, 'five')
+        after_release, _ = version(repo)
+        expect(after_release, VERSION='0.18.0-dev.1', BUILD='0.18.0.1', IS_RELEASE='0', TAG='')
+
+        # Two prereleases on one commit: the later one counts. A lightweight tag counts too.
+        git(repo, 'tag', 'v0.19.0-beta.1')
+        git(repo, 'tag', 'v0.19.0-beta.2')
+        two_betas, _ = version(repo)
+        expect(two_betas, VERSION='0.19.0-beta.2', BUILD='0.19.0b2', IS_RELEASE='1', IS_PRERELEASE='1',
+               TAG='v0.19.0-beta.2')
+
+        # A tag that is not a version is refused rather than guessed at — on the commit itself
+        # and as the nearest tag behind a development build.
         commit(repo, 'six')
         git(repo, 'tag', 'v1.0')
+        refused, error = version(repo)
+        assert refused is None and 'v1.0' in error, (refused, error)
+        commit(repo, 'seven')
         refused, error = version(repo)
         assert refused is None and 'v1.0' in error, (refused, error)
 

@@ -23,8 +23,15 @@ scheme against the real comparator; `scripts/test_version.py` pins the script.
 
 Tags are `vMAJOR.MINOR.PATCH`, optionally `-alpha.N`, `-beta.N` or `-rc.N`. MINOR for a new
 capability or a changed format, PATCH for fixes. The app's version has nothing to do with
-the data-format versions in `docs/crypto.md`. Never move or reuse a tag, and never replace
-a published asset: installed copies compare against what they already downloaded.
+the data-format versions in `docs/crypto.md`.
+
+A commit may carry several version tags: the release is normally cut from the very commit
+the last beta was tested on. The highest tag counts — a release above any prerelease of
+the same version, rc above beta above alpha — so that commit builds as the release.
+
+Never move or reuse a tag that has a release, and never replace a published asset:
+installed copies compare against what they already downloaded. A tag whose build failed
+before the release job published anything can be deleted and recreated; nothing has seen it.
 
 Every bundle also records `FidoPassGitCommit`; About shows the version, Preferences shows it
 with the commit for development builds.
