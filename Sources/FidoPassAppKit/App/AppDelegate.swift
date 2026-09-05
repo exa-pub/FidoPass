@@ -1,17 +1,28 @@
 import AppKit
 import Combine
+#if FIDOPASS_VIRTUAL_KEYS
+import FidoPassVirtualKeys
+#endif
 
-/// The application, assembled.
-///
-/// Plain AppKit rather than a SwiftUI `App`: the whole application is a status item and a
-/// panel, and `MenuBarExtra` cannot be opened from a global shortcut, kept open across a
-/// save panel, or given focus for a PIN field — the three things this app needs most.
-/// The executable target does nothing but hand an instance of this to `NSApplication`.
+/// AppKit entry point. The custom HUD supports global shortcuts, PIN focus and save panels.
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private let windows = AppWindows()
-    private lazy var container = AppContainer(router: windows)
+    private let updates: any UpdateService
+    #if FIDOPASS_VIRTUAL_KEYS
+    private let helperURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fidopass-test-authenticator")
+    private lazy var virtualRegistry = VirtualDeviceRegistry(executable: helperURL)
+    private lazy var container = AppContainer(backend: LiveKeyBackend(core: virtualRegistry.core),
+                                               router: windows, updates: updates,
+                                               emptyConfirmationDelay: .zero,
+                                               enableDeviceMonitor: false)
+    private lazy var virtualDevices = VirtualDeviceStore(registry: virtualRegistry, devices: container.devices,
+                                                        executable: helperURL)
+    private lazy var virtualWindow = VirtualDevicesController(store: virtualDevices)
+    #else
+    private lazy var container = AppContainer(router: windows, updates: updates)
+    #endif
     private lazy var hud = PanelController(container: container)
     private lazy var hotkey = HotkeyRegistration(preferences: container.preferences,
                                                  registrar: GlobalHotkeyService()) { [weak self] in
@@ -22,8 +33,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                                                   launchAtLogin: SMAppLaunchAtLogin())
     private var subscriptions: Set<AnyCancellable> = []
 
-    public override init() {
+    /// - Parameter updates: the updater; `FidoPassMain` passes the Sparkle-backed one.
+    public init(updates: any UpdateService) {
+        self.updates = updates
         super.init()
+    }
+
+    /// A delegate that cannot update — what the tests build.
+    public override convenience init() {
+        self.init(updates: UnavailableUpdateService())
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
@@ -39,6 +57,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             .store(in: &subscriptions)
         installMainMenu()
         hud.installStatusItem()
+        #if FIDOPASS_VIRTUAL_KEYS
+        windows.virtualDevices = virtualWindow
+        hud.virtualDevicesWindow = { [weak self] in self?.virtualWindow.window }
+        virtualWindow.show()
+        #endif
         // Registers the shortcut, and keeps it registered as Preferences change.
         _ = hotkey
 
@@ -58,20 +81,28 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        container.temporaryUV.stop()
         // Quitting is not a reason to leave a derived password behind on the clipboard.
         container.generation.clearClipboard()
+        #if FIDOPASS_VIRTUAL_KEYS
+        virtualRegistry.stop()
+        #endif
     }
 
     /// A minimal main menu.
     ///
     /// Without it the panel's text fields lose ⌘V, ⌘A and friends — the Edit menu is what
-    /// supplies those responders — and ⌘Q would do nothing while the HUD is key.
-    private func installMainMenu() {
+    /// supplies those responders. File > Close routes ⌘W through the key window, including
+    /// floating panels, so their normal close delegates still run.
+    func installMainMenu() {
         let mainMenu = NSMenu()
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About FidoPass", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let updatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updatesItem.target = self
+        appMenu.addItem(updatesItem)
         appMenu.addItem(.separator())
         let preferences = NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
         preferences.target = self
@@ -80,6 +111,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         manager.keyEquivalentModifierMask = [.command, .shift]
         manager.target = self
         appMenu.addItem(manager)
+        #if FIDOPASS_VIRTUAL_KEYS
+        let virtual = NSMenuItem(title: "Virtual Devices…", action: #selector(showVirtualDevices), keyEquivalent: "")
+        virtual.target = self
+        appMenu.addItem(virtual)
+        #endif
         let encrypt = NSMenuItem(title: "Encrypt a message…", action: #selector(encryptMessage), keyEquivalent: "e")
         encrypt.keyEquivalentModifierMask = [.command, .shift]
         encrypt.target = self
@@ -93,6 +129,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         appMenu.addItem(withTitle: "Quit FidoPass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
+
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
 
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
@@ -109,12 +151,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         NSApp.mainMenu = mainMenu
     }
 
+    #if FIDOPASS_VIRTUAL_KEYS
+    @objc private func showVirtualDevices() { windows.openVirtualDevices() }
+    #endif
+
     @objc private func showManager() {
         auxiliary.showAuthenticatorManager()
     }
 
     @objc private func showPreferences() {
         auxiliary.showPreferences()
+    }
+
+    /// No window of its own: the result is a line in Preferences, which this opens.
+    @objc private func checkForUpdates() {
+        auxiliary.showPreferences()
+        container.updates.checkForUpdates()
     }
 
     @objc private func encryptMessage() {
@@ -129,6 +181,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(decryptMessage) {
             return container.panel.isSelectedKeyUnlocked
+        }
+        if menuItem.action == #selector(checkForUpdates) {
+            return updates.isAvailable
         }
         return true
     }

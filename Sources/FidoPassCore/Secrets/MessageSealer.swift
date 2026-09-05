@@ -1,19 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// HPKE (RFC 9180) base mode over the key in a link: DHKEM(X25519, HKDF-SHA256),
-/// HKDF-SHA256, AES-128-GCM — CryptoKit's implementation, not a construction of our own.
-/// The suite is RFC 9180 Appendix A.1, and `MessageSealerTests` drives it through that
-/// vector.
-///
-/// One message is one HPKE context: a fresh ephemeral key pair, one `seal`, sequence number
-/// zero — which is also why the AEAD nonce can never repeat: it is a function of the fresh
-/// encapsulated key. The context's `info` binds the message to the key it was sealed under,
-/// the nonce and the locator as bytes; nothing else is authenticated, so `aad` is empty.
-/// One binding, in the key schedule, is one thing for another implementation to get right.
-///
-/// Base mode means anyone holding the link can seal a message, and the recipient cannot tell
-/// who did. That is the feature — the sender needs no key — and its limit.
+/// RFC 9180 base mode: X25519/HKDF-SHA256/AES-128-GCM, implemented by CryptoKit.
+/// Each message uses a fresh HPKE context. info binds the nonce and account locator; aad
+/// is empty. Base mode does not authenticate the sender. See docs/crypto.md §6.
 final class MessageSealer: MessageSealing, Sendable {
     static let domain = Data("fidopass|hpke|info|v1".utf8)
 
@@ -25,6 +15,9 @@ final class MessageSealer: MessageSealing, Sendable {
     init() {}
 
     func seal(_ plaintext: String, for key: EncryptionKeyURL) throws -> SealedMessageURL {
+        guard plaintext.utf8.prefix(MessageLimits.maxPlaintextBytes + 1).count <= MessageLimits.maxPlaintextBytes else {
+            throw FidoPassError.invalidState("Message exceeds the 1 MiB UTF-8 limit")
+        }
         guard plaintext.count <= MessageLimits.maxPlaintextCharacters else {
             throw MessageCryptoError.tooLarge(limit: MessageLimits.maxPlaintextCharacters)
         }

@@ -1,16 +1,7 @@
 import Foundation
 import FidoPassCore
 
-/// Everything needed to reproduce an account's passwords on another Mac — except the
-/// secrets themselves.
-///
-/// A derived password is a function of the security key, the account id, the label and the
-/// policy. The key is in the user's pocket; the rest lives only in their memory and in this
-/// machine's `UserDefaults`. Forgetting the label makes the passwords unreproducible even
-/// while holding the key, and for a vault master password nothing recovers from that.
-///
-/// The sheet is deliberately safe to print: it carries no password, no PIN and no backup
-/// key, so it can be stored beside the key rather than hidden separately.
+/// Printable account parameters and labels. Contains no password, PIN or backup key.
 struct RecoverySheet {
     let accountId: String
     let kind: AccountKind

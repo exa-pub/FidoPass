@@ -8,7 +8,7 @@ import TestSupport
 /// The HUD exists to make one operation — put the usual password on the clipboard — cost
 /// two clicks or two keystrokes. That promise lives or dies on what `⏎` does in each state,
 /// so it is asserted here rather than described in a document nobody runs.
-final class PanelReducerTests: XCTestCase {
+final class PanelReducerTests: AppTestCase {
 
     private let vault = AccountRef(accountId: "vault", devicePath: "/dev/one")
     private let disk = AccountRef(accountId: "disk", devicePath: "/dev/one")
@@ -163,7 +163,7 @@ final class PanelReducerTests: XCTestCase {
 }
 
 /// Preselection: what the HUD opens on, and with which label.
-final class PanelSelectionResolutionTests: XCTestCase {
+final class PanelSelectionResolutionTests: AppTestCase {
 
     private let device = MockKeyBackend.device(path: "/dev/one")
     private var accounts: [AccountHandle] {
@@ -174,7 +174,7 @@ final class PanelSelectionResolutionTests: XCTestCase {
     func testRemembersTheAccountUsedLast() {
         let memory = Preferences.LastUsed(deviceSignature: device.modelSignature,
                                           accountId: "vault",
-                                          label: "work")
+                                          label: "work", credentialId: accounts.first(where: { $0.id == "vault" })?.credentialIdB64)
         let ref = PanelReducer.resolveSelection(accounts: accounts, devices: [device], memory: memory)
         XCTAssertEqual(ref?.accountId, "vault")
     }

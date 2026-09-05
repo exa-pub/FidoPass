@@ -6,7 +6,7 @@ import TestSupport
 /// The receiving window: pasting finds the account and touches nothing; the button is the
 /// touch, once per nonce; closing leaves nothing behind.
 @MainActor
-final class MessageDecryptStoreTests: XCTestCase {
+final class MessageDecryptStoreTests: AppTestCase {
 
     @MainActor
     private struct Setup {
@@ -29,11 +29,8 @@ final class MessageDecryptStoreTests: XCTestCase {
         return Setup(panel: panel, backend: backend, device: device, store: store)
     }
 
-    /// Locating runs off the main actor; waits for it to land.
-    private func settle(_ store: MessageDecryptStore) async {
-        for _ in 0..<200 where store.status == .locating {
-            try? await Task.sleep(for: .milliseconds(20))
-        }
+    private func settle(_ store: MessageDecryptStore) async throws {
+        try await waitUntil { !store.isParsing && store.status != .locating }
     }
 
     // MARK: - Reading a message
@@ -43,7 +40,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         let message = try setup.backend.sealedMessage("hello", for: try setup.account("vault"))
 
         setup.store.sealedText = message.absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
 
         XCTAssertEqual(setup.store.status, .ready(accountId: "vault"))
         XCTAssertEqual(setup.store.message, message)
@@ -63,6 +60,7 @@ final class MessageDecryptStoreTests: XCTestCase {
     func testAKeyLinkIsNamedAsSuch() async throws {
         let setup = await setUpStore()
         setup.store.sealedText = try setup.backend.encryptionKey(for: try setup.account("vault")).absoluteString
+        try await settle(setup.store)
         XCTAssertEqual(setup.store.status, .invalid(.unexpectedKind("hpkev1")))
     }
 
@@ -72,7 +70,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         let message = try setup.backend.sealedMessage("hello", for: elsewhere)
 
         setup.store.sealedText = message.absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
 
         XCTAssertEqual(setup.store.status, .noMatchingAccount)
         XCTAssertFalse(setup.store.hasLegacyAccounts)
@@ -85,7 +83,7 @@ final class MessageDecryptStoreTests: XCTestCase {
                                                 Account.fixture(id: "disk", kind: .local)])
         let elsewhere = AccountHandle.fixture(id: "old", credentialId: Data("another-key".utf8), devicePath: "/dev/other")
         setup.store.sealedText = try setup.backend.sealedMessage("hello", for: elsewhere).absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
 
         XCTAssertEqual(setup.store.status, .noMatchingAccount)
         XCTAssertTrue(setup.store.hasLegacyAccounts)
@@ -98,7 +96,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         let vault = try setup.account("vault")
 
         setup.store.sealedText = try setup.backend.sealedMessage("first", for: vault).absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
         await setup.store.decrypt()
         XCTAssertEqual(setup.store.plaintext, "first")
         XCTAssertEqual(setup.store.status, .decrypted(accountId: "vault"))
@@ -107,7 +105,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         // Another message under the same key: the key is already here.
         setup.store.sealedText = try setup.backend.sealedMessage("second", for: vault).absoluteString
         XCTAssertTrue(setup.store.plaintext.isEmpty, "a new message replaces the old text at once")
-        await settle(setup.store)
+        try await settle(setup.store)
         await setup.store.decrypt()
         XCTAssertEqual(setup.store.plaintext, "second")
         XCTAssertEqual(setup.backend.deriveMessageKeyCalls.count, 1, "the same nonce must not cost a second touch")
@@ -115,7 +113,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         // A message under another key of the same account: another nonce, another touch.
         let otherNonce = Data(repeating: 0xA5, count: 32)
         setup.store.sealedText = try setup.backend.sealedMessage("third", for: vault, nonce: otherNonce).absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
         await setup.store.decrypt()
         XCTAssertEqual(setup.store.plaintext, "third")
         XCTAssertEqual(setup.backend.deriveMessageKeyCalls.count, 2)
@@ -127,14 +125,13 @@ final class MessageDecryptStoreTests: XCTestCase {
     func testTheTouchPromptBelongsToTheWindow() async throws {
         let setup = await setUpStore()
         let gate = BlockingGate()
+        defer { gate.open() }
         setup.backend.deriveMessageKeyGate = gate
         setup.store.sealedText = try setup.backend.sealedMessage("hello", for: try setup.account("vault")).absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
 
         let decrypting = Task { await setup.store.decrypt() }
-        for _ in 0..<200 where setup.panel.touchGate.prompt == nil {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        try await waitUntil { gate.hasEntered }
         XCTAssertNotNil(setup.store.touch)
         XCTAssertNil(setup.panel.touch, "the panel must not draw the receiving window's prompt")
         XCTAssertFalse(setup.panel.touchGate.isPanelBusy)
@@ -154,7 +151,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         let altered = try SealedMessageURL(nonce: genuine.nonce, locator: genuine.locator, content: content)
 
         setup.store.sealedText = altered.absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
         await setup.store.decrypt()
 
         XCTAssertTrue(setup.store.plaintext.isEmpty)
@@ -165,7 +162,7 @@ final class MessageDecryptStoreTests: XCTestCase {
     func testALockedKeyIsReportedNotRetried() async throws {
         let setup = await setUpStore()
         setup.store.sealedText = try setup.backend.sealedMessage("hello", for: try setup.account("vault")).absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
 
         setup.panel.lockSelectedKey()
         await setup.store.decrypt()
@@ -182,7 +179,7 @@ final class MessageDecryptStoreTests: XCTestCase {
         let vault = try setup.account("vault")
         let message = try setup.backend.sealedMessage("hello", for: vault)
         setup.store.sealedText = message.absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
         await setup.store.decrypt()
         XCTAssertEqual(setup.store.plaintext, "hello")
 
@@ -193,7 +190,7 @@ final class MessageDecryptStoreTests: XCTestCase {
 
         // The keys went with it: the same message costs a touch again.
         setup.store.sealedText = message.absoluteString
-        await settle(setup.store)
+        try await settle(setup.store)
         await setup.store.decrypt()
         XCTAssertEqual(setup.backend.deriveMessageKeyCalls.count, 2)
     }
@@ -207,8 +204,51 @@ final class MessageDecryptStoreTests: XCTestCase {
                                         deviceName: "Key",
                                         prefilled: message)
         XCTAssertEqual(store.sealedText, message.absoluteString)
-        await settle(store)
+        try await settle(store)
         XCTAssertEqual(store.status, .ready(accountId: "vault"))
         XCTAssertTrue(setup.backend.deriveMessageKeyCalls.isEmpty, "a link never touches the key by itself")
+    }
+}
+
+@MainActor
+extension MessageDecryptStoreTests {
+    func testDifferentAccountsSharingNonceMustUseDifferentCachedKeys() async throws {
+        let (panel, backend, device) = await AppTestFactory.unlockedStore()
+        let store = MessageDecryptStore(accounts: panel.accounts, touchGate: panel.touchGate,
+                                        devicePath: device.path, deviceName: "Synthetic key")
+        let first = try XCTUnwrap(panel.accounts.accounts.first)
+        let second = try XCTUnwrap(panel.accounts.accounts.last)
+        store.adopt(try backend.sealedMessage("first sample", for: first))
+        try await waitUntil { store.canDecrypt }
+        await store.decrypt()
+        store.adopt(try backend.sealedMessage("second sample", for: second))
+        try await waitUntil { store.canDecrypt }
+        await store.decrypt()
+        XCTAssertTrue(store.plaintext == "second sample", "Nonce cache selected another account's key")
+        store.close()
+    }
+
+    func testClosingDuringDerivationMustPreventKeyCacheResurrection() async throws {
+        let (panel, backend, device) = await AppTestFactory.unlockedStore()
+        let store = MessageDecryptStore(accounts: panel.accounts, touchGate: panel.touchGate,
+                                        devicePath: device.path, deviceName: "Synthetic key")
+        let account = try XCTUnwrap(panel.accounts.accounts.first)
+        let message = try backend.sealedMessage("public sample", for: account)
+        let gate = BlockingGate()
+        defer { gate.open() }
+        backend.deriveMessageKeyGate = gate
+        store.adopt(message)
+        try await waitUntil { store.canDecrypt }
+        let task = Task { await store.decrypt() }
+        try await waitUntil { gate.hasEntered }
+        store.close()
+        gate.open()
+        await task.value
+        // Reuse exposes whether a private key re-entered the supposedly emptied cache.
+        store.adopt(message)
+        try await waitUntil { store.canDecrypt }
+        await store.decrypt()
+        XCTAssertEqual(backend.deriveMessageKeyCalls.count, 2, "Closed store retained a late key")
+        store.close()
     }
 }

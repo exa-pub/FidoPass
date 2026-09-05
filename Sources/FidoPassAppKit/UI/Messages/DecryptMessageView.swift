@@ -1,13 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// The receiving window, top to bottom: the sealed link, one button, the text. Bound to the
-/// security key named in the title.
-///
-/// The touch prompt is a strip in the button's row — the window has a message to keep on
-/// screen while the key waits. The text is masked until asked for — bullets in the editor,
-/// the shape of the text without a letter of it — because it is the secret the whole
-/// exercise was about, and copying it does not need it on screen.
+/// Receiving form for one key, with an inline touch prompt and masked plaintext.
 struct DecryptMessageView: View {
     @ObservedObject var store: MessageDecryptStore
     @ObservedObject private var touchGate: TouchGate
@@ -47,6 +41,8 @@ struct DecryptMessageView: View {
             }
             if let prompt = touchGate.decryptorPrompt {
                 TouchInlineView(prompt: prompt, onCancel: store.abandonTouch)
+            } else if touchGate.isCancelling, touchGate.surface == .decryptor {
+                Label("Finishing cancelled operation…", systemImage: "hourglass").font(.caption)
             } else {
                 HStack(spacing: 10) {
                     statusLabel

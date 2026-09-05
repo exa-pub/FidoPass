@@ -1,11 +1,6 @@
 import AppKit
 
-/// The menu-bar icon.
-///
-/// Template images only: the system tints them for light and dark menu bars, and anything
-/// hand-coloured would look foreign in half the setups. The two states worth showing are the
-/// ones the user would otherwise have to go and check — the key is locked, and a secret is
-/// still on the clipboard.
+/// Template menu-bar images for key-lock and secret-clipboard state.
 enum StatusItemIcon {
 
     enum State: Equatable {
@@ -40,8 +35,15 @@ enum StatusItemIcon {
         }
     }
 
-    /// A dot next to the icon while a secret is still on the clipboard.
-    static func badgeVisible(for state: State) -> Bool {
-        state == .clipboardHot
+    /// A dot next to the icon while a secret is still on the clipboard, or while an update
+    /// waits in the menu.
+    static func badgeVisible(for state: State, updateOffered: Bool = false) -> Bool {
+        state == .clipboardHot || updateOffered
+    }
+
+    /// The tooltip. The key's state comes first; an update, when one is offered, after it.
+    static func tooltip(for state: State, update version: String?) -> String {
+        guard let version else { return description(for: state) }
+        return "\(description(for: state)) · update \(version) available"
     }
 }

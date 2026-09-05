@@ -1,12 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The window the HUD lives in.
-///
-/// A plain `NSPopover` (or SwiftUI's `MenuBarExtra`) cannot be opened from a global hotkey
-/// and closes itself the moment a save panel appears or the key is being touched. Owning the
-/// window is what buys those two things; `canBecomeKey` is what lets the PIN field work at
-/// all, since a non-activating panel refuses first responder by default.
+/// HUD panel supporting global shortcuts and save dialogs.
+/// canBecomeKey allows PIN fields to receive focus in a non-activating panel.
 final class PanelWindow: NSPanel {
 
     init(contentViewController: NSViewController) {
@@ -33,12 +29,25 @@ final class PanelWindow: NSPanel {
         // with `tabFocusChain` instead.
     }
 
-    /// Called when the user presses Escape. `performClose` would only beep — a borderless
-    /// window has no close button for it to find.
+    /// Escape may go back within the HUD; Close always dismisses it through its controller.
     var onCancel: (() -> Void)?
+    var onClose: (() -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// A borderless panel has no native close button for AppKit to validate or press.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(performClose(_:)) {
+            return onClose != nil && attachedSheet == nil
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    override func performClose(_ sender: Any?) {
+        guard attachedSheet == nil else { return }
+        onClose?()
+    }
 
     /// Escape closes the panel, the way every other menu-bar window behaves.
     override func cancelOperation(_ sender: Any?) {

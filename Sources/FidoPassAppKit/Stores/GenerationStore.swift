@@ -25,6 +25,9 @@ final class GenerationStore: ObservableObject {
     private let worker: KeyWorker
     private let clipboard: ClipboardService
     private let pinProviderFor: (String) -> (@Sendable () -> String?)?
+    var onAuthenticationFailure: ((String) -> Void)?
+    private var lifetime = OperationLease()
+    private var receiptID = UUID()
     private var countdown: Task<Void, Never>?
 
     init(worker: KeyWorker, clipboard: ClipboardService, pinProvider: @escaping (String) -> (@Sendable () -> String?)?) {
@@ -42,13 +45,22 @@ final class GenerationStore: ObservableObject {
     func generate(_ handle: AccountHandle, label: String) async throws -> String {
         guard let provider = pinProviderFor(handle.devicePath) else { throw KeyLockedError() }
         let ref = AccountRef(handle)
-
+        lifetime.invalidate()
+        let token = OperationLease()
+        lifetime = token
         busyRef = ref
-        defer { busyRef = nil }
+        defer { if lifetime === token { busyRef = nil } }
 
-        let password = try await worker.accounts {
-            try $0.generatePassword(handle, label: label, pinProvider: provider)
+        let password: String
+        do { password = try await worker.accounts(validity: token) {
+            guard provider() != nil else { throw KeyLockedError() }
+            return try $0.generatePassword(handle, label: label, pinProvider: provider)
+        } } catch {
+            try KeyOperationContext.check(token)
+            if KeyFailurePolicy.invalidatesPINSession(error) { onAuthenticationFailure?(handle.devicePath) }
+            throw error
         }
+        try KeyOperationContext.check(token)
         result = Result(ref: ref, label: label, password: password, revealed: false)
         return password
     }
@@ -59,16 +71,13 @@ final class GenerationStore: ObservableObject {
         result = current
     }
 
-    /// Drops a result that no longer matches what the user is asking for.
-    ///
-    /// Editing the label used to leave the previous password on screen, so copying handed
-    /// over a secret derived from something else.
+    /// Drops passwords derived for a different account or label; labels compare by bytes.
     func invalidateResult(unless ref: AccountRef, label: String) {
         guard let current = result else { return }
-        if current.ref != ref || current.label != label { result = nil }
+        if current.ref != ref || !current.label.utf8.elementsEqual(label.utf8) { result = nil }
     }
 
-    func clearResult() { result = nil }
+    func clearResult() { lifetime.invalidate(); lifetime = OperationLease(); result = nil; busyRef = nil }
 
     /// Drops the on-screen result for a key that is no longer usable.
     ///
@@ -77,6 +86,9 @@ final class GenerationStore: ObservableObject {
     /// countdown is the only thing telling the user so. Only a session lock, which wipes the
     /// clipboard outright, takes it away.
     func dropEverything(forDevicePath path: String? = nil) {
+        lifetime.invalidate()
+        lifetime = OperationLease()
+        busyRef = nil
         if let path {
             if result?.ref.devicePath == path { result = nil }
         } else {
@@ -87,18 +99,29 @@ final class GenerationStore: ObservableObject {
 
     // MARK: - Clipboard
 
-    func copy(_ secret: String, as item: ClipboardReceipt.Item, for ref: AccountRef) {
+    @discardableResult
+    func copy(_ secret: String, as item: ClipboardReceipt.Item, for ref: AccountRef) -> Bool {
+        let id = UUID()
+        receiptID = id
         let deadline = clipboard.copySecret(secret) { [weak self] in
-            Task { @MainActor in self?.markClipboardCleared() }
+            Task { @MainActor in
+                guard let self, self.receiptID == id else { return }
+                self.markClipboardCleared()
+            }
         }
+        guard clipboard.lastWriteSucceeded else { receipt = nil; stopCountdown(); return false }
         receipt = ClipboardReceipt(ref: ref, item: item, copiedAt: Date(), clearsAt: deadline)
         startCountdown()
+        return true
     }
 
     /// Puts an identity on the clipboard. Not a secret, so no timeout and no receipt — it
     /// exists to be pasted — but the same concealed path as everything else, so it is not
     /// synced to other devices either.
     func copyIdentity(_ identity: AccountIdentity) {
+        receiptID = UUID()
+        receipt = nil
+        stopCountdown()
         clipboard.copySecret(identity.groupedHex, clearAfter: 0)
     }
 

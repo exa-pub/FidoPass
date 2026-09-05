@@ -1,11 +1,7 @@
 import Foundation
 
-/// Every resident credential on one authenticator, grouped by relying party.
-///
-/// Only *discoverable* credentials appear here. Server-side credentials — the ordinary kind
-/// most websites create — occupy no resident slot and cannot be enumerated at all, because
-/// they exist only inside the credential id the server stores. Anything presenting this as
-/// "everything on the key" would be wrong; see `undiscoverableCaveat`.
+/// Discoverable credentials grouped by relying party. Non-resident credentials cannot
+/// be enumerated; their credential IDs are held by relying parties.
 public struct CredentialInventory: Sendable, Hashable, Codable {
 
     public struct RelyingParty: Sendable, Hashable, Codable, Identifiable {

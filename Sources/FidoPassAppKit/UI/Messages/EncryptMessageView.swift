@@ -1,16 +1,12 @@
 import SwiftUI
 import FidoPassCore
 
-/// The sending window, top to bottom: the key link, its fingerprint, the text, the sealed
-/// link. Nothing here touches a security key, and nothing is written to disk.
-///
-/// The text is masked by default — bullets in the editor, as in a password field, while
-/// typing goes on underneath — and the eye shows it. Nothing here auto-hides or auto-shows:
-/// the eye is the only thing that changes it.
+/// Sending form with masked plaintext by default. Sealing requires no security key.
 struct EncryptMessageView: View {
     @ObservedObject var store: MessageEncryptStore
     @Environment(\.clipboard) private var clipboard
     @State private var isTextRevealed = false
+    @State private var copiedMessage = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,12 +17,14 @@ struct EncryptMessageView: View {
             sealedSection
         }
         .frame(minWidth: 560, minHeight: 400)
+        .onChange(of: store.sealed) { _, _ in copiedMessage = false }
     }
 
     // MARK: - Key
 
     private var keySection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("Recipient’s encryption key").font(.caption.weight(.medium))
             HStack(spacing: 8) {
                 Image(systemName: "key.horizontal.fill")
                     .foregroundStyle(Color.accentColor)
@@ -35,7 +33,7 @@ struct EncryptMessageView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
                     .autocorrectionDisabled()
-                    .help(store.key?.payload ?? "The link someone gave you, or the one the panel just issued")
+                    .help(store.key?.payload ?? "The public link the recipient gave you")
                 Button("Paste") {
                     if let text = NSPasteboard.general.string(forType: .string) { store.keyText = text }
                 }
@@ -50,29 +48,12 @@ struct EncryptMessageView: View {
             HStack(spacing: 10) {
                 keyStatus
                 Spacer(minLength: 8)
-                if let issuedFor = store.issuedFor {
-                    issuedForLabel(issuedFor)
-                }
+
             }
             .frame(minHeight: 20)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-    }
-
-    private func issuedForLabel(_ account: Account) -> some View {
-        HStack(spacing: 6) {
-            Text("Key for “\(account.id)” · \(account.kind == .portable ? "Portable" : "Local")")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            if account.kind == .local {
-                Label("Not backed up", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .help("This account is bound to one security key. This encryption key dies with it; nothing sealed under it can be recovered.")
-            }
-        }
     }
 
     @ViewBuilder
@@ -82,7 +63,7 @@ struct EncryptMessageView: View {
             Text("Anyone with a key link can encrypt for its owner; only the owner's security key decrypts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
         case .incomplete:
             Label("Waiting for a complete link", systemImage: "ellipsis")
                 .font(.caption)
@@ -96,7 +77,12 @@ struct EncryptMessageView: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         case .valid(let fingerprint):
-            KeyFingerprintView(fingerprint: fingerprint)
+            VStack(alignment: .leading, spacing: 6) {
+                KeyFingerprintView(fingerprint: fingerprint)
+                Text("Compare these six emoji with the recipient over another trusted channel before sending. A valid link alone does not verify its owner.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -128,6 +114,7 @@ struct EncryptMessageView: View {
 
     private var sealedSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("Encrypted message").font(.caption.weight(.medium))
             HStack(spacing: 8) {
                 Image(systemName: "envelope.badge.shield.half.filled")
                     .foregroundStyle(store.sealed.isEmpty ? Color.secondary : Color.accentColor)
@@ -143,23 +130,21 @@ struct EncryptMessageView: View {
                     .padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.04)))
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.12)))
-                Button("Copy") {
+                Button(copiedMessage ? "Copied" : "Copy message") {
                     // Not a secret, and it exists to be pasted elsewhere: wiping it mid-paste
                     // would be a defect, not protection.
                     clipboard?.copySecret(store.sealed, clearAfter: 0)
+                    copiedMessage = clipboard?.lastWriteSucceeded == true
                 }
                 .controlSize(.small)
                 .keyboardShortcut(.defaultAction)
                 .disabled(store.sealed.isEmpty)
             }
-            HStack {
+            VStack(alignment: .leading, spacing: 4) {
                 statusLabel
-                Spacer()
-                Text("Every edit makes a new link; older links stay valid. Compare the six emoji with the key's owner first.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                Text("Every edit makes a new link; older links stay valid.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 16)

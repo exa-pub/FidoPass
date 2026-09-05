@@ -5,9 +5,9 @@ import SwiftUI
 struct OnboardingView: View {
     @ObservedObject var preferences: Preferences
     let launchAtLogin: LaunchAtLoginService
+    @ObservedObject var updates: UpdateModel
     let onFinish: () -> Void
 
-    @State private var startsAtLogin = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -21,8 +21,8 @@ struct OnboardingView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 point(icon: "person.badge.key",
-                      title: "An account is a derivation identity",
-                      body: "Not a website. A vault master password, a disk key, a backup passphrase — one or two is the normal number.")
+                      title: "Choose an account for an important password",
+                      body: "Use an account for a vault master password, a disk key or a backup passphrase.")
                 point(icon: "tag",
                       title: "The label is part of the password",
                       body: "The same key, account and label always produce the same password. A different label produces a different one, silently.")
@@ -31,18 +31,25 @@ struct OnboardingView: View {
                       body: "Their backup key can be entered on a second authenticator. A local account cannot be recovered by any means.")
                 point(icon: "lock.shield",
                       title: "The key needs its own PIN",
-                      body: "Not your Mac password. FidoPass sets one on a new key and can change it later — but eight wrong entries in a row lock the key for good.")
+                      body: "Use the security key’s PIN, not your Mac password. Too many wrong attempts block the key; resetting it erases its accounts.")
                 point(icon: "doc.text",
                       title: "Keep a recovery sheet",
                       body: "It lists the account, the labels and the policy — and no secrets. Right-click an account to save one.")
             }
 
-            Toggle("Start FidoPass at login", isOn: Binding(get: { startsAtLogin },
-                                                            set: { newValue in
-                                                                startsAtLogin = newValue
-                                                                launchAtLogin.setEnabled(newValue)
-                                                            }))
+            LaunchAtLoginToggle("Start FidoPass at login", service: launchAtLogin)
             .help("Without this, the global shortcut only works after you start the app by hand.")
+
+            // Consent for the app's only network request, asked here instead of by a dialog
+            // on the second launch. A local build has nothing to ask about.
+            if updates.isAvailable {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
+                    Text("One request a day to github.com for the list of releases. Nothing about you or your keys is sent, and nothing installs without a click.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
 
             HStack {
                 Spacer()
@@ -56,7 +63,6 @@ struct OnboardingView: View {
         }
         .padding(22)
         .frame(width: 460)
-        .onAppear { startsAtLogin = launchAtLogin.isEnabled }
     }
 
     private func point(icon: String, title: String, body: String) -> some View {

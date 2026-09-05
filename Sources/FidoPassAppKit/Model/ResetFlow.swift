@@ -15,6 +15,8 @@ struct ResetFlow: Equatable {
         /// "Plug it back in" — the reset fires the instant it returns.
         case replug
         case running
+        case retry
+        case expired
     }
 
     struct Doomed: Equatable, Identifiable {
@@ -33,6 +35,7 @@ struct ResetFlow: Equatable {
     /// a key that is anything but.
     var doomed: [Doomed]
     var accountsReadable: Bool
+    var totalResidentCredentials: Int? = nil
     /// Label histories to forget afterwards. Collected now: they are keyed by credential
     /// id, and after the reset there is nothing left to ask for one.
     var scopes: [LabelScope]
@@ -46,16 +49,11 @@ struct ResetFlow: Equatable {
     /// nothing to enumerate and nothing to spell out.
     var requiresTypedConfirmation: Bool { hasLocalAccounts }
 
-    /// Whether the key is *known* to hold nothing.
-    ///
-    /// An empty `doomed` is not the same as an empty key: a locked key cannot be
-    /// enumerated, so the list is empty precisely when the contents are unknown. Waiving
-    /// the acknowledgement on that would skip the warning in the one case where the user
-    /// has the least idea what they are about to erase.
-    var isKnownEmpty: Bool { doomed.isEmpty && accountsReadable }
+    /// Whether the key is known to be empty. An unread inventory is not evidence of emptiness.
+    var isKnownEmpty: Bool { totalResidentCredentials == 0 }
 
     var canProceed: Bool {
-        guard acknowledged || isKnownEmpty else { return false }
+        guard acknowledged else { return false }
         guard requiresTypedConfirmation else { return true }
         return typed == "RESET"
     }

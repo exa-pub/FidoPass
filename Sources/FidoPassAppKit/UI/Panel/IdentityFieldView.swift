@@ -1,12 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// The identity an account is about to be created with: the hex, a button for a fresh
-/// random one, and the fingerprint it makes, live.
-///
-/// Used by the "new account" form and the migration screen alike. The field is editable so
-/// that a person can type the identity the same account already shows on another key;
-/// read-only when the identity is already on the key and there is nothing to choose.
+/// Editable identity for creation/migration, or a read-only identity when resuming a copy.
 struct IdentityFieldView: View {
     @Binding var hex: String
     let identity: AccountIdentity?

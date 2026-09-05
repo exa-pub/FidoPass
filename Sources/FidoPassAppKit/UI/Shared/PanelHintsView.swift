@@ -1,14 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// What the keyboard does on this screen.
-///
-/// Printed rather than left to be discovered: nothing about "Return copies the password"
-/// can be guessed from looking at the panel, and an unknown shortcut is no shortcut.
-///
-/// The strip keeps its height when there is nothing to print: it is the same slot a status
-/// or an error takes over, and the panel's height must not depend on which of the three is
-/// showing — see `PanelMetrics.footerHeight`.
+/// Keyboard hints reserve the same minimum height as status and error messages.
 struct PanelHintsView: View {
     let hints: [String]
 

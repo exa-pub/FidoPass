@@ -1,16 +1,7 @@
 import Foundation
 
-/// The one door to the key.
-///
-/// Every operation that makes the authenticator wait for a finger goes through
-/// `withTouchPrompt`, so the prompt cannot be forgotten by a caller that is in a hurry —
-/// the app once looked frozen while a key silently waited to be tapped, and this is what
-/// stops that from happening again. The silent waits — PIN verification, deletion — go
-/// through `withBusy` for the same reason: a screen that stays put while the key is being
-/// asked reads as "nothing happened, type it again".
-///
-/// One gate for the whole application. `isWorking` is therefore app-wide — two windows may
-/// not start key operations on top of each other — while what is *drawn* is per surface.
+/// App-wide operation ownership with per-surface prompts.
+/// Use withTouchPrompt for touch operations and withBusy for silent waits.
 @MainActor
 final class TouchGate: ObservableObject {
 
@@ -24,6 +15,10 @@ final class TouchGate: ObservableObject {
     /// What the app is doing while it makes the user wait, when no key touch is involved.
     @Published private(set) var busyTitle: String?
 
+    @Published private(set) var isCancelling = false
+
+    private var owner: OperationLease?
+
     init() {}
 
     /// The prompt the panel draws — nil when the wait belongs to another window.
@@ -34,40 +29,50 @@ final class TouchGate: ObservableObject {
     var decryptorPrompt: TouchPrompt? { surface == .decryptor ? prompt : nil }
     var panelBusyTitle: String? { surface == .panel ? busyTitle : nil }
     /// Whether the panel is in the middle of something — the reason it refuses to close.
-    var isPanelBusy: Bool { isWorking && surface == .panel }
+    var isPanelBusy: Bool { isWorking && owner?.isValid == true && surface == .panel }
 
-    /// Runs `body` with the prompt up, and takes it down whatever happens.
     func withTouchPrompt<T>(_ prompt: TouchPrompt,
                             surface: TouchSurface = .panel,
-                            _ body: () async throws -> T) async rethrows -> T {
-        self.surface = surface
-        self.prompt = prompt
-        isWorking = true
-        defer {
-            self.prompt = nil
-            isWorking = false
-        }
-        return try await body()
+                            _ body: () async throws -> T) async throws -> T {
+        try await run(surface: surface, prompt: prompt, title: nil, body)
     }
 
-    /// Runs `body` as a silent wait with a title for the screen to show.
     func withBusy<T>(_ title: String,
                      surface: TouchSurface = .panel,
-                     _ body: () async throws -> T) async rethrows -> T {
+                     _ body: () async throws -> T) async throws -> T {
+        try await run(surface: surface, prompt: nil, title: title, body)
+    }
+
+    private func run<T>(surface: TouchSurface, prompt: TouchPrompt?, title: String?,
+                        _ body: () async throws -> T) async throws -> T {
+        guard owner == nil else { throw CancellationError() }
+        let token = OperationLease()
+        owner = token
         self.surface = surface
+        self.prompt = prompt
         busyTitle = title
+        isCancelling = false
         isWorking = true
         defer {
-            busyTitle = nil
-            isWorking = false
+            if owner === token {
+                owner = nil
+                self.prompt = nil
+                busyTitle = nil
+                isWorking = false
+                isCancelling = false
+            }
         }
-        return try await body()
+        return try await KeyOperationContext.$lease.withValue(token) {
+            let result = try await body()
+            try KeyOperationContext.check(token)
+            return result
+        }
     }
 
     /// Replaces what the prompt says while it is up — a multi-touch operation naming the
     /// step it is on. The title, the key and the clock stay as they are.
-    func updatePrompt(message: String) {
-        guard var current = prompt else { return }
+    func updatePrompt(message: String, ownedBy token: OperationLease?) {
+        guard let token, owner === token, token.isValid, var current = prompt else { return }
         current.message = message
         prompt = current
     }
@@ -78,7 +83,11 @@ final class TouchGate: ObservableObject {
     /// so the operation itself finishes in the background — its result is simply discarded
     /// and never reaches the clipboard.
     func abandonTouch() {
+        guard let owner else { return }
+        owner.invalidate()
         prompt = nil
-        isWorking = false
+        isCancelling = true
+        busyTitle = "Finishing cancelled operation…"
+        // Ownership lasts until the synchronous call actually returns.
     }
 }

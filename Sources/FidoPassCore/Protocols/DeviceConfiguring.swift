@@ -1,13 +1,11 @@
 import Foundation
 
-/// The authenticator's own settings — CTAP 2.1 `authenticatorConfig`.
-///
-/// Separate from `DeviceManaging`, which is PIN and reset. These change how the key behaves
-/// from now on rather than what it holds, and two of them cannot be undone, so they are
-/// grouped where that can be said once and enforced by the type.
-///
-/// Every one of them needs the PIN. None of them needs a touch — verified on hardware.
+/// CTAP 2.1 authenticatorConfig operations. Require a PIN and no touch.
+/// Minimum PIN length and enterprise attestation have irreversible effects without reset.
 public protocol DeviceConfiguring: Sendable {
+    /// Reads, changes only if needed, then verifies the requested state on the same handle.
+    func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange
+
     /// Flips `alwaysUv`: whether the key insists on user verification for *every* operation,
     /// including ones a relying party asked to be allowed without it.
     ///

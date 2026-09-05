@@ -1,22 +1,8 @@
 import Foundation
 
-/// A sealed message, as a link.
-///
-/// ```
-/// https://fidopass.org/link#hpkeblobv1?nonce=<43>&idfp=<22>&content=<base64url>    (≥ 187 chars)
-/// fidopass://hpkeblobv1?nonce=<43>&idfp=<22>&content=<base64url>                   (≥ 172 chars)
-/// content = enc(32) ‖ ciphertext ‖ tag(16)
-/// ```
-///
-/// The nonce and the locator are copied from the key the message was sealed under: they are
-/// what the receiving side needs to find the account and re-derive the private key. There is
-/// no checksum — the AEAD tag inside `content` is the integrity check, and it can only be
-/// verified after a touch — so the syntax is all that can be checked before one.
-///
-/// Two consequences worth knowing. Every message under one key carries the same nonce, so
-/// messages to the same key are visibly to the same key; that is the price of keeping no
-/// state at all on the receiving side. And an empty text still seals to a `content` of 48
-/// bytes, so "an empty message" and "no message" cannot be confused.
+/// Public sealed-message link: nonce and locator identify the receiving key; content is
+/// enc(32 bytes) || ciphertext || tag(16 bytes). Empty plaintext still has 48 content bytes.
+/// The AEAD tag checks integrity only after key derivation. See docs/crypto.md §7.1.
 public struct SealedMessageURL: Hashable, Sendable {
     public static let host = "hpkeblobv1"
     public static let encapsulatedKeyByteCount = 32
@@ -31,6 +17,9 @@ public struct SealedMessageURL: Hashable, Sendable {
     public init(nonce: Data, locator: AccountLocator, content: Data) throws {
         guard nonce.count == EncryptionKeyURL.nonceByteCount else {
             throw FidoPassError.invalidState("Nonce must be \(EncryptionKeyURL.nonceByteCount) bytes")
+        }
+        guard content.count <= MessageLimits.maxPlaintextBytes + Self.minimumContentByteCount else {
+            throw FidoPassError.invalidState("Message exceeds the 1 MiB UTF-8 limit")
         }
         guard content.count >= Self.minimumContentByteCount else {
             throw FidoPassError.invalidState("Content must be at least \(Self.minimumContentByteCount) bytes")

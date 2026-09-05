@@ -1,20 +1,15 @@
 import SwiftUI
 import FidoPassCore
 
-/// The settings the authenticator itself will let you change — CTAP 2.1 `authenticatorConfig`.
-///
-/// Only what *this* key advertises is offered. A control for a subcommand the key does not
-/// implement can only ever fail, so an unsupported setting is shown as a greyed line that
-/// says the key cannot do it, not as a switch that throws.
-///
-/// Two of the four cannot be undone. Those are behind a typed confirmation, the same shape
-/// the reset wizard uses, because "irreversible" in a footnote next to a live switch is a
-/// footnote nobody reads.
+/// Controls only advertised authenticator settings. Minimum PIN length and enterprise
+/// attestation require confirmation because reset is needed to undo them.
 struct AuthenticatorSettingsView: View {
     let info: AuthenticatorInfo
+    let deviceName: String
+    @Binding var hasDraft: Bool
     let isUnlocked: Bool
     let onUnlock: () -> Void
-    let onToggleAlwaysUV: () -> Void
+    let onToggleAlwaysUV: (Bool) -> Void
     let onRaiseMinimumPIN: (Int) -> Void
     let onForcePINChange: () -> Void
     let onEnableEnterpriseAttestation: () -> Void
@@ -44,7 +39,7 @@ struct AuthenticatorSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ManagerSectionHeader(title: "Settings",
+            ManagerSectionHeader(title: "Settings — \(deviceName)",
                                  note: "What this authenticator will let you change about itself. Each needs the PIN; none needs a touch.")
 
             if !info.supportsConfiguration {
@@ -60,6 +55,9 @@ struct AuthenticatorSettingsView: View {
         }
         .disabled(isBusy)
         .onAppear { pendingMinimum = max(currentMinimum + 1, PinPolicy.ctapFloor + 1) }
+        .onChange(of: isRaising) { updateDraftState() }
+        .onChange(of: confirming?.id) { updateDraftState() }
+        .onDisappear { hasDraft = false }
         .alert(item: $confirming) { confirmation in confirmationAlert(confirmation) }
     }
 
@@ -138,19 +136,14 @@ struct AuthenticatorSettingsView: View {
                 explanation: "With this on the key asks for its PIN on every operation, even ones a website said could be done without it. FidoPass already requires the PIN, so this mainly affects other software using the same key. Reversible.",
                 supported: info.canToggleAlwaysUV,
                 unsupportedNote: "This key does not offer the alwaysUv option.") {
-            Toggle("", isOn: Binding(get: { info.alwaysUV }, set: { _ in onToggleAlwaysUV() }))
+            Toggle("", isOn: Binding(get: { info.alwaysUV }, set: { onToggleAlwaysUV($0) }))
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .disabled(!isUnlocked)
         }
     }
 
-    /// The minimum PIN length is a one-way door, and the control has to look like one.
-    ///
-    /// It was previously a stepper whose lower bound was the current value, so pressing "down"
-    /// did nothing and the whole thing read as broken. The value cannot be lowered — not by
-    /// this app, not by any other, because CTAP has no command for it — so the current value
-    /// is shown as a fact and the control is explicitly for choosing a *new, larger* one.
+    /// Shows the current minimum separately; CTAP only permits increases without reset.
     @ViewBuilder
     private var minimumPIN: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -267,20 +260,22 @@ struct AuthenticatorSettingsView: View {
         Divider()
     }
 
+    private func updateDraftState() { hasDraft = isRaising || confirming != nil }
+
     private func confirmationAlert(_ confirmation: Confirmation) -> Alert {
         switch confirmation {
         case .minimumPIN(let value):
-            return Alert(title: Text("Raise the minimum PIN length to \(value)?"),
+            return Alert(title: Text("Raise minimum PIN to \(value) on \(deviceName)?"),
                          message: Text("This cannot be undone. The minimum can never be lowered again, on this key, by any software. If your current PIN is shorter than \(value) the key will demand a new one before it does anything else."),
                          primaryButton: .destructive(Text("Raise")) { onRaiseMinimumPIN(value) },
                          secondaryButton: .cancel())
         case .forcePINChange:
-            return Alert(title: Text("Require a new PIN?"),
+            return Alert(title: Text("Require a new PIN on \(deviceName)?"),
                          message: Text("The key will refuse every operation — including generating passwords — until you set a new PIN."),
                          primaryButton: .destructive(Text("Require")) { onForcePINChange() },
                          secondaryButton: .cancel())
         case .enterpriseAttestation:
-            return Alert(title: Text("Enable enterprise attestation?"),
+            return Alert(title: Text("Enable enterprise attestation on \(deviceName)?"),
                          message: Text("This cannot be undone. The key will be able to identify itself individually to relying parties that request it."),
                          primaryButton: .destructive(Text("Enable")) { onEnableEnterpriseAttestation() },
                          secondaryButton: .cancel())

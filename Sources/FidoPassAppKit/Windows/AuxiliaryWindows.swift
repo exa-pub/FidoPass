@@ -13,7 +13,10 @@ final class AuxiliaryWindows {
     private unowned let container: AppContainer
     private let hotkey: HotkeyRegistration
     private let launchAtLogin: LaunchAtLoginService
+    /// One model for both windows that show update settings, so they never disagree.
+    private lazy var updates = UpdateModel(service: container.updates)
 
+    private var encryptionKeyWindow: NSWindow?
     private var encryptorWindow: NSWindow?
     private var encryptStore: MessageEncryptStore?
     private var decryptorWindow: NSWindow?
@@ -31,15 +34,27 @@ final class AuxiliaryWindows {
 
     // MARK: - Messages
 
-    /// The sending window. One at a time: a key arriving while it is open — issued by the
-    /// panel, or clicked as a link — goes into the window that is there.
-    func showEncryptor(key: EncryptionKeyURL?, issuedFor account: Account?) {
+    func showEncryptionKey(_ key: EncryptionKeyURL, for account: Account) {
+        encryptionKeyWindow?.close()
+        let view = ShareEncryptionKeyView(key: key, account: account) { [weak self] in
+            self?.encryptionKeyWindow?.close()
+            self?.showEncryptor(key: key)
+        }
+            .environment(\.clipboard, container.clipboard)
+        let window = makeWindow(title: "Share encryption key", content: AnyView(view), size: nil, resizable: false)
+        onClose(of: window) { [weak self] in self?.encryptionKeyWindow = nil }
+        encryptionKeyWindow = window
+        present(window)
+    }
+
+    /// Explicitly choosing a key fills the sender; issuing a key alone never touches it.
+    func showEncryptor(key: EncryptionKeyURL?) {
         if let encryptorWindow, let encryptStore {
-            if let key { encryptStore.adopt(key, issuedFor: account) }
+            if let key { encryptStore.adopt(key) }
             present(encryptorWindow)
             return
         }
-        let store = MessageEncryptStore(sealer: container.accounts.messages, prefilled: key, issuedFor: account)
+        let store = MessageEncryptStore(sealer: container.accounts.messages, prefilled: key)
         let view = EncryptMessageView(store: store)
             .environment(\.clipboard, container.clipboard)
         let window = makeWindow(title: "Encrypt a message",
@@ -99,11 +114,14 @@ final class AuxiliaryWindows {
         let view = PreferencesView(preferences: container.preferences,
                                    labels: container.labels,
                                    hotkey: hotkey,
-                                   launchAtLogin: launchAtLogin)
+                                   launchAtLogin: launchAtLogin,
+                                   updates: updates)
+        let visible = (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
         let window = makeWindow(title: "FidoPass Settings",
                                 content: AnyView(view),
-                                size: nil,
-                                resizable: false)
+                                size: NSSize(width: 460, height: min(640, visible.height - 80)),
+                                resizable: true)
+        window.setFrame(WindowPlacement.clamped(window.frame, to: visible), display: false)
         onClose(of: window) { [weak self] in self?.preferencesWindow = nil }
         preferencesWindow = window
         present(window)
@@ -114,7 +132,8 @@ final class AuxiliaryWindows {
     /// The manager is a window rather than a HUD screen: the panel is 340pt wide and
     /// optimised for the shortest path to a password, and a table of every credential on a
     /// key is neither of those things.
-    func showAuthenticatorManager() {
+    func showAuthenticatorManager(devicePath: String? = nil) {
+        Task { await container.manager.managerDidOpen(devicePath: devicePath) }
         if let managerWindow {
             present(managerWindow)
             return
@@ -128,7 +147,10 @@ final class AuxiliaryWindows {
                                 content: AnyView(view),
                                 size: NSSize(width: 960, height: 620),
                                 resizable: true)
-        onClose(of: window) { [weak self] in self?.managerWindow = nil }
+        onClose(of: window) { [weak self] in
+            self?.container.manager.managerDidClose()
+            self?.managerWindow = nil
+        }
         managerWindow = window
         present(window)
     }
@@ -142,6 +164,7 @@ final class AuxiliaryWindows {
         }
         let view = OnboardingView(preferences: container.preferences,
                                   launchAtLogin: launchAtLogin,
+                                  updates: updates,
                                   onFinish: { [weak self] in
                                       onFinish()
                                       self?.closeOnboarding()
@@ -195,8 +218,12 @@ final class AuxiliaryWindows {
     }
 
     private func onClose(of window: NSWindow, perform action: @escaping () -> Void) {
-        let delegate = WindowCloseDelegate(action: action)
-        delegates[ObjectIdentifier(window)] = delegate
+        let id = ObjectIdentifier(window)
+        let delegate = WindowCloseDelegate { [weak self] in
+            action()
+            self?.delegates.removeValue(forKey: id)
+        }
+        delegates[id] = delegate
         window.delegate = delegate
     }
 }

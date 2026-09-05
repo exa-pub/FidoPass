@@ -7,23 +7,37 @@ import UniformTypeIdentifiers
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
 
+    #if FIDOPASS_VIRTUAL_KEYS
+    var virtualDevicesWindow: (() -> NSWindow?)?
+    nonisolated(unsafe) private var virtualFocusObserver: NSObjectProtocol?
+    #endif
+
     private let store: PanelStore
     private let devices: DeviceStore
     private let generation: GenerationStore
     private let touchGate: TouchGate
+    private let updates: any UpdateService
     private var statusItem: NSStatusItem?
     private var panel: PanelWindow?
+    private var recoverySavePanel: NSSavePanel?
     private var hosting: NSHostingController<PanelRootView>?
     // Removed in `deinit`, which is not isolated; never touched anywhere else.
     nonisolated(unsafe) private var resignObserver: NSObjectProtocol?
     private var iconSubscription: AnyCancellable?
+    private var updatesSubscription: AnyCancellable?
 
     init(container: AppContainer) {
         self.store = container.panel
         self.devices = container.devices
         self.generation = container.generation
         self.touchGate = container.touchGate
+        self.updates = container.updates
         super.init()
+
+        // An update waiting in the menu is the other thing the icon's dot announces.
+        updatesSubscription = container.updates.statePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateIcon() }
 
         // The icon is a function of store state, so it follows the stores instead of being
         // told. `objectWillChange` fires before the change lands, hence the hop to the next
@@ -66,10 +80,22 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     private func showStatusMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
+        // An update is the first item, and only while there is one: the dot on the icon
+        // needs exactly one obvious thing to click. The click is the consent; nothing asks
+        // again. While it installs, the item stays, disabled, so the dot's absence is
+        // explained.
+        if let title = updates.state.menuTitle {
+            let update = NSMenuItem(title: title, action: #selector(menuInstallUpdate), keyEquivalent: "")
+            update.target = self
+            update.isEnabled = updates.state.offersInstall
+            menu.addItem(update)
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Open FidoPass", action: #selector(menuOpen), keyEquivalent: "").target = self
         let copy = NSMenuItem(title: copyItemTitle, action: #selector(menuCopyPassword), keyEquivalent: "")
         copy.target = self
-        copy.isEnabled = store.selection != nil
+        copy.isEnabled = store.selection != nil && store.labelEditor.canGenerate
         menu.addItem(copy)
         menu.addItem(.separator())
         menu.addItem(withTitle: "New account…", action: #selector(menuNewAccount), keyEquivalent: "").target = self
@@ -83,8 +109,17 @@ final class PanelController: NSObject, NSWindowDelegate {
         menu.addItem(withTitle: "Save recovery sheet…", action: #selector(menuRecoverySheet), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Backup key…", action: #selector(menuBackupKey), keyEquivalent: "").target = self
         menu.addItem(.separator())
+        if let title = store.temporaryUV.menuTitle(for: store.selectedDevice) {
+            let temporaryUV = NSMenuItem(title: title, action: #selector(menuTemporaryUV), keyEquivalent: "")
+            temporaryUV.target = self
+            temporaryUV.isEnabled = store.temporaryUV.canPerformAction(for: store.selectedDevice)
+            menu.addItem(temporaryUV)
+        }
         menu.addItem(withTitle: "Lock key", action: #selector(menuLock), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Preferences…", action: #selector(menuPreferences), keyEquivalent: ",").target = self
+        #if FIDOPASS_VIRTUAL_KEYS
+        menu.addItem(withTitle: "Virtual Devices…", action: #selector(menuVirtualDevices), keyEquivalent: "").target = self
+        #endif
         menu.addItem(withTitle: "Quit FidoPass", action: #selector(menuQuit), keyEquivalent: "q").target = self
 
         statusItem?.menu = menu
@@ -97,14 +132,20 @@ final class PanelController: NSObject, NSWindowDelegate {
         return "Copy password for \(selection.accountId)"
     }
 
+    #if FIDOPASS_VIRTUAL_KEYS
+    @objc private func menuVirtualDevices() { store.openVirtualDevices() }
+    #endif
+
     @objc private func menuOpen() { show() }
     @objc private func menuNewAccount() { show(intent: .enroll) }
     @objc private func menuLock() { store.lockSelectedKey() }
+    @objc private func menuTemporaryUV() { store.temporaryUVAction() }
     @objc private func menuPreferences() { store.openPreferences() }
     @objc private func menuQuit() { store.quit() }
+    @objc private func menuInstallUpdate() { updates.install() }
 
     @objc private func menuCopyPassword() {
-        guard let ref = store.selection else { show(); return }
+        guard let ref = store.selection, store.labelEditor.canGenerate else { show(); return }
         show(intent: .copyPassword(ref, label: store.labelEditor.current))
     }
 
@@ -129,12 +170,14 @@ final class PanelController: NSObject, NSWindowDelegate {
     func updateIcon() {
         let state = store.iconState
         guard let button = statusItem?.button else { return }
+        let update = updates.state.offersInstall ? updates.state.candidate?.version : nil
         button.image = StatusItemIcon.image(for: state)
-        button.toolTip = StatusItemIcon.description(for: state)
+        button.toolTip = StatusItemIcon.tooltip(for: state, update: update)
         // "Unlocked" and "a secret is on the clipboard" draw the same key symbol, so the
         // second state gets a dot: it is one of the two things the user would otherwise have
-        // to open the HUD to check.
-        button.title = StatusItemIcon.badgeVisible(for: state) ? " •" : ""
+        // to open the HUD to check. An update waiting in the menu uses the same dot — one
+        // signal for "there is something in the menu"; the tooltip and the menu say which.
+        button.title = StatusItemIcon.badgeVisible(for: state, updateOffered: update != nil) ? " •" : ""
         button.imagePosition = button.title.isEmpty ? .imageOnly : .imageLeading
     }
 
@@ -144,7 +187,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         if panel?.isVisible == true { hide() } else { show() }
     }
 
-    func show(intent: PanelIntent? = nil) {
+    func show(intent: PanelIntent? = nil, readKey: Bool = true) {
         let panel = ensurePanel()
         position(panel)
         // An accessory app has no windows of its own to activate, so without this the panel
@@ -154,7 +197,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         // The first placement uses the panel's placeholder height, because SwiftUI has not
         // laid the content out yet. Place it again once it has.
         DispatchQueue.main.async { [weak self] in self?.position(panel) }
-        Task { await store.prepareForDisplay(intent: intent) }
+        Task { await store.prepareForDisplay(intent: intent, readKey: readKey) }
     }
 
     func hide() {
@@ -169,6 +212,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         controller.sizingOptions = [.preferredContentSize]
         let panel = PanelWindow(contentViewController: controller)
         panel.delegate = self
+        panel.onClose = { [weak self] in self?.hide() }
         panel.onCancel = { [weak self] in
             guard let self else { return }
             // On a pushed screen Escape means "back"; only on the top level does it close
@@ -183,12 +227,24 @@ final class PanelController: NSObject, NSWindowDelegate {
                                                                queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleResignKey() }
         }
+        #if FIDOPASS_VIRTUAL_KEYS
+        virtualFocusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
+                                                                      object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.panel?.isKeyWindow != true else { return }
+                self.handleResignKey()
+            }
+        }
+        #endif
         return panel
     }
 
     /// Clicking away closes the HUD — unless it is in the middle of something the user
     /// cannot get back with one click.
     private func handleResignKey() {
+        #if FIDOPASS_VIRTUAL_KEYS
+        if let virtual = virtualDevicesWindow?(), virtual.isKeyWindow { return }
+        #endif
         guard !isSticky else { return }
         hide()
     }
@@ -230,34 +286,40 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     // MARK: - Recovery sheet
 
-    /// Runs as a sheet on the HUD panel.
-    ///
-    /// A modal save panel from an accessory app would drop the HUD behind it and, because
-    /// the panel loses key, close it outright — losing the screen the user started from.
+    /// A standalone system panel owns its geometry independently of the narrow HUD.
     func presentSavePanel(for sheet: RecoverySheet) {
-        guard let panel else { return }
+        guard recoverySavePanel == nil else { return }
+        guard let panel else {
+            store.recoverySheetFinished(saved: false)
+            return
+        }
         let savePanel = NSSavePanel()
+        recoverySavePanel = savePanel
         savePanel.nameFieldStringValue = sheet.suggestedFileName
         savePanel.allowedContentTypes = [.plainText]
         savePanel.message = "This sheet contains no passwords, PIN or backup key."
-        savePanel.beginSheetModal(for: panel) { [weak self] response in
+        savePanel.begin { [weak self, weak savePanel] response in
             Task { @MainActor in
-                guard let self else { return }
-                guard response == .OK, let url = savePanel.url else {
-                    self.store.recoverySheetFinished(saved: false)
-                    return
+                guard let self, let savePanel, self.recoverySavePanel === savePanel else { return }
+                var saved = false
+                var failure: String?
+                if response == .OK, let url = savePanel.url {
+                    do {
+                        try sheet.render().write(to: url, atomically: true, encoding: .utf8)
+                        saved = true
+                    } catch { failure = error.localizedDescription }
                 }
-                do {
-                    try sheet.render().write(to: url, atomically: true, encoding: .utf8)
-                    self.store.recoverySheetFinished(saved: true)
-                } catch {
-                    self.store.recoverySheetFinished(saved: false, failure: error.localizedDescription)
-                }
+                self.recoverySavePanel = nil
+                panel.makeKeyAndOrderFront(nil)
+                self.store.recoverySheetFinished(saved: saved, failure: failure)
             }
         }
     }
 
     deinit {
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        #if FIDOPASS_VIRTUAL_KEYS
+        if let virtualFocusObserver { NotificationCenter.default.removeObserver(virtualFocusObserver) }
+        #endif
     }
 }

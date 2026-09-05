@@ -1,25 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// From an account and a nonce to an X25519 key pair — see `MessageKeyDeriving`.
-///
-/// ```
-/// secret_local    = hmac-secret(cred, SaltFactory.messageSalt(nonce))                 // 32 raw bytes
-/// secret_portable = HMAC-SHA256(key: fixed ⊕ mask, SaltFactory.messageSalt(nonce))
-/// ikm             = argon2id("fidopass|hpke|ikm|v1" ‖ secret, salt: nonce, 32 bytes)
-/// (sk, pk)        = DHKEM(X25519, HKDF-SHA256).DeriveKeyPair(ikm)                      // RFC 9180 §7.1.3
-/// ```
-///
-/// `secret` is what the authenticator answered, byte for byte — never a password, never
-/// anything `PasswordGenerator` produces. The two derivations share the credential and
-/// nothing else: different salt domains, so a password and a message key cannot be computed
-/// from one another. argon2id on the way to `ikm` adds nothing to 256 bits of device
-/// randomness except time, and the time is deliberate; from `ikm` on, the key pair is the
-/// HPKE standard's own derivation, which is what lets any other implementation arrive at the
-/// same public key.
-///
-/// The account's identity goes into the locator only. It is not an input to the key pair,
-/// which is what lets the same portable account on two keys issue the same public key.
+/// Derives a message key from raw authenticator output (local) or HMAC under the portable
+/// master key, followed by Argon2id and RFC 9180 DeriveKeyPair. Never uses a password.
+/// The account identity affects only the locator. Frozen byte definitions: docs/crypto.md §6.
 final class MessageKeyService: MessageKeyDeriving, Sendable {
     static let ikmDomain = Data("fidopass|hpke|ikm|v1".utf8)
 
@@ -35,6 +19,7 @@ final class MessageKeyService: MessageKeyDeriving, Sendable {
         guard nonce.count == EncryptionKeyURL.nonceByteCount else {
             throw FidoPassError.invalidState("Nonce must be \(EncryptionKeyURL.nonceByteCount) bytes")
         }
+        try handle.account.validateForDerivation()
         if let problem = handle.account.integrity.problem {
             throw FidoPassError.invalidState(problem)
         }

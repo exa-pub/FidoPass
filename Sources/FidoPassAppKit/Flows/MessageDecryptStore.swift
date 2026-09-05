@@ -1,13 +1,8 @@
 import Foundation
 import FidoPassCore
 
-/// The receiving window: a sealed message in, its text out. Bound to one security key.
-///
-/// Pasting a message costs nothing on the key: the account it is for is found by locator
-/// from the accounts already read, and the window says which one before anything is
-/// touched. Decrypting is an explicit button — a touch is a physical act, not a side effect
-/// of a paste — and the key it derives is kept for the window's life, so a second message
-/// under the same nonce opens without another touch.
+/// Receiving-window state bound to one key. Pasting only locates an account; decrypting
+/// requires a button press. Derived keys are cached per credential and nonce until close.
 @MainActor
 final class MessageDecryptStore: ObservableObject {
 
@@ -40,7 +35,11 @@ final class MessageDecryptStore: ObservableObject {
     private let accounts: AccountStore
     private let touchGate: TouchGate
     /// Keys derived so far, by nonce. One touch each; wiped when the window closes.
-    private var keys: [Data: MessageKey] = [:]
+    private var keys: [MessageCacheKey: MessageKey] = [:]
+    private var lifetime = OperationLease()
+    private var revision: UInt64 = 0
+    private var parsing: Task<Void, Never>?
+    var isParsing: Bool { parsing != nil }
     private var locating: Task<Void, Never>?
     private var applyingProgrammaticEdit = false
 
@@ -84,35 +83,51 @@ final class MessageDecryptStore: ObservableObject {
     // MARK: - Reading the message
 
     private func sealedTextEdited(from oldValue: String) {
-        guard !applyingProgrammaticEdit, oldValue != sealedText else { return }
+        guard !applyingProgrammaticEdit, !oldValue.utf8.elementsEqual(sealedText.utf8) else { return }
+        revision += 1
         // Whatever was decrypted belonged to the previous message.
         plaintext = ""
         error = nil
         guard !sealedText.isEmpty else {
+            parsing?.cancel()
             locating?.cancel()
             message = nil
             account = nil
             status = .empty
             return
         }
-        do {
-            accept(try SealedMessageURL(parsing: sealedText))
-        } catch let known as MessageCryptoError {
-            locating?.cancel()
-            message = nil
-            account = nil
-            status = known == .incomplete ? .incomplete : .invalid(known)
-        } catch {
-            locating?.cancel()
-            message = nil
-            account = nil
-            status = .invalid(.notFidoPassURL)
+        parsing?.cancel()
+        locating?.cancel()
+        let text = sealedText
+        let inputRevision = revision
+        let token = lifetime
+        message = nil
+        account = nil
+        status = .incomplete
+        parsing = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            let outcome = await MessageCryptoWorker.shared.result { try SealedMessageURL(parsing: text) }
+            guard let self, !Task.isCancelled, token.isValid, self.revision == inputRevision else { return }
+            self.parsing = nil
+            switch outcome {
+            case .success(let message): self.accept(message)
+            case .failure(let error):
+                if let known = error as? MessageCryptoError {
+                    self.status = known == .incomplete ? .incomplete : .invalid(known)
+                } else {
+                    self.status = .invalid(.notFidoPassURL)
+                    self.error = .plain(error.localizedDescription)
+                }
+            }
         }
     }
 
     /// Finds the account the message is for. Nothing on the key is asked; the locators are
     /// computed from what the panel already read, one argon2id per account, off the main actor.
     private func accept(_ parsed: SealedMessageURL) {
+        revision += 1
+        let token = lifetime
         locating?.cancel()
         message = parsed
         account = nil
@@ -126,7 +141,7 @@ final class MessageDecryptStore: ObservableObject {
             } catch {
                 found = nil
             }
-            guard !Task.isCancelled, self.message == parsed else { return }
+            guard !Task.isCancelled, token.isValid, self.message == parsed else { return }
             self.account = found
             self.status = found.map { .ready(accountId: $0.id) } ?? .noMatchingAccount
         }
@@ -138,9 +153,12 @@ final class MessageDecryptStore: ObservableObject {
     func decrypt() async {
         guard canDecrypt, let message, let account else { return }
         error = nil
+        let token = lifetime
+        let inputRevision = revision
+        let cacheKey = MessageCacheKey(credentialId: account.credentialIdB64, nonce: message.nonce)
         do {
-            let key: MessageKey
-            if let cached = keys[message.nonce] {
+            var key: MessageKey
+            if let cached = keys[cacheKey] {
                 key = cached
             } else {
                 key = try await touchGate.withTouchPrompt(TouchPrompt(title: "Touch your security key",
@@ -149,16 +167,23 @@ final class MessageDecryptStore: ObservableObject {
                                                           surface: .decryptor) {
                     try await self.accounts.deriveMessageKey(for: account, nonce: message.nonce)
                 }
-                keys[message.nonce] = key
+                guard token.isValid, inputRevision == revision else { key.wipe(); return }
+                keys[cacheKey] = key
             }
-            guard self.message == message else { return }
+            guard token.isValid, inputRevision == revision, self.message == message else { return }
             status = .decrypting
-            plaintext = try accounts.messages.open(message, with: key)
+            let sealer = accounts.messages
+            let decryptionKey = key
+            let opened = try await MessageCryptoWorker.shared.run { try sealer.open(message, with: decryptionKey) }
+            guard token.isValid, inputRevision == revision else { return }
+            plaintext = opened
             status = .decrypted(accountId: account.id)
         } catch let known as MessageCryptoError {
+            guard token.isValid, inputRevision == revision else { return }
             status = .ready(accountId: account.id)
             error = .plain(known.localizedDescription)
         } catch {
+            guard token.isValid, inputRevision == revision, !(error is CancellationError) else { return }
             status = .ready(accountId: account.id)
             self.error = PresentedError(error)
         }
@@ -170,6 +195,9 @@ final class MessageDecryptStore: ObservableObject {
 
     /// Drops the message and its text; the keys stay for the next one.
     func clear() {
+        parsing?.cancel()
+        parsing = nil
+        revision += 1
         locating?.cancel()
         applyingProgrammaticEdit = true
         sealedText = ""
@@ -183,6 +211,9 @@ final class MessageDecryptStore: ObservableObject {
 
     /// Ends the session: no text, no keys.
     func close() {
+        lifetime.invalidate()
+        lifetime = OperationLease()
+        if touchGate.surface == .decryptor { touchGate.abandonTouch() }
         clear()
         for nonce in keys.keys { keys[nonce]?.wipe() }
         keys = [:]

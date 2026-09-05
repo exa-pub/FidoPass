@@ -10,7 +10,8 @@ struct PreferencesView: View {
     @ObservedObject var labels: LabelStore
     @ObservedObject var hotkey: HotkeyRegistration
     let launchAtLogin: LaunchAtLoginService
-    @State private var startsAtLogin = false
+    @ObservedObject var updates: UpdateModel
+    @State private var confirmsClearHistory = false
 
     var body: some View {
         Form {
@@ -40,7 +41,7 @@ struct PreferencesView: View {
             Section {
                 Picker("Lock the key after", selection: $preferences.lockTimeout) {
                     ForEach(Preferences.lockTimeoutChoices, id: \.self) { timeout in
-                        Text(Self.timeoutLabel(timeout)).tag(timeout)
+                        Text(Preferences.timeoutLabel(timeout)).tag(timeout)
                     }
                 }
             } header: {
@@ -53,7 +54,7 @@ struct PreferencesView: View {
             }
 
             Section {
-                Toggle("Preselect the last account and label", isOn: $preferences.rememberLastUsed)
+                Toggle("Preselect the last account", isOn: $preferences.rememberLastUsed)
 
                 LabeledContent("Preselected") {
                     HStack(spacing: 8) {
@@ -67,14 +68,14 @@ struct PreferencesView: View {
             } header: {
                 Text("What FidoPass remembers")
             } footer: {
-                Text("The one account and label the HUD opens on, so the usual password is one keypress away. Stored on this Mac only.")
+                Text("The last selected credential. Label history is stored separately below. Stored on this Mac only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
-                if labels.histories.isEmpty {
+                if !labels.hasHistory {
                     Text("No labels used yet")
                         .foregroundStyle(.secondary)
                 } else {
@@ -89,7 +90,7 @@ struct PreferencesView: View {
                         }
                         ForEach(group.entries) { entry in
                             LabeledContent {
-                                Text(entry.labels.joined(separator: ", "))
+                                Text(entry.labels.map(LabelDisplay.text).joined(separator: ", "))
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.trailing)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -100,16 +101,20 @@ struct PreferencesView: View {
                         }
                     }
 
+                    if labels.hasLegacyHistory {
+                        Text("Unassigned labels from an earlier version are also stored on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     HStack {
                         Spacer()
-                        Button("Clear label history") { labels.clearAll() }
+                        Button("Clear label history…") { confirmsClearHistory = true }
                     }
                 }
             } header: {
                 Text("Label history")
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Labels are kept per account — offered under another account, a label would derive a password that is valid and wrong. They sync through iCloud when available, together with the account ids they are grouped by.")
+                    Text("Label history is stored on this Mac, separately for each account.")
                     Text("Nothing here is a secret: no password, PIN or backup key is written anywhere. But a forgotten label makes its password unreproducible even with the key in hand, which is what the recovery sheet is for.")
                 }
                 .font(.caption)
@@ -118,11 +123,7 @@ struct PreferencesView: View {
             }
 
             Section {
-                Toggle("Launch at login", isOn: Binding(get: { startsAtLogin },
-                                                        set: { newValue in
-                                                            startsAtLogin = newValue
-                                                            launchAtLogin.setEnabled(newValue)
-                                                        }))
+                LaunchAtLoginToggle("Launch at login", service: launchAtLogin)
                 Toggle("Show in Dock", isOn: $preferences.showInDock)
             } header: {
                 Text("Startup")
@@ -133,10 +134,67 @@ struct PreferencesView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // The only place an update has any detail. The menu bar shows a dot, the menu
+            // one item; every state, including failure, is a sentence here — never a window.
+            Section {
+                LabeledContent("Version") {
+                    Text(updates.version.display)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if updates.isAvailable {
+                    LabeledContent("Updates") {
+                        HStack(spacing: 8) {
+                            if updates.state.isInstalling {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(updates.statusText)
+                                .foregroundStyle(updateStatusColor)
+                                .multilineTextAlignment(.trailing)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if updates.state.offersInstall {
+                                Button("Update") { updates.install() }
+                            } else if !updates.state.isInstalling {
+                                Button("Check now") { updates.checkNow() }
+                                    .disabled(updates.state == .checking)
+                            }
+                        }
+                    }
+                    if let candidate = updates.state.candidate, let notes = candidate.releaseNotesURL {
+                        Link("What’s new in \(candidate.version)", destination: notes)
+                            .font(.caption)
+                    }
+                    if let hint = updates.installHint {
+                        Label(hint, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
+                    Toggle("Download updates in the background", isOn: $updates.automaticallyDownloads)
+                        .disabled(!updates.automaticallyChecks)
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text(updates.isAvailable
+                     ? "Checking is one request a day to github.com for the list of releases; nothing about you or your keys is sent. An update is signed twice — with the FidoPass release key and by Apple — and installs only when you click the dot in the menu. With background downloads on, a verified update is also installed when you quit."
+                     : "This build was made locally. Updates come with signed releases from GitHub.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        .onAppear { startsAtLogin = launchAtLogin.isEnabled }
+        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { updates.reload() }
+        .alert("Clear label history?", isPresented: $confirmsClearHistory) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear history", role: .destructive) { labels.clearAll() }
+        } message: {
+            Text("This removes labels for \(labels.histories.count) account records\(labels.hasLegacyHistory ? " and unassigned legacy labels" : "") from this Mac. A forgotten label can make its password impossible to reproduce. Save the recovery sheets you need from each account’s menu first. Accounts on your keys are kept.")
+        }
     }
 
     /// One key's histories, under the name that key gave when they were recorded — which is
@@ -170,13 +228,12 @@ struct PreferencesView: View {
         }
     }
 
-    private static func timeoutLabel(_ timeout: TimeInterval) -> String {
-        let minutes = Int(timeout / 60)
-        if minutes % 60 == 0 {
-            let hours = minutes / 60
-            return hours == 1 ? "1 hour" : "\(hours) hours"
+    private var updateStatusColor: Color {
+        switch updates.state {
+        case .failed: return .orange
+        case .available, .readyToInstall: return .primary
+        default: return .secondary
         }
-        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
 
     private var preselectionDescription: String {

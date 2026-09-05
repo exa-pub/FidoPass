@@ -1,29 +1,15 @@
 import SwiftUI
 import AppKit
 
-/// A text view with every macOS text convenience switched off, and a mask.
-///
-/// SwiftUI's `TextEditor` inherits the system defaults, and each of them is actively
-/// harmful here:
-///
-/// - smart quotes and dash substitution silently rewrite characters, which corrupts links
-///   and changes the plaintext being sealed;
-/// - spelling, grammar and autocorrect hand the text to system services and keep it in
-///   their own buffers — for a secret, that is an unwanted copy outside this process;
-/// - data and link detection make the system parse the content looking for addresses,
-///   phone numbers and URLs.
-///
-/// None of these can be turned off through the SwiftUI API, so the text view is wrapped
-/// directly — with its own TextKit 1 stack, because the mask lives in the layout manager.
-///
-/// `isMasked` lays every character out as a bullet while leaving the view fully usable:
-/// typing, selecting, the caret and line breaks all behave, only the letters are not there.
-/// What a password field does, for many lines.
+/// TextKit editor with optional glyph masking. Disables substitutions to preserve bytes
+/// and disables spelling, grammar and detection services to avoid exporting plaintext.
 struct PlainTextEditor: NSViewRepresentable {
+    @Environment(\.clipboard) private var clipboard
     @Binding var text: String
     var isEditable: Bool = true
     var monospaced: Bool = false
     var isMasked: Bool = false
+    var isSingleLine: Bool = false
 
     func makeNSView(context: Context) -> NSScrollView {
         let storage = NSTextStorage()
@@ -31,15 +17,18 @@ struct PlainTextEditor: NSViewRepresentable {
         storage.addLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
+        container.maximumNumberOfLines = isSingleLine ? 1 : 0
+        container.lineBreakMode = isSingleLine ? .byTruncatingMiddle : .byWordWrapping
         layoutManager.addTextContainer(container)
 
-        let textView = NSTextView(frame: .zero, textContainer: container)
+        let textView = SecretTextView(frame: .zero, textContainer: container)
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
+        textView.isVerticallyResizable = !isSingleLine
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
+        textView.autoresizingMask = isSingleLine ? [.width, .height] : [.width]
 
+        textView.clipboard = clipboard
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.isEditable = isEditable
@@ -65,7 +54,7 @@ struct PlainTextEditor: NSViewRepresentable {
 
         let scrollView = NSScrollView()
         scrollView.documentView = textView
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = !isSingleLine
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         return scrollView
@@ -78,7 +67,9 @@ struct PlainTextEditor: NSViewRepresentable {
             layoutManager.isMasked = isMasked
             textView.needsDisplay = true
         }
-        guard textView.string != text else { return }
+        (textView as? SecretTextView)?.clipboard = clipboard
+        if text.isEmpty { textView.clearIncludingUndoHistory(); return }
+        guard !textView.string.utf8.elementsEqual(text.utf8) else { return }
 
         // Preserve the caret across programmatic updates, otherwise typing on one side
         // sends the cursor to the start of the other every time it is recomputed.
@@ -86,6 +77,12 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.string = text
         let bounded = NSRange(location: min(selected.location, text.utf16.count), length: 0)
         textView.setSelectedRange(bounded)
+    }
+
+    static func dismantleNSView(_ view: NSScrollView, coordinator: Coordinator) {
+        guard let text = view.documentView as? NSTextView else { return }
+        text.clearIncludingUndoHistory()
+        text.delegate = nil
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
@@ -105,13 +102,8 @@ struct PlainTextEditor: NSViewRepresentable {
     }
 }
 
-/// Substitutes a bullet for every glyph while masked.
-///
-/// The substitution happens where glyphs are generated, not where they are drawn, so the
-/// layout itself is made of bullets: uniform pitch, and the caret, the selection and the
-/// line breaks all agree with what is on screen. Exactly what a password field does, for
-/// many lines. Whitespace and line breaks keep their own glyphs, so the shape of the text —
-/// words, lines, paragraphs — stays readable without a letter of it.
+/// Masks glyphs during layout so caret and selection match the visible bullets.
+/// Whitespace and line breaks retain their glyphs.
 final class MaskingLayoutManager: NSLayoutManager {
     var isMasked = false {
         didSet {

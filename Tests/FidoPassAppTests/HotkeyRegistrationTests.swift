@@ -4,7 +4,7 @@ import TestSupport
 
 /// The system shortcut follows Preferences, and is released while a new one is being typed.
 @MainActor
-final class HotkeyRegistrationTests: XCTestCase {
+final class HotkeyRegistrationTests: AppTestCase {
 
     @MainActor
     private final class FakeRegistrar: HotkeyRegistrar {

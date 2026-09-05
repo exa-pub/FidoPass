@@ -6,7 +6,6 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 cd "${PROJECT_ROOT}"
 
 VOL_NAME="FidoPass"
-DMG_NAME="FidoPass.dmg"
 BUILD_DIR=".build/release"
 APP_DIR="${BUILD_DIR}/FidoPass.app"
 STAGE_DIR=".build/dmg_stage"
@@ -26,6 +25,11 @@ if [[ "${FIDOPASS_SKIP_BUILD:-0}" == "1" ]]; then
 else
   "${SCRIPT_DIR}/build_app.sh" >/dev/null
 fi
+
+# The image is named after the bundle it carries, so two releases never share a file name
+# and an appcast enclosure points at exactly one artefact.
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${APP_DIR}/Contents/Info.plist")"
+DMG_NAME="FidoPass-${VERSION}.dmg"
 
 rm -f "${DMG_NAME}" || true
 rm -rf "${STAGE_DIR}" || true

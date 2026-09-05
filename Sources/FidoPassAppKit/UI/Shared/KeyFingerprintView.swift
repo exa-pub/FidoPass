@@ -1,12 +1,8 @@
 import SwiftUI
 import FidoPassCore
 
-/// An encryption key's fingerprint as a person compares it: six emoji in a capsule, the
-/// twelve hex digits beside them. One line — it sits under a text field, not on a poster.
-///
-/// The emoji are the whole defence against a substituted link — the fragment in the link is
-/// a checksum anyone can recompute — so the tooltip says what to do with them; the window
-/// says it once more in its footer.
+/// Six emoji and twelve hex digits for out-of-band comparison with the key owner.
+/// The checksum alone does not authenticate the link.
 struct KeyFingerprintView: View {
     let fingerprint: MessageKeyFingerprint
 

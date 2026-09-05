@@ -1,12 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The custom-label field, as an `NSTextField`.
-///
-/// SwiftUI's `TextField` does not expose the caret, and the caret is exactly what decides
-/// here: a left arrow means "move the cursor" everywhere except at the very start of the
-/// text, where it means "leave the field and go back to the chips". Guessing that from
-/// keystrokes alone is not possible, so the field is the AppKit one.
+/// AppKit label field exposing caret position: Left exits to chips only at the start.
 struct LabelTextField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
@@ -14,6 +9,7 @@ struct LabelTextField: NSViewRepresentable {
     /// Put the caret at the end rather than the start when focus arrives programmatically.
     var caretAtEnd: Bool
     var onSubmit: () -> Void
+    var onCancel: () -> Void
     /// Left arrow pressed with the caret at the start and nothing selected.
     var onExitLeft: () -> Void
     /// Right arrow pressed with the caret at the end and nothing selected.
@@ -37,7 +33,7 @@ struct LabelTextField: NSViewRepresentable {
         context.coordinator.parent = self
         // While a field editor is live it owns the text. Assigning `stringValue` underneath
         // it resets the selection and takes the caret with it.
-        if nsView.currentEditor() == nil, nsView.stringValue != text {
+        if (nsView.currentEditor() == nil || !isFocused), !nsView.stringValue.utf8.elementsEqual(text.utf8) {
             nsView.stringValue = text
         }
 
@@ -61,12 +57,7 @@ struct LabelTextField: NSViewRepresentable {
             self.parent = parent
         }
 
-        /// Takes focus and leaves a caret rather than a selection.
-        ///
-        /// `makeFirstResponder` on a text field selects its whole contents — which on a field
-        /// that already holds a draft looks like anything but a place to type. The selection
-        /// is collapsed straight after, and again on the next pass if the field editor is not
-        /// installed yet.
+        /// Focuses with a caret, collapsing AppKit’s select-all now or after the field editor appears.
         func focus(_ field: NSTextField, caretAtEnd: Bool) {
             guard !isChangingResponder else { return }
             isChangingResponder = true
@@ -156,7 +147,7 @@ struct LabelTextField: NSViewRepresentable {
                 parent.onSubmit()
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
-                parent.isFocused = false
+                parent.onCancel()
                 return true
             default:
                 return false

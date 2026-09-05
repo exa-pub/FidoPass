@@ -11,7 +11,7 @@ import TestSupport
 /// because the list names other services' accounts while the self-description is public
 /// information about the model.
 @MainActor
-final class InventoryStoreTests: XCTestCase {
+final class InventoryStoreTests: AppTestCase {
 
     private func makeStore() -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()

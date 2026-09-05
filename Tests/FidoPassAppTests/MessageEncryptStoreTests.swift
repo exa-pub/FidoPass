@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import FidoPassAppKit
 import FidoPassCore
@@ -5,13 +6,18 @@ import TestSupport
 
 /// The sending window: a link in, a message out, and nothing that needs a key.
 @MainActor
-final class MessageEncryptStoreTests: XCTestCase {
+final class MessageEncryptStoreTests: AppTestCase {
 
     private let backend = MockKeyBackend()
     private let vault = AccountHandle.fixture(id: "vault", devicePath: "/dev/one")
 
-    private func settle() async throws {
-        try await Task.sleep(for: MessageEncryptStore.debounce + .milliseconds(400))
+    private func settleKey(_ store: MessageEncryptStore) async throws {
+        var finished = false
+        let subscription = store.$keyStatus.dropFirst().sink {
+            if $0 != .verifying { finished = true }
+        }
+        defer { subscription.cancel() }
+        try await waitUntil { finished }
     }
 
     private func makeStore() -> MessageEncryptStore {
@@ -24,7 +30,7 @@ final class MessageEncryptStoreTests: XCTestCase {
         let store = makeStore()
         let key = try backend.encryptionKey(for: vault)
         store.keyText = key.absoluteString
-        try await settle()
+        try await settleKey(store)
 
         XCTAssertEqual(store.keyStatus, .valid(key.fingerprint))
         XCTAssertEqual(store.key, key)
@@ -35,7 +41,7 @@ final class MessageEncryptStoreTests: XCTestCase {
         let store = makeStore()
         let key = try backend.encryptionKey(for: vault)
         store.keyText = String(key.absoluteString.prefix(60))
-        try await settle()
+        try await settleKey(store)
 
         XCTAssertEqual(store.keyStatus, .incomplete)
         XCTAssertNil(store.key)
@@ -45,7 +51,7 @@ final class MessageEncryptStoreTests: XCTestCase {
     func testAKeyWithoutItsChecksumIsIncomplete() async throws {
         let store = makeStore()
         store.keyText = LinkCarrier.web.prefix + (try backend.encryptionKey(for: vault).payload)
-        try await settle()
+        try await settleKey(store)
 
         XCTAssertEqual(store.keyStatus, .incomplete)
     }
@@ -53,16 +59,16 @@ final class MessageEncryptStoreTests: XCTestCase {
     func testAMessageInTheKeyFieldIsNamed() async throws {
         let store = makeStore()
         store.keyText = try backend.sealedMessage("hi", for: vault).absoluteString
-        try await settle()
+        try await settleKey(store)
 
         XCTAssertEqual(store.keyStatus, .invalid(.unexpectedKind("hpkeblobv1")))
     }
 
     func testClearingTheKeyClearsTheMessage() async throws {
         let store = makeStore()
-        store.adopt(try backend.encryptionKey(for: vault), issuedFor: nil)
+        store.adopt(try backend.encryptionKey(for: vault))
         store.plaintext = "hello"
-        try await settle()
+        try await waitUntil { store.status != .sealing }
         XCTAssertEqual(store.status, .sealed)
 
         store.keyText = ""
@@ -76,7 +82,7 @@ final class MessageEncryptStoreTests: XCTestCase {
     func testTextWithoutAKeyWaitsForOne() async throws {
         let store = makeStore()
         store.plaintext = "hello"
-        try await settle()
+        try await waitUntil { store.status != .sealing }
 
         XCTAssertEqual(store.status, .noKey)
         XCTAssertTrue(store.sealed.isEmpty)
@@ -84,9 +90,9 @@ final class MessageEncryptStoreTests: XCTestCase {
 
     func testTextUnderAKeySealsToAMessageTheKeyOpens() async throws {
         let store = makeStore()
-        store.adopt(try backend.encryptionKey(for: vault), issuedFor: vault.account)
+        store.adopt(try backend.encryptionKey(for: vault))
         store.plaintext = "seed phrase"
-        try await settle()
+        try await waitUntil { store.status != .sealing }
 
         XCTAssertEqual(store.status, .sealed)
         let message = try SealedMessageURL(parsing: store.sealed)
@@ -98,21 +104,21 @@ final class MessageEncryptStoreTests: XCTestCase {
     /// not happen is the store recomputing when nothing was edited.
     func testTheMessageSettlesWhenTheTextDoes() async throws {
         let store = makeStore()
-        store.adopt(try backend.encryptionKey(for: vault), issuedFor: nil)
+        store.adopt(try backend.encryptionKey(for: vault))
         store.plaintext = "stable"
-        try await settle()
+        try await waitUntil { store.status != .sealing }
         let first = store.sealed
         XCTAssertFalse(first.isEmpty)
 
-        try await settle()
+        try await Task.sleep(for: MessageEncryptStore.debounce + .milliseconds(50))
         XCTAssertEqual(store.sealed, first, "recomputed without an edit")
     }
 
     func testClearingTheTextClearsTheMessageAtOnce() async throws {
         let store = makeStore()
-        store.adopt(try backend.encryptionKey(for: vault), issuedFor: nil)
+        store.adopt(try backend.encryptionKey(for: vault))
         store.plaintext = "something"
-        try await settle()
+        try await waitUntil { store.status != .sealing }
         XCTAssertFalse(store.sealed.isEmpty)
 
         store.plaintext = ""
@@ -122,9 +128,9 @@ final class MessageEncryptStoreTests: XCTestCase {
 
     func testOversizedTextIsRefusedWithTheLimit() async throws {
         let store = makeStore()
-        store.adopt(try backend.encryptionKey(for: vault), issuedFor: nil)
+        store.adopt(try backend.encryptionKey(for: vault))
         store.plaintext = String(repeating: "a", count: MessageLimits.maxPlaintextCharacters + 1)
-        try await settle()
+        try await waitUntil { store.status != .sealing }
 
         XCTAssertEqual(store.status, .tooLarge(limit: MessageLimits.maxPlaintextCharacters))
         XCTAssertTrue(store.sealed.isEmpty)
@@ -137,27 +143,52 @@ final class MessageEncryptStoreTests: XCTestCase {
     func testAdoptingAKeySealsTheTextAlreadyThere() async throws {
         let store = makeStore()
         store.plaintext = "written first"
-        try await settle()
+        try await waitUntil { store.status != .sealing }
         XCTAssertEqual(store.status, .noKey)
 
         let key = try backend.encryptionKey(for: vault)
-        store.adopt(key, issuedFor: vault.account)
+        store.adopt(key)
         XCTAssertEqual(store.keyText, key.absoluteString)
         XCTAssertEqual(store.keyStatus, .valid(key.fingerprint))
-        XCTAssertEqual(store.issuedFor, vault.account)
-        try await settle()
+        try await waitUntil { store.status != .sealing }
         XCTAssertEqual(store.status, .sealed)
     }
 
-    /// Typing over an issued key means another key: the account it was issued for no longer
-    /// describes what is in the field.
-    func testEditingTheKeyDropsTheIssuedAccount() async throws {
+    /// Editing a recipient invalidates the previously verified key immediately.
+    func testEditingTheKeyDropsTheVerifiedRecipient() async throws {
         let store = makeStore()
-        store.adopt(try backend.encryptionKey(for: vault), issuedFor: vault.account)
+        store.adopt(try backend.encryptionKey(for: vault))
         store.keyText = "https://fidopass.org/link#hpkev1?nonce="
 
-        XCTAssertNil(store.issuedFor)
         XCTAssertNil(store.key)
         XCTAssertEqual(store.keyStatus, .incomplete)
+    }
+}
+
+@MainActor
+extension MessageEncryptStoreTests {
+    private func sealedStore() async throws -> MessageEncryptStore {
+        let backend = MockKeyBackend()
+        let account = AccountHandle.fixture(id: "vault", devicePath: "/dev/one")
+        let store = MessageEncryptStore(sealer: backend.messages,
+                                       prefilled: try backend.encryptionKey(for: account))
+        store.plaintext = "public synthetic sample"
+        try await waitUntil { store.status == .sealed }
+        return store
+    }
+
+    func testPlaintextEditMustImmediatelyInvalidateCopyableCiphertext() async throws {
+        let store = try await sealedStore()
+        store.plaintext = "edited public sample"
+        XCTAssertTrue(store.sealed.isEmpty, "Old ciphertext remains copyable during debounce")
+        store.clear()
+    }
+
+    func testRecipientEditMustImmediatelyInvalidateCopyableCiphertext() async throws {
+        let store = try await sealedStore()
+        store.keyText = "https://fidopass.org/link#hpkev1?nonce="
+        XCTAssertTrue(store.sealed.isEmpty, "Old recipient's ciphertext remains copyable")
+        store.clear()
+        store.keyText = ""
     }
 }

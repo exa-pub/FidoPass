@@ -1,12 +1,7 @@
 import Foundation
 import FidoPassCore
 
-/// The sending window: a key link in, a sealed message out. Bound to no security key.
-///
-/// Sealing needs nothing but the link, which is the whole point of the scheme — this window
-/// works on a Mac with no authenticator plugged in, or none at all. It exists in one of two
-/// ways: opened empty from the menu, or opened by the panel with a key it just issued, and
-/// a link clicked in another application lands in whichever is open.
+/// Sending-window state. Sealing uses a public key link and requires no authenticator.
 @MainActor
 final class MessageEncryptStore: ObservableObject {
     /// How long to wait after the last keystroke before recomputing.
@@ -47,10 +42,6 @@ final class MessageEncryptStore: ObservableObject {
     /// The sealed message as a link, or empty.
     @Published private(set) var sealed = ""
     @Published private(set) var status: Status = .empty
-    /// The account the key on screen was issued for, when the panel opened this window —
-    /// so the window can say whose key it is, and warn when that account is not backed up.
-    @Published private(set) var issuedFor: Account?
-
     private let sealer: MessageSealing
     private var keyWork: Task<Void, Never>?
     private var sealWork: Task<Void, Never>?
@@ -58,35 +49,38 @@ final class MessageEncryptStore: ObservableObject {
     /// the user editing it.
     private var applyingProgrammaticEdit = false
 
-    init(sealer: MessageSealing, prefilled: EncryptionKeyURL? = nil, issuedFor: Account? = nil) {
+    init(sealer: MessageSealing, prefilled: EncryptionKeyURL? = nil) {
         self.sealer = sealer
-        if let prefilled { adopt(prefilled, issuedFor: issuedFor) }
+        if let prefilled { adopt(prefilled) }
     }
 
     /// A key that is known to be valid — just issued, or clicked as a link. No debounce and no
     /// re-reading: the fingerprint is already in it.
-    func adopt(_ key: EncryptionKeyURL, issuedFor account: Account?) {
+    func adopt(_ key: EncryptionKeyURL) {
         keyWork?.cancel()
         applyingProgrammaticEdit = true
         keyText = key.absoluteString
         applyingProgrammaticEdit = false
         self.key = key
-        self.issuedFor = account
         keyStatus = .valid(key.fingerprint)
         reseal()
     }
 
-    var characterCount: Int { plaintext.count }
+    var characterCount: Int {
+        guard plaintext.utf8.prefix(MessageLimits.maxPlaintextBytes + 1).count <= MessageLimits.maxPlaintextBytes else {
+            return characterLimit + 1
+        }
+        return plaintext.count
+    }
     var characterLimit: Int { MessageLimits.maxPlaintextCharacters }
 
     // MARK: - Key
 
     private func keyTextEdited(from oldValue: String) {
-        guard !applyingProgrammaticEdit, oldValue != keyText else { return }
+        guard !applyingProgrammaticEdit, !oldValue.utf8.elementsEqual(keyText.utf8) else { return }
         keyWork?.cancel()
+        dropSealed()
         key = nil
-        // Whatever key the panel issued, the user is now typing another one.
-        issuedFor = nil
         guard !keyText.isEmpty else {
             keyStatus = .empty
             dropSealed()
@@ -99,10 +93,8 @@ final class MessageEncryptStore: ObservableObject {
             try? await Task.sleep(for: Self.debounce)
             guard !Task.isCancelled else { return }
             self?.keyStatus = .verifying
-            let outcome: Result<EncryptionKeyURL, Error> = await Task.detached {
-                Result { try sealer.parseKey(text) }
-            }.value
-            guard !Task.isCancelled, let self, self.keyText == text else { return }
+            let outcome: Result<EncryptionKeyURL, Error> = await MessageCryptoWorker.shared.result { try sealer.parseKey(text) }
+            guard !Task.isCancelled, let self, self.keyText.utf8.elementsEqual(text.utf8) else { return }
             switch outcome {
             case .success(let key):
                 self.key = key
@@ -123,8 +115,10 @@ final class MessageEncryptStore: ObservableObject {
     // MARK: - Text
 
     private func plaintextEdited(from oldValue: String) {
-        guard oldValue != plaintext else { return }
+        guard !oldValue.utf8.elementsEqual(plaintext.utf8) else { return }
         sealWork?.cancel()
+        sealed = ""
+        status = plaintext.isEmpty ? .empty : .sealing
         guard !plaintext.isEmpty else {
             // Clearing the text clears the message at once; waiting out the debounce would
             // leave a stale link sitting next to an empty field.
@@ -141,6 +135,8 @@ final class MessageEncryptStore: ObservableObject {
 
     private func reseal() {
         sealWork?.cancel()
+        sealed = ""
+        status = plaintext.isEmpty ? .empty : .sealing
         guard !plaintext.isEmpty else {
             sealed = ""
             status = .empty
@@ -155,10 +151,8 @@ final class MessageEncryptStore: ObservableObject {
         let sealer = self.sealer
         status = .sealing
         sealWork = Task { [weak self] in
-            let outcome: Result<SealedMessageURL, Error> = await Task.detached {
-                Result { try sealer.seal(text, for: key) }
-            }.value
-            guard !Task.isCancelled, let self, self.plaintext == text, self.key == key else { return }
+            let outcome: Result<SealedMessageURL, Error> = await MessageCryptoWorker.shared.result { try sealer.seal(text, for: key) }
+            guard !Task.isCancelled, let self, self.plaintext.utf8.elementsEqual(text.utf8), self.key == key else { return }
             switch outcome {
             case .success(let message):
                 self.sealed = message.absoluteString

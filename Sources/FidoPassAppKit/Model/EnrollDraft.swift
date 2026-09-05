@@ -1,16 +1,8 @@
 import FidoPassCore
 import Foundation
 
-/// What the "new account" screen is collecting.
-///
-/// Three ways to get an account, one form. Import is not a third kind of account — it
-/// creates a portable one from an existing backup — but it is a different thing to ask
-/// for, with a different field and a different button, so the form names it separately
-/// rather than hiding a text field under "Portable".
-///
-/// Every account gets an identity at creation, and the form is where it is chosen: random
-/// unless the person types one — the one the same account already shows on another key,
-/// say. An import starts from the identity its backup carries.
+/// Creation/import form. Import creates a portable account using the backup identity
+/// unless explicitly overridden; other modes start with a random identity.
 struct EnrollDraft: Equatable {
     enum Mode: String, CaseIterable, Identifiable {
         case `import`, portable, local

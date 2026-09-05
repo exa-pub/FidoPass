@@ -1,12 +1,8 @@
 import SwiftUI
 import FidoPassCore
 
-/// Recreating a v1 portable account in the current layout.
-///
-/// Four touches: read the old record, create the new one, seal it, verify it — and only
-/// then is the old record deleted, so a failure anywhere leaves every password where it
-/// was. When an earlier attempt left its copy on the key, the screen offers to finish or
-/// discard that instead of making another.
+/// Portable v1 migration: verifies the copy before deleting the original.
+/// An existing unfinished copy can be finished or discarded.
 struct MigrateAccountView: View {
     @ObservedObject var store: PanelStore
     let ref: AccountRef

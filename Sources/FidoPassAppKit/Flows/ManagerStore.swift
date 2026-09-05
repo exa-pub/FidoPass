@@ -1,14 +1,8 @@
 import FidoPassCore
 import Foundation
 
-/// The manager window's state: which key it looks at, what it shows, and the operations on
-/// the key itself that live here rather than in the panel.
-///
-/// **Reading the key happens when the window opens, and never otherwise.** Opening a key on
-/// macOS seizes it away from every other process, so a window that read on its own — because
-/// a key appeared, or because it merely existed — would make `ykman` unusable for as long as
-/// it was open. Choosing the window from a menu is the request; `deviceDidAppear` is what
-/// that request runs.
+/// Manager selection, inventory and key settings. Reads require an explicit open,
+/// selection or refresh; passive hot-plug must not seize a key.
 @MainActor
 final class ManagerStore: ObservableObject {
 
@@ -17,8 +11,15 @@ final class ManagerStore: ObservableObject {
         var id: String { rawValue }
     }
 
-    @Published var chosenPath: String?
-    @Published var tab: ManagerTab = .credentials
+    @Published var chosenPath: String? {
+        didSet { if chosenPath != oldValue { clearForms() } }
+    }
+    private var lifetime = OperationLease()
+    private var requestedPath: String?
+    private var receivedAppearance = false
+    @Published var tab: ManagerTab = .overview
+    @Published var hasSettingsDraft = false
+    @Published private(set) var notice: String?
     @Published var selectedCredential: String?
     @Published var sheet: Sheet?
     @Published private(set) var isApplying = false
@@ -29,6 +30,7 @@ final class ManagerStore: ObservableObject {
     /// The change-PIN form. The panel has its own for bootstrap; sharing one was a defect.
     let pinForm: PinFormModel
     let reset: ResetCoordinator
+    let temporaryUV: TemporaryUVStore
 
     private let devices: DeviceStore
     private let inventory: InventoryStore
@@ -39,11 +41,13 @@ final class ManagerStore: ObservableObject {
          inventory: InventoryStore,
          touchGate: TouchGate,
          reset: ResetCoordinator,
+         temporaryUV: TemporaryUVStore,
          router: WindowRouter) {
         self.devices = devices
         self.inventory = inventory
         self.touchGate = touchGate
         self.reset = reset
+        self.temporaryUV = temporaryUV
         self.router = router
         self.pinForm = PinFormModel(mode: .change,
                                     devices: devices,
@@ -53,12 +57,63 @@ final class ManagerStore: ObservableObject {
         pinForm.device = { [weak self] in self?.device }
     }
 
+    var hasPendingForm: Bool {
+        sheet != nil || !pinForm.isEmpty || hasSettingsDraft || (touchGate.isWorking && touchGate.surface == .manager)
+    }
+
+    func managerDidOpen(devicePath: String? = nil) async {
+        let path = devicePath ?? device?.path ?? devices.devices.first?.path
+        if let path { await selectDevice(path: path) }
+    }
+
+    func managerDidClose() {
+        clearForms()
+        reset.cancel()
+        inventory.dropAll()
+    }
+
+    func selectDevice(path: String) async {
+        guard devices.state(for: path) != nil else { return }
+        if path != chosenPath, hasPendingForm {
+            notice = "Finish or cancel the form for \(device?.displayName ?? "the previous key") before switching keys."
+            return
+        }
+        notice = nil
+        chosenPath = path
+        requestedPath = path
+        receivedAppearance = true
+        await deviceDidAppear()
+    }
+
+    func keyDidClose(_ path: String) {
+        if chosenPath == path || pinForm.boundPath == path {
+            clearForms()
+            if devices.state(for: path) == nil {
+                chosenPath = nil
+                requestedPath = nil
+                receivedAppearance = true
+                notice = "The selected key disconnected. Choose a connected key to continue."
+            }
+        }
+    }
+
+    private func clearForms() {
+        lifetime.invalidate()
+        lifetime = OperationLease()
+        pinForm.clear()
+        hasSettingsDraft = false
+        pinError = nil
+        settingsError = nil
+        selectedCredential = nil
+        if sheet == .changePIN { sheet = nil }
+    }
+
     // MARK: - The key on screen
 
-    /// The key the window shows: the chosen one, or the first while there is only one.
+    /// The selected key; only the first appearance may fall back to the first device.
     var device: FidoDevice? {
-        if let chosenPath, let match = devices.devices.first(where: { $0.path == chosenPath }) { return match }
-        return devices.devices.first
+        guard let chosenPath else { return receivedAppearance ? nil : devices.devices.first }
+        return devices.devices.first(where: { $0.path == chosenPath })
     }
 
     var keyState: DeviceStore.KeyState? {
@@ -76,29 +131,36 @@ final class ManagerStore: ObservableObject {
 
     // MARK: - Reading
 
-    /// The window opened, or the user switched to another key. Reads the key unless it has
-    /// been read already.
-    ///
-    /// A reset makes the key reappear on a new path, which is exactly what re-triggers this.
-    /// Reading it then would seize the device in the seconds-wide window where the reset has
-    /// to be issued — and there is nothing worth reading off a key that is about to be erased.
+    /// Services the requested appearance once. Skip reads while reset owns the key.
     func deviceDidAppear() async {
+        if !receivedAppearance {
+            if chosenPath == nil { chosenPath = devices.devices.first?.path }
+            receivedAppearance = true
+            requestedPath = device?.path
+        }
         guard let device, !inventory.reading(for: device.path).hasAnything else { return }
+        guard requestedPath == device.path else { return }
         guard !isResetting else { return }
-        await inventory.read(device)
+        try? await touchGate.withBusy("Reading key…", surface: .manager) {
+            await inventory.read(device)
+            if let info = inventory.reading(for: device.path).info { devices.adoptInfo(info, for: device.path) }
+        }
     }
 
     /// ⌘R — a deliberate re-read.
     func read() async {
-        guard let device else { return }
-        await inventory.read(device)
+        guard let device, !isResetting else { return }
+        try? await touchGate.withBusy("Reading key…", surface: .manager) {
+            await inventory.read(device)
+            if let info = inventory.reading(for: device.path).info { devices.adoptInfo(info, for: device.path) }
+        }
     }
 
     /// Unlocking completes a read that stopped for want of a PIN. A key nobody asked about is
     /// left alone — `InventoryStore.resumeAfterUnlock` checks.
     func keyDidUnlock() async {
         guard let device else { return }
-        await inventory.resumeAfterUnlock(device)
+        try? await touchGate.withBusy("Reading credentials…", surface: .manager) { await inventory.resumeAfterUnlock(device) }
     }
 
     /// Sends the user to the panel's PIN field. The manager has no PIN field of its own — a
@@ -111,39 +173,44 @@ final class ManagerStore: ObservableObject {
 
     // MARK: - Authenticator settings
 
-    func toggleAlwaysUV() async {
-        await apply { device in _ = try await self.devices.toggleAlwaysUV(for: device) }
+    func setAlwaysUV(_ enabled: Bool, expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in
+            _ = try await self.devices.setAlwaysUV(enabled, for: device)
+            self.temporaryUV.stop(for: device.path)
+        }
     }
 
-    func raiseMinimumPIN(to length: Int) async {
-        await apply { device in try await self.devices.setMinimumPINLength(for: device, length: length) }
+    func raiseMinimumPIN(to length: Int, expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in try await self.devices.setMinimumPINLength(for: device, length: length) }
     }
 
-    func forcePINChange() async {
-        await apply { device in try await self.devices.forcePINChange(for: device) }
+    func forcePINChange(expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in try await self.devices.forcePINChange(for: device) }
     }
 
-    func enableEnterpriseAttestation() async {
-        await apply { device in try await self.devices.enableEnterpriseAttestation(for: device) }
+    func enableEnterpriseAttestation(expectedPath: String? = nil) async {
+        await apply(expectedPath: expectedPath) { device in try await self.devices.enableEnterpriseAttestation(for: device) }
     }
 
-    /// Runs one setting change and then re-reads the key.
-    ///
-    /// The re-read is not optional: `alwaysUv` is a *toggle*, so the resulting state is
-    /// whatever the key now says rather than what the switch was moved to, and a control
-    /// showing the app's guess instead of the key's answer is how a setting silently reads
-    /// backwards.
-    private func apply(_ operation: (FidoDevice) async throws -> Void) async {
-        guard let device, !isApplying else { return }
+    /// Applies the requested setting and reads back the result.
+    private func apply(expectedPath: String?, _ operation: (FidoDevice) async throws -> Void) async {
+        guard let device, isUnlocked, !isApplying, !touchGate.isWorking,
+              expectedPath == nil || expectedPath == device.path else { return }
+        let token = lifetime
         settingsError = nil
         isApplying = true
         defer { isApplying = false }
         do {
-            try await operation(device)
+            try await touchGate.withBusy("Applying setting…", surface: .manager) {
+                try await operation(device)
+                try KeyOperationContext.check(token)
+                await devices.refreshStatus(for: device)
+                await inventory.refreshInfo(device)
+            }
         } catch {
+            guard token.isValid, !(error is CancellationError) else { return }
             settingsError = PresentedError(error)
         }
-        await inventory.refreshInfo(device)
     }
 
     // MARK: - PIN
@@ -163,11 +230,14 @@ final class ManagerStore: ObservableObject {
     /// Sends the new PIN, and leaves the sheet up on failure: a wrong old PIN costs one of the
     /// eight attempts, and closing would hide the count that says so.
     func changePIN() async {
+        let token = lifetime
         pinError = nil
         do {
             guard try await pinForm.submit() else { return }
+            try KeyOperationContext.check(token)
             sheet = nil
         } catch {
+            guard token.isValid, !(error is CancellationError) else { return }
             pinError = PresentedError(error)
         }
     }
@@ -188,6 +258,15 @@ final class ManagerStore: ObservableObject {
     func cancelReset() {
         reset.cancel()
         sheet = nil
+    }
+
+    func resetDidComplete(on device: FidoDevice) {
+        chosenPath = device.path
+        clearForms()
+        sheet = nil
+        tab = .overview
+        requestedPath = nil
+        notice = "\(device.displayName) erased. Set a new PIN, then read the key to see its empty account list."
     }
 
     /// The wizard ended — the key was erased, or the flow was cancelled elsewhere.

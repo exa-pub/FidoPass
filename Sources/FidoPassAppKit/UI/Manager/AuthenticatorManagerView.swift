@@ -1,15 +1,8 @@
 import SwiftUI
 import FidoPassCore
 
-/// The FIDO manager window: what is on the key, as the key describes it.
-///
-/// Deliberately without product framing. Relying parties are shown as they are — FidoPass's
-/// own two sit in the same list as `github.com` — because the window's purpose is to show
-/// the authenticator, not the app's view of it. The one exception is FidoPass portable key
-/// material, which is withheld in the core; see `CredentialUserName`.
-///
-/// **Opening this window is the request to read** — see `ManagerStore.deviceDidAppear`. The
-/// view only says when it appeared and which key it is looking at; the store decides.
+/// Manager inventory and settings, including all relying parties.
+/// Core redacts portable key material before presentation or export.
 struct AuthenticatorManagerView: View {
     @ObservedObject var store: ManagerStore
     @ObservedObject private var devices: DeviceStore
@@ -29,6 +22,8 @@ struct AuthenticatorManagerView: View {
             Divider()
             if devices.devices.isEmpty {
                 emptyState(title: "No security key connected", message: "Plug in a FIDO2 authenticator.")
+            } else if store.device == nil {
+                emptyState(title: "Choose a key", message: "The previous connection is no longer available.")
             } else {
                 HStack(spacing: 0) {
                     sidebar.frame(width: 190)
@@ -40,7 +35,6 @@ struct AuthenticatorManagerView: View {
         .frame(minWidth: 900, minHeight: 560)
         // Keyed on the device so switching keys reads the one now on screen rather than
         // leaving the other one's answers up.
-        .task(id: store.device?.path) { await store.deviceDidAppear() }
         .onChange(of: store.isUnlocked) { _, unlocked in
             guard unlocked else { return }
             Task { await store.keyDidUnlock() }
@@ -53,13 +47,6 @@ struct AuthenticatorManagerView: View {
                 ManagerResetSheet(store: store, touchGate: touchGate)
             }
         }
-        .background {
-            // No button for it: re-reading is rare, and a row of buttons was noise on a
-            // window whose whole job is to be read.
-            Button("") { Task { await store.read() } }
-                .keyboardShortcut("r", modifiers: [.command])
-                .opacity(0)
-        }
     }
 
     // MARK: - Header
@@ -67,13 +54,14 @@ struct AuthenticatorManagerView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                if devices.devices.count > 1 {
-                    Picker("", selection: Binding(get: { store.device?.path ?? "" }, set: { store.chosenPath = $0 })) {
+                if !devices.devices.isEmpty {
+                    Picker("Key", selection: Binding(get: { store.device?.path ?? "" }, set: { path in Task { await store.selectDevice(path: path) } })) {
+                        if store.device == nil { Text("Choose a key…").tag("") }
                         ForEach(devices.devices) { candidate in
                             Text(candidate.displayName).tag(candidate.path)
                         }
                     }
-                    .labelsHidden()
+                    .disabled(store.hasPendingForm)
                     .frame(maxWidth: 280)
                 } else if let device = store.device {
                     VStack(alignment: .leading, spacing: 1) {
@@ -85,16 +73,31 @@ struct AuthenticatorManagerView: View {
                 if store.reading.isReading || store.isApplying {
                     ProgressView().controlSize(.small)
                 }
+                Button("Refresh key information", systemImage: "arrow.clockwise") {
+                    Task { await store.read() }
+                }
+                .labelStyle(.iconOnly)
+                .keyboardShortcut("r", modifiers: [.command])
+                .help("Refresh key information (⌘R)")
+                .accessibilityIdentifier("manager.refresh")
+                .disabled(store.device == nil || touchGate.isWorking || store.isResetting)
             }
 
             // Only the locked state earns a line. Unlocked is the ordinary case, and a badge
             // that is almost always present is a badge nobody reads.
-            if !store.isUnlocked, !devices.devices.isEmpty {
+            if let notice = store.notice {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if touchGate.isCancelling, touchGate.surface == .manager {
+                Label("Finishing cancelled operation…", systemImage: "hourglass").font(.caption)
+            }
+            if !store.isUnlocked, store.device != nil {
                 HStack(spacing: 6) {
-                    Label("Key locked", systemImage: "lock").font(.caption)
+                    Label(store.keyState?.hasPIN == false ? "PIN not set" : "Key locked", systemImage: "lock").font(.caption)
                     Text("— credentials cannot be listed until it is.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Unlock…") { store.requestUnlock() }
+                    Button(store.keyState?.hasPIN == false ? "Set PIN…" : "Unlock…") { store.requestUnlock() }
                         .buttonStyle(.link)
                         .font(.caption)
                 }
@@ -132,6 +135,7 @@ struct AuthenticatorManagerView: View {
     @ViewBuilder
     private var content: some View {
         let reading = store.reading
+        let path = store.device?.path
         switch store.tab {
         case .overview:
             if let info = reading.info {
@@ -160,16 +164,19 @@ struct AuthenticatorManagerView: View {
                 ScrollView {
                     AuthenticatorSettingsView(
                         info: info,
+                        deviceName: store.device?.displayName ?? "Key",
+                        hasDraft: $store.hasSettingsDraft,
                         isUnlocked: store.isUnlocked,
                         onUnlock: { store.requestUnlock() },
-                        onToggleAlwaysUV: { Task { await store.toggleAlwaysUV() } },
-                        onRaiseMinimumPIN: { length in Task { await store.raiseMinimumPIN(to: length) } },
-                        onForcePINChange: { Task { await store.forcePINChange() } },
-                        onEnableEnterpriseAttestation: { Task { await store.enableEnterpriseAttestation() } },
+                        onToggleAlwaysUV: { enabled in Task { await store.setAlwaysUV(enabled, expectedPath: path) } },
+                        onRaiseMinimumPIN: { length in Task { await store.raiseMinimumPIN(to: length, expectedPath: path) } },
+                        onForcePINChange: { Task { await store.forcePINChange(expectedPath: path) } },
+                        onEnableEnterpriseAttestation: { Task { await store.enableEnterpriseAttestation(expectedPath: path) } },
                         onChangePIN: { store.beginChangePIN() },
                         onReset: { Task { await store.beginReset() } },
                         isBusy: store.isApplying || reading.isReading,
                         errorText: store.settingsError?.fullText())
+                    .id(path)
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -184,13 +191,13 @@ struct AuthenticatorManagerView: View {
         if store.reading.isReading {
             emptyState(title: "Reading the key…", message: nil)
         } else if let message = store.reading.infoError {
-            emptyState(title: "The key could not be read", message: message.fullText())
+            emptyState(title: "The key could not be read", message: message.fullText(), canRead: true)
         } else {
-            emptyState(title: "Nothing read yet", message: "Press ⌘R to read the key.")
+            emptyState(title: "Nothing read yet", message: "Read the selected key to see its current contents.", canRead: true)
         }
     }
 
-    private func emptyState(title: String, message: String?) -> some View {
+    private func emptyState(title: String, message: String?, canRead: Bool = false) -> some View {
         VStack(spacing: 6) {
             Text(title).font(.system(size: 13, weight: .semibold))
             if let message {
@@ -199,6 +206,10 @@ struct AuthenticatorManagerView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
+            }
+            if canRead {
+                Button("Read key") { Task { await store.read() } }
+                    .disabled(touchGate.isWorking || store.isResetting)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

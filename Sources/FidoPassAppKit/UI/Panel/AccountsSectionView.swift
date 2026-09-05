@@ -46,7 +46,7 @@ struct EmptyAccountsView: View {
                 .foregroundStyle(.secondary)
             Text("No accounts on this key")
                 .font(.system(size: 13, weight: .semibold))
-            Text("An account is one derivation identity — a vault master password, a disk key. One or two is the normal number.")
+            Text("Create an account for a vault master password, a disk key or a backup passphrase.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -248,36 +248,44 @@ struct AccountRowView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// Chips and the field for anything else, on one line: the recent labels and "something
-    /// I have not used before" are the same choice, and splitting them behind a mode switch
-    /// made the second one look like a different feature.
     private var labelRow: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("LABEL")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Label").font(.caption).foregroundStyle(.secondary)
+            LabelTextField(text: Binding(get: { editor.draft }, set: { editor.draftChanged($0) }),
+                           isFocused: Binding(get: { editor.isEditing }, set: { editor.setEditing($0) }),
+                           placeholder: "Enter a label…",
+                           caretAtEnd: editor.caretAtEnd,
+                           onSubmit: { Task { await store.copyPassword(for: ref) } },
+                           onCancel: { _ = editor.escape() },
+                           onExitLeft: { editor.moveFocus(by: -1) },
+                           onExitRight: { editor.moveFocus(by: 1) },
+                           onMoveAccount: { store.moveSelection(by: $0) })
+                .frame(height: 24)
+                .accessibilityLabel("Password label")
 
             HStack(spacing: 4) {
-                ForEach(labels.chips, id: \.self) { label in
-                    LabelChip(label: label,
-                              isCurrent: label == editor.current && !editor.isEditing,
+                Text("Recent").font(.caption2).foregroundStyle(.secondary)
+                ForEach(Array(labels.chips.enumerated()), id: \.offset) { _, label in
+                    LabelChip(label: LabelDisplay.text(label), isCurrent: false,
                               action: { store.setLabel(label) })
+                        .help("Use exactly these label bytes: " + label.utf8.map { String(format: "%02x", $0) }.joined(separator: " "))
                 }
-
-                LabelTextField(text: Binding(get: { editor.draft }, set: { editor.draftChanged($0) }),
-                               isFocused: Binding(get: { editor.isEditing }, set: { editor.setEditing($0) }),
-                               placeholder: "custom…",
-                               caretAtEnd: editor.caretAtEnd,
-                               onSubmit: {
-                                   // Leaving the field lets the label graduate into a chip
-                                   // instead of sitting on screen twice, as text and as chip.
-                                   editor.setEditing(false)
-                                   Task { await store.copyPassword(for: ref) }
-                               },
-                               onExitLeft: { editor.moveFocus(by: -1) },
-                               onExitRight: { editor.moveFocus(by: 1) },
-                               onMoveAccount: { store.moveSelection(by: $0) })
-                    .frame(minWidth: 64, maxHeight: 20)
+                if !labels.chips.contains(LabelStore.fallback) {
+                    Button("default") { store.setLabel(LabelStore.fallback) }.buttonStyle(.link).font(.caption2)
+                }
+            }
+            if let issue = editor.issue {
+                Text(issue).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if editor.needsWhitespaceChoice {
+                Text("“\(LabelDisplay.text(editor.current))” · \(editor.current.utf8.count) bytes. Earlier versions removed surrounding whitespace.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Button("Use without surrounding whitespace") { editor.useTrimmedLabel() }
+                    Button("Keep exact label") { editor.keepExactLabel() }
+                }.buttonStyle(.link).font(.caption)
             }
         }
     }
@@ -303,7 +311,7 @@ struct AccountRowView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
             .keyboardShortcut(isSelected ? .defaultAction : nil)
-            .disabled(isBusy)
+            .disabled(store.isWorking || !editor.canGenerate)
             .help("Generate the password and put it on the clipboard (⏎)")
 
             Button {
@@ -313,7 +321,7 @@ struct AccountRowView: View {
                     .frame(width: 14, height: 14)
             }
             .buttonStyle(.bordered)
-            .disabled(isBusy)
+            .disabled(store.isWorking || !editor.canGenerate)
             .help("Generate and show it on screen instead of copying (⌘⏎)")
         }
     }
@@ -447,12 +455,15 @@ struct ResultView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
+            Text("\(result.ref.accountId) · label “\(LabelDisplay.text(result.label))”")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 Text(result.revealed ? result.password : String(repeating: "•", count: min(result.password.count, 24)))
                     .font(.system(size: 12, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .textSelection(.enabled)
+                    .textSelection(.disabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)

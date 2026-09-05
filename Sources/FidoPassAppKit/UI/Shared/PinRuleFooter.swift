@@ -15,7 +15,7 @@ struct PinRuleFooter: View {
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text("At least \(form.policy.minLengthBytes) characters, at most \(PinPolicy.maxLengthBytes) bytes.")
+            Text("At least \(form.policy.minimumCodePoints) characters, at most \(PinPolicy.maxLengthBytes) bytes.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

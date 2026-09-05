@@ -1,13 +1,7 @@
 import Foundation
 
-/// What the key holds for one FidoPass account — and nothing that it does not.
-///
-/// Where the account was read from is session state and lives in `AccountHandle`; what the
-/// derivation is parameterised by is `DerivationParameters`, because the authenticator
-/// stores no metadata for it. Which layout it is in is `format`, and the fields say where
-/// each value came from: for v2, the identity is `user.id` and the mask comes from the
-/// account's record; for v1, the identity is derived (local) or absent (portable) and the
-/// mask is what `user.name` held.
+/// Account data read from a credential and its record. Connection state belongs to
+/// AccountHandle; non-persisted password parameters belong to DerivationParameters.
 public struct Account: Codable, Hashable, Identifiable, Sendable {
     /// The account's name: `user.name` for v2, `user.id` as UTF-8 for v1. Unique per key.
     /// Feeds salt derivation for v1 local accounts only.
@@ -45,14 +39,20 @@ public struct Account: Codable, Hashable, Identifiable, Sendable {
 
     /// Whether anything may be derived from this account. A credential without a usable
     /// record is not an account; nothing reads it, and the only action offered is deletion.
-    public var canDerive: Bool { integrity == .ok }
+    public var canDerive: Bool {
+        integrity == .ok && Data(base64Encoded: credentialIdB64)?.isEmpty == false
+            && (kind == .portable ? mask?.count == AccountRecord.maskByteCount : mask == nil)
+            && (format != .v2 || identity != nil)
+    }
 
-    /// A portable account in the v1 layout: key material in `user.name`, no identity, not
-    /// reachable from a browser. It derives what it always did — migration reproduces the
-    /// same master key under a v2 credential and then deletes this one.
-    ///
-    /// A local v1 account is not in this set: its material cannot be moved to a new
-    /// credential, so it stays as it is, for good.
+    func validateForDerivation() throws {
+        guard canDerive else {
+            throw FidoPassError.invalidState(integrity.problem ?? "Account fields are inconsistent")
+        }
+    }
+
+    /// Portable v1 accounts require migration for identity-based message links.
+    /// Local v1 accounts cannot migrate and continue deriving from their original credential.
     public var needsMigration: Bool {
         format == .v1 && kind == .portable && integrity == .ok
     }

@@ -1,15 +1,7 @@
 import Foundation
 
-/// Everything an authenticator will say about itself for the price of one open — no PIN,
-/// no touch.
-///
-/// Deliberately separate from `DeviceStatus`. That type is the small subset the HUD routes
-/// on, and a copy of it is carried in every `DeviceStore.KeyState`; widening it to twenty
-/// fields would put a full `getInfo` dump behind every routing decision. This one is read
-/// on request, shown, and dropped.
-///
-/// Every field is optional-by-nature: authenticators differ in what they report, and a
-/// missing value has to degrade to "not reported" rather than to a confident wrong number.
+/// Authenticator getInfo fields read on request without PIN or touch.
+/// Missing fields mean “not reported”; DeviceStatus holds only the subset used for routing.
 public struct AuthenticatorInfo: Sendable, Hashable, Codable {
 
     /// One entry of the authenticator's `options` map, as reported.

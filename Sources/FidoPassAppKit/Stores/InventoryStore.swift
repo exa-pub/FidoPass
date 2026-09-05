@@ -1,15 +1,7 @@
 import FidoPassCore
 import Foundation
 
-/// What the manager window has read from each key.
-///
-/// A separate store from `DeviceStore` and `AccountStore` for the usual reason: this is read
-/// rarely, is large, and nothing in the HUD depends on it. Keeping it here means opening the
-/// manager cannot redraw the panel, and closing it drops the whole thing.
-///
-/// **Nothing is read until asked.** Opening a key on macOS seizes it away from every other
-/// process, so a window that read on appear would make `ykman` unusable for as long as it
-/// was open. Every method here runs from a button.
+/// Caches manager reads. Hardware access runs only for explicit user requests.
 @MainActor
 final class InventoryStore: ObservableObject {
 
@@ -22,6 +14,7 @@ final class InventoryStore: ObservableObject {
         var infoError: PresentedError?
         var inventoryError: PresentedError?
         var isReading = false
+        var capacityReadAt: Date?
         /// True when the credential list was not read because the key is locked, as opposed
         /// to having failed. The difference decides whether the UI offers "unlock" or "retry".
         var needsUnlock = false
@@ -31,6 +24,14 @@ final class InventoryStore: ObservableObject {
 
     @Published private(set) var readings: [String: Reading] = [:]
 
+    var onAuthenticationFailure: ((String) -> Void)?
+    private var lifetimes: [String: OperationLease] = [:]
+    private func begin(_ path: String) -> OperationLease {
+        lifetimes.removeValue(forKey: path)?.invalidate()
+        let token = OperationLease()
+        lifetimes[path] = token
+        return token
+    }
     private let worker: KeyWorker
     private let pinFor: (String) -> String?
 
@@ -41,6 +42,16 @@ final class InventoryStore: ObservableObject {
 
     func reading(for path: String) -> Reading { readings[path] ?? Reading() }
 
+    /// A short-lived hint only. Authenticator validation remains authoritative.
+    func knownFreeSlots(on path: String, now: Date = Date()) -> Int? {
+        let reading = reading(for: path)
+        guard let date = reading.capacityReadAt, now.timeIntervalSince(date) < 30,
+              reading.infoError == nil, reading.inventoryError == nil, !reading.isReading else { return nil }
+        return reading.inventory?.residentKeysRemaining ?? reading.info?.remainingResidentKeys
+    }
+
+    func invalidateCapacity(on path: String) { readings[path]?.capacityReadAt = nil }
+
     // MARK: - Reading
 
     /// Reads what the key says about itself, and — when the key is unlocked — its credentials.
@@ -50,6 +61,7 @@ final class InventoryStore: ObservableObject {
     /// not have would mean a second place in the app that can spend a PIN attempt.
     func read(_ device: FidoDevice) async {
         let path = device.path
+        let token = begin(path)
         var reading = self.reading(for: path)
         reading.isReading = true
         reading.infoError = nil
@@ -57,16 +69,20 @@ final class InventoryStore: ObservableObject {
         readings[path] = reading
 
         do {
-            reading.info = try await worker.device { try $0.inspect(devicePath: path) }
+            reading.info = try await worker.device(validity: token) { try $0.inspect(devicePath: path) }
+            reading.capacityReadAt = Date()
         } catch {
             reading.infoError = PresentedError(error)
         }
 
+        guard token.isValid, KeyOperationContext.lease?.isValid != false else { return }
         if let pin = pinFor(path) {
             reading.needsUnlock = false
             do {
-                reading.inventory = try await worker.device { try $0.inventory(devicePath: path, pin: pin) }
+                reading.inventory = try await worker.device(validity: token) { try $0.inventory(devicePath: path, pin: pin) }
+                reading.capacityReadAt = Date()
             } catch {
+                if token.isValid, KeyFailurePolicy.invalidatesPINSession(error) { onAuthenticationFailure?(path) }
                 reading.inventoryError = PresentedError(error)
             }
         } else {
@@ -75,6 +91,7 @@ final class InventoryStore: ObservableObject {
             reading.inventory = nil
         }
 
+        guard token.isValid, KeyOperationContext.lease?.isValid != false else { return }
         reading.isReading = false
         readings[path] = reading
     }
@@ -83,6 +100,7 @@ final class InventoryStore: ObservableObject {
     /// self-description already on screen is not thrown away and re-fetched.
     func readInventory(_ device: FidoDevice) async {
         let path = device.path
+        let token = begin(path)
         guard let pin = pinFor(path) else {
             var reading = self.reading(for: path)
             reading.needsUnlock = true
@@ -100,20 +118,18 @@ final class InventoryStore: ObservableObject {
         readings[path] = reading
 
         do {
-            reading.inventory = try await worker.device { try $0.inventory(devicePath: path, pin: pin) }
+            reading.inventory = try await worker.device(validity: token) { try $0.inventory(devicePath: path, pin: pin) }
+            reading.capacityReadAt = Date()
         } catch {
+            if token.isValid, KeyFailurePolicy.invalidatesPINSession(error) { onAuthenticationFailure?(path) }
             reading.inventoryError = PresentedError(error)
         }
+        guard token.isValid, KeyOperationContext.lease?.isValid != false else { return }
         reading.isReading = false
         readings[path] = reading
     }
 
-    /// Finishes a read that stopped for want of a PIN.
-    ///
-    /// Called when a key becomes unlocked. It is not a fresh request — it completes the one
-    /// the user already made by pressing "Read key" and was told needed an unlock — so it
-    /// fires only for a key that has been read once and is still waiting. A key nobody asked
-    /// about stays untouched, which is the rule the whole store is built around.
+    /// Completes an explicitly requested inventory read after its key is unlocked.
     func resumeAfterUnlock(_ device: FidoDevice) async {
         let reading = self.reading(for: device.path)
         guard reading.hasAnything, reading.needsUnlock else { return }
@@ -124,29 +140,29 @@ final class InventoryStore: ObservableObject {
     /// screen shows what the key now says rather than what the app hoped it would say.
     func refreshInfo(_ device: FidoDevice) async {
         let path = device.path
+        let token = begin(path)
         var reading = self.reading(for: path)
         reading.isReading = true
         readings[path] = reading
         do {
-            reading.info = try await worker.device { try $0.inspect(devicePath: path) }
+            reading.info = try await worker.device(validity: token) { try $0.inspect(devicePath: path) }
+            reading.capacityReadAt = Date()
             reading.infoError = nil
         } catch {
             reading.infoError = PresentedError(error)
         }
+        guard token.isValid, KeyOperationContext.lease?.isValid != false else { return }
         reading.isReading = false
         readings[path] = reading
     }
 
     // MARK: - Forgetting
 
-    /// Drops the credential list of a key that is no longer unlocked, keeping what it said
-    /// about itself.
-    ///
-    /// The list carries user names of other services — the very thing a session lock is
-    /// supposed to put away — while the self-description is public information about the
-    /// model and reveals nothing about its owner.
+    /// Drops private credential metadata on lock, retaining public authenticator information.
     func dropInventory(devicePath: String) {
+        lifetimes.removeValue(forKey: devicePath)?.invalidate()
         guard var reading = readings[devicePath], reading.inventory != nil || !reading.needsUnlock else { return }
+        reading.isReading = false
         reading.inventory = nil
         reading.inventoryError = nil
         reading.needsUnlock = true
@@ -155,10 +171,13 @@ final class InventoryStore: ObservableObject {
 
     /// Forgets a key entirely — it was unplugged, or the machine locked.
     func drop(devicePath: String) {
+        lifetimes.removeValue(forKey: devicePath)?.invalidate()
         readings.removeValue(forKey: devicePath)
     }
 
     func dropAll() {
+        for token in lifetimes.values { token.invalidate() }
+        lifetimes.removeAll()
         readings.removeAll()
     }
 }

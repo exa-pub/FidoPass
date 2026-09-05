@@ -1,16 +1,6 @@
 import SwiftUI
 
-/// Makes Tab walk the fields of a HUD screen.
-///
-/// The panel is a borderless `NSPanel`, and AppKit builds no key-view loop for such a window:
-/// the field editor has no `nextKeyView` to hand focus to, so Tab does nothing at all and the
-/// second field of a two-field screen is reachable only with the mouse. Turning on
-/// `autorecalculatesKeyViewLoop` did not change that, so the order is stated here instead of
-/// left to be inferred.
-///
-/// It is deliberately per-screen rather than global. The chain a screen wants is the order its
-/// own fields appear in, and the accounts screen already gives Tab-adjacent keys — the arrows —
-/// a meaning of its own that a window-wide handler would fight with.
+/// Per-screen Tab order for the borderless HUD, where AppKit supplies no key-view loop.
 struct TabFocusChain<Field: Hashable>: ViewModifier {
     let order: [Field]
     @FocusState.Binding var focus: Field?

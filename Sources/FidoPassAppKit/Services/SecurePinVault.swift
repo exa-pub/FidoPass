@@ -1,12 +1,13 @@
 import Foundation
 
-/// Stores PIN codes in memory with automatic expiration and zeroisation on removal.
+/// Keeps PINs until expiration. Removal overwrites the owned buffer; temporary Swift
+/// String/Data copies cannot be guaranteed to have been erased.
 ///
 /// `@unchecked Sendable`: every access to `entries` goes through `queue` with a barrier, and
 /// the vault is read synchronously from the key worker's thread — inside a libfido2 callback —
 /// which is why it is a class with a queue rather than an actor.
 final class SecurePinVault: @unchecked Sendable {
-    typealias TimerFactory = (_ queue: DispatchQueue) -> DispatchSourceTimer
+    typealias TimerFactory = (_ queue: DispatchQueue, _ interval: TimeInterval, _ fire: @escaping @Sendable () -> Void) -> (@Sendable () -> Void)
     struct Token: Hashable {
         fileprivate let rawValue = UUID()
     }
@@ -15,11 +16,12 @@ final class SecurePinVault: @unchecked Sendable {
     private struct Entry: @unchecked Sendable {
         var pinData: Data
         var expiration: Date
-        var timer: DispatchSourceTimer?
+        var timer: (@Sendable () -> Void)?
+        var generation = UUID()
         var onExpire: (@Sendable () -> Void)?
 
         mutating func invalidate() {
-            timer?.cancel()
+            timer?()
             timer = nil
             pinData.wipe()
         }
@@ -29,11 +31,20 @@ final class SecurePinVault: @unchecked Sendable {
     private let timerFactory: TimerFactory
     private var entries: [Token: Entry] = [:]
     private let defaultTTL: TimeInterval
+    private let now: @Sendable () -> Date
 
     init(defaultTTL: TimeInterval = 300,
          queue: DispatchQueue = DispatchQueue(label: "com.fidopass.pinVault", qos: .userInitiated, attributes: .concurrent),
-         timerFactory: @escaping TimerFactory = { queue in DispatchSource.makeTimerSource(queue: queue) }) {
+         now: @escaping @Sendable () -> Date = Date.init,
+         timerFactory: @escaping TimerFactory = { queue, interval, fire in
+             let timer = DispatchSource.makeTimerSource(queue: queue)
+             timer.schedule(deadline: .now() + interval)
+             timer.setEventHandler(handler: fire)
+             timer.resume()
+             return { timer.cancel() }
+         }) {
         self.defaultTTL = defaultTTL
+        self.now = now
         self.queue = queue
         self.timerFactory = timerFactory
     }
@@ -45,7 +56,7 @@ final class SecurePinVault: @unchecked Sendable {
         let token = Token()
         let interval = ttl ?? defaultTTL
         let entry = Entry(pinData: Data(pin.utf8),
-                          expiration: Date().addingTimeInterval(interval),
+                          expiration: now().addingTimeInterval(interval),
                           timer: nil,
                           onExpire: onExpire)
 
@@ -60,7 +71,7 @@ final class SecurePinVault: @unchecked Sendable {
     func pin(for token: Token, extending ttl: TimeInterval? = nil) -> String? {
         queue.sync(flags: .barrier) { () -> String? in
             guard var entry = entries[token] else { return nil }
-            guard entry.expiration > Date() else {
+            guard entry.expiration > now() else {
                 entries[token] = nil
                 entry.invalidate()
                 handleExpireCallback(for: token, entry: entry)
@@ -73,6 +84,11 @@ final class SecurePinVault: @unchecked Sendable {
             entries[token] = entry
             return String(data: entry.pinData, encoding: .utf8)
         }
+    }
+
+    /// Observing expiration must neither disclose the PIN nor renew its lifetime.
+    func expiration(for token: Token) -> Date? {
+        queue.sync { entries[token]?.expiration }
     }
 
     func extend(token: Token, ttl: TimeInterval? = nil) {
@@ -100,25 +116,24 @@ final class SecurePinVault: @unchecked Sendable {
     }
 
     private func scheduleTimer(for token: Token, ttl: TimeInterval, entry: inout Entry) {
-        entry.timer?.cancel()
+        entry.timer?()
         entry.timer = nil
+        entry.generation = UUID()
+        let generation = entry.generation
         guard ttl > 0 else {
             entry.expiration = Date.distantPast
             return
         }
-        entry.expiration = Date().addingTimeInterval(ttl)
-        let timer = timerFactory(queue)
-        timer.schedule(deadline: .now() + ttl)
-        timer.setEventHandler { [weak self] in
-            self?.handleExpiration(for: token)
+        entry.expiration = now().addingTimeInterval(ttl)
+        entry.timer = timerFactory(queue, ttl) { [weak self] in
+            self?.handleExpiration(for: token, generation: generation)
         }
-        timer.resume()
-        entry.timer = timer
     }
 
-    private func handleExpiration(for token: Token) {
+    private func handleExpiration(for token: Token, generation: UUID) {
         queue.async(flags: .barrier) {
-            guard var entry = self.entries.removeValue(forKey: token) else { return }
+            guard var entry = self.entries[token], entry.generation == generation, entry.expiration <= self.now() else { return }
+            self.entries[token] = nil
             entry.invalidate()
             self.handleExpireCallback(for: token, entry: entry)
         }
@@ -138,7 +153,7 @@ private extension Data {
         guard !isEmpty else { return }
         withUnsafeMutableBytes { buffer in
             guard let base = buffer.baseAddress else { return }
-            memset(base, 0, buffer.count)
+            _ = memset_s(base, buffer.count, 0, buffer.count)
         }
         removeAll(keepingCapacity: false)
     }

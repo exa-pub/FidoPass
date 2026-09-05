@@ -1,11 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// How many PIN attempts are left before the key locks itself for good.
-///
-/// Eight consecutive failures are terminal, and nothing recovers from that but a factory
-/// reset that wipes every credential — so the countdown is stated plainly rather than left
-/// for the user to discover.
+/// Remaining PIN attempts; a blocked key requires a reset that erases its credentials.
 struct PinAttemptsLabel: View {
     let remaining: Int
 
@@ -18,7 +14,7 @@ struct PinAttemptsLabel: View {
     private var text: String {
         switch remaining {
         case 0:  return "Locked — no attempts left"
-        case 1:  return "1 attempt left before this key locks permanently"
+        case 1:  return "1 attempt left before this key is blocked"
         default: return "\(remaining) attempts left"
         }
     }

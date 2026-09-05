@@ -2,7 +2,7 @@ import XCTest
 @testable import FidoPassAppKit
 import FidoPassCore
 
-final class ErrorPresentationTests: XCTestCase {
+final class ErrorPresentationTests: AppTestCase {
 
     private func libfido2(_ status: FidoStatus) -> FidoPassError {
         .libfido2(operation: "dev_get_assert", status: status, message: "raw text")

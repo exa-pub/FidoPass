@@ -12,6 +12,10 @@ final class PasswordGenerator: PasswordGenerating, Sendable {
                           label: String,
                           parameters: DerivationParameters,
                           pinProvider: (@Sendable () -> String?)?) throws -> String {
+        try handle.account.validateForDerivation()
+        guard UInt32(exactly: parameters.revision) != nil else {
+            throw FidoPassError.invalidState("Revision must fit an unsigned 32-bit value")
+        }
         // A credential without a usable record is not an account; nothing is derived from it.
         if let problem = handle.account.integrity.problem {
             throw FidoPassError.invalidState(problem)

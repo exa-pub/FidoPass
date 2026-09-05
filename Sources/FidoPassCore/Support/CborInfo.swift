@@ -1,14 +1,7 @@
 import Foundation
 import CLibfido2
 
-/// One `getInfo` answer, read through libfido2's `fido_cbor_info_t`.
-///
-/// Every reader of the authenticator's self-description used to carry its own copy of the
-/// same pointer walking — three of them for the options map alone. This is the one place
-/// the C accessors are called; everything above it works with Swift values.
-///
-/// Every field is optional-by-nature: authenticators differ in what they report, and a
-/// missing value degrades to "unknown" rather than to a wrong number.
+/// Wraps libfido2 getInfo accessors in Swift values. Missing fields remain unknown.
 struct CborInfo {
     private let raw: OpaquePointer
 

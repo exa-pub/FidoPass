@@ -1,22 +1,20 @@
 import Foundation
 import FidoPassCore
 
-/// The windows, as the stores see them.
-///
-/// A store decides *that* a window should open or close; it never touches AppKit. Everything
-/// that used to be an `onRequest…` closure on the panel's store is a method here, so a store
-/// depends on one protocol instead of on six hooks that somebody has to remember to wire —
-/// and a test can hand it a recorder instead of a window.
+/// Window actions available to stores, implemented by AppWindows or a test recorder.
 @MainActor
 protocol WindowRouter: AnyObject {
     func openPanel()
+    func openPanelForIncomingLink()
     func closePanel()
-    func openManager()
+    func openManager(devicePath: String?)
     func openPreferences()
-    /// The sending window, optionally with a key already in it — the one the panel just
-    /// issued for `account`, or one clicked as a link. One window; a second call fills the
-    /// one that is open.
-    func openEncryptor(with key: EncryptionKeyURL?, issuedFor account: Account?)
+    #if FIDOPASS_VIRTUAL_KEYS
+    func openVirtualDevices()
+    #endif
+    /// Public-key sharing and message composition have independent windows.
+    func openEncryptionKey(_ key: EncryptionKeyURL, for account: Account)
+    func openEncryptor(with key: EncryptionKeyURL?)
     /// The receiving window, over the store that binds it to a key. One window; a store
     /// that is already on screen is brought to the front.
     func openDecryptor(_ store: MessageDecryptStore)
@@ -24,4 +22,9 @@ protocol WindowRouter: AnyObject {
     /// Runs the save dialog. The outcome comes back through `PanelStore.recoverySheetFinished`.
     func saveRecoverySheet(_ sheet: RecoverySheet)
     func quit()
+}
+
+extension WindowRouter {
+    func openManager() { openManager(devicePath: nil) }
+    func openPanelForIncomingLink() { openPanel() }
 }

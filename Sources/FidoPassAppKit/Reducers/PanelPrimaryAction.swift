@@ -13,6 +13,7 @@ enum PanelPrimaryAction: Equatable {
     /// an arbitrary one. Deriving the wrong account's password is cheap to do and confusing
     /// to notice, since every password looks equally plausible.
     case chooseAccount
+    case editLabel
     case generateAndCopy(AccountRef)
     /// The account would generate, but it predates identities: the one thing to do with it
     /// first is give it one.

@@ -27,6 +27,8 @@ public struct DeviceStatus: Hashable, Sendable {
     /// cannot be used to recognise a person. Useful as a *negative* check — a different
     /// AAGUID is certainly a different key — and never as a positive one.
     public var aaguid: String?
+    public var supportsConfiguration: Bool?
+    public var alwaysUV: Bool?
 
     public init(pinRetriesRemaining: Int?,
                 hasPIN: Bool,
@@ -35,7 +37,9 @@ public struct DeviceStatus: Hashable, Sendable {
                 remainingResidentKeys: Int?,
                 minPINLength: Int? = nil,
                 forcePINChange: Bool = false,
-                aaguid: String? = nil) {
+                aaguid: String? = nil,
+                supportsConfiguration: Bool? = nil,
+                alwaysUV: Bool? = nil) {
         self.pinRetriesRemaining = pinRetriesRemaining
         self.hasPIN = hasPIN
         self.supportsHmacSecret = supportsHmacSecret
@@ -44,10 +48,12 @@ public struct DeviceStatus: Hashable, Sendable {
         self.minPINLength = minPINLength
         self.forcePINChange = forcePINChange
         self.aaguid = aaguid
+        self.supportsConfiguration = supportsConfiguration
+        self.alwaysUV = alwaysUV
     }
 
     /// The PIN rules to enforce in the UI for this key.
     public var pinPolicy: PinPolicy {
-        PinPolicy(minLengthBytes: minPINLength ?? PinPolicy.ctapFloor)
+        PinPolicy(minimumCodePoints: minPINLength ?? PinPolicy.ctapFloor)
     }
 }

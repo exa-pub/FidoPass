@@ -3,6 +3,11 @@ import Foundation
 public final class FidoPassCore: Sendable {
     public static let shared = FidoPassCore()
 
+    /// Injected transports share the real services without exposing C handles.
+    package convenience init(deviceLister: any DeviceListing, connectionFactory: any DeviceConnectionFactory) {
+        self.init(deviceRepository: DeviceRepository(connectionFactory: connectionFactory, deviceLister: deviceLister))
+    }
+
     private let deviceRepository: DeviceAccessing
     private let deviceLister: DeviceListing
     private let enrollmentService: Enrolling
@@ -107,6 +112,10 @@ public final class FidoPassCore: Sendable {
     }
 
     // MARK: - Authenticator settings
+
+    public func setAlwaysUV(enabled: Bool, devicePath: String, pin: String) throws -> AlwaysUVChange {
+        try configuration.setAlwaysUV(enabled: enabled, devicePath: devicePath, pin: pin)
+    }
 
     /// Flips `alwaysUv` and returns the state the key reports afterwards. Reversible.
     @discardableResult

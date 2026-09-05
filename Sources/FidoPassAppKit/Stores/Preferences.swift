@@ -1,24 +1,16 @@
 import Foundation
 import FidoPassCore
 
-/// What the app remembers between launches.
-///
-/// Deliberately small. No password, PIN or backup key ever reaches this file, and the one
-/// piece of account data it does hold — the last used account id — is opt-out. Nothing
-/// transient lives here either: whoever needs to react to a change subscribes to the
-/// published property.
+/// Persists preferences and public account metadata; never secrets.
 @MainActor
 final class Preferences: ObservableObject {
 
-    /// The account the HUD should preselect, addressed in a way that survives replugging.
-    ///
-    /// Device paths change on every reconnect, so they cannot be stored. A vendor/product
-    /// signature is stable, imprecise only if the user owns two identical keys — in which
-    /// case the worst outcome is that the wrong one is preselected and one click fixes it.
+    /// Persisted selection. credentialId identifies the account; model metadata is display-only.
     struct LastUsed: Codable, Equatable {
         var deviceSignature: String
         var accountId: String
         var label: String
+        var credentialId: String? = nil
     }
 
     /// Persisted format. `hud.` is history — the keys stay whatever the code calls the panel.
@@ -80,11 +72,17 @@ final class Preferences: ObservableObject {
         self.lastUsed = Self.read(LastUsed.self, from: defaults, key: Key.lastUsed)
     }
 
+    nonisolated static func timeoutLabel(_ timeout: TimeInterval) -> String {
+        let minutes = Int(timeout / 60)
+        if minutes == 60 { return "1 hour" }
+        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+    }
+
     // MARK: - Last used
 
-    func remember(accountId: String, label: String, device: FidoDevice) {
+    func remember(accountId: String, label: String, device: FidoDevice, credentialId: String? = nil) {
         guard rememberLastUsed else { return }
-        let value = LastUsed(deviceSignature: device.modelSignature, accountId: accountId, label: label)
+        let value = LastUsed(deviceSignature: device.modelSignature, accountId: accountId, label: label, credentialId: credentialId)
         lastUsed = value
         store(value, forKey: Key.lastUsed)
     }

@@ -2,11 +2,9 @@ import XCTest
 import SwiftUI
 @testable import FidoPassAppKit
 import FidoPassCore
-#if canImport(AppKit)
 import AppKit
-#endif
 
-final class DeviceColorPaletteTests: XCTestCase {
+final class DeviceColorPaletteTests: AppTestCase {
     func testColorDeterminismForSameDevice() {
         let device = FidoDevice(path: "/dev/key",
                                 product: "Key",
@@ -50,15 +48,11 @@ final class DeviceColorPaletteTests: XCTestCase {
     }
 
     private func components(_ color: Color) -> (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
-        #if canImport(AppKit)
         let converted = NSColor(color).usingColorSpace(.deviceRGB)!
         return (converted.redComponent, converted.greenComponent, converted.blueComponent, converted.alphaComponent)
-        #else
-        return (0, 0, 0, 0)
-        #endif
     }
 
-    private func assertEqual(_ lhs: Color, _ rhs: Color, tolerance: CGFloat = 0.0001, file: StaticString = #file, line: UInt = #line) {
+    private func assertEqual(_ lhs: Color, _ rhs: Color, tolerance: CGFloat = 0.0001, file: StaticString = #filePath, line: UInt = #line) {
         let left = components(lhs)
         let right = components(rhs)
         XCTAssertTrue(approximatelyEqual(left.red, right.red, tolerance: tolerance) &&

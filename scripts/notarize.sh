@@ -13,7 +13,7 @@ set -euo pipefail
 # submission buys a bundle that verifies on its own.
 #
 # Prerequisites are the manual half of the job: a Developer ID certificate and notarisation
-# credentials. See ai.tmp/signature-plan.md.
+# credentials. See docs/release.md.
 #
 # Never add `set -x` here: credentials pass through this script.
 
@@ -23,7 +23,6 @@ cd "${PROJECT_ROOT}"
 
 APP_DIR=".build/release/FidoPass.app"
 ZIP_PATH=".build/release/FidoPass.zip"
-DMG_NAME="FidoPass.dmg"
 SIGN_IDENTITY="${FIDOPASS_SIGN_IDENTITY:-}"
 
 if [[ -z "$SIGN_IDENTITY" ]]; then
@@ -34,8 +33,9 @@ if [[ -z "$SIGN_IDENTITY" ]]; then
 
     export FIDOPASS_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)"
 
-  `security find-identity -v -p codesigning` lists what this machine has.
-  Setting one up is described in ai.tmp/signature-plan.md.
+  `security find-identity -v -p codesigning` lists what this machine has. A missing one
+  is issued at developer.apple.com (Certificates → Developer ID Application) and imported
+  into the login keychain; see docs/release.md.
 MSG
   exit 1
 fi
@@ -60,7 +60,9 @@ else
     xcrun notarytool store-credentials ${NOTARY_PROFILE} \\
       --key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer <issuer-uuid>
 
-  Where those values come from is described in ai.tmp/signature-plan.md, step 4.
+  The key file, its ID and the issuer come from App Store Connect → Users and Access →
+  Integrations → App Store Connect API; the key must belong to the same team as the
+  certificate. See docs/release.md.
 MSG
     exit 1
   fi
@@ -118,6 +120,9 @@ else
   echo "==> Building and signing the bundle"
   FIDOPASS_SIGN_IDENTITY="$SIGN_IDENTITY" bash "${SCRIPT_DIR}/build_app.sh"
 fi
+
+# create_dmg.sh names the image after the bundle; this must agree with it.
+DMG_NAME="FidoPass-$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP_DIR/Contents/Info.plist").dmg"
 
 echo "==> Notarising the app"
 rm -f "$ZIP_PATH"

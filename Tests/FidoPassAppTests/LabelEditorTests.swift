@@ -1,19 +1,11 @@
 import XCTest
 import FidoPassCore
-import TestSupport
 @testable import FidoPassAppKit
 
-/// The label row on its own: what the field holds, and how a draft survives.
 @MainActor
-final class LabelEditorTests: XCTestCase {
-
-    private func editor(recent: [String]) -> LabelEditor {
-        let suite = "LabelEditorTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        let history = LabelStore(userDefaults: defaults,
-                                 ubiStore: InMemoryUbiquitousStore(),
-                                 notificationCenter: NotificationCenter())
+final class LabelEditorTests: AppTestCase {
+    private func editor(recent: [String] = ["work"]) -> LabelEditor {
+        let history = LabelStore(userDefaults: AppTestFactory.makeDefaults())
         let target = LabelTarget(scope: LabelScope(credentialId: "cred"), accountId: "vault",
                                  deviceSignature: "1050:0407", deviceName: "Key")
         for label in recent.reversed() { history.use(label, in: target) }
@@ -22,65 +14,90 @@ final class LabelEditorTests: XCTestCase {
         return editor
     }
 
-    func testStartsFromTheLabelUsedLast() {
-        let editor = editor(recent: ["work", "archive"])
-        XCTAssertEqual(editor.current, "work")
-        XCTAssertEqual(editor.draft, "", "a chip shows it; the field stays empty")
+    func testOneVisibleValueStartsFromHistoryOrDefault() {
+        let recent = editor()
+        XCTAssertEqual(recent.current, "work")
+        XCTAssertEqual(recent.draft, recent.current)
+        let empty = editor(recent: [])
+        XCTAssertEqual(empty.current, "default")
+        XCTAssertEqual(empty.draft, "default")
     }
 
-    func testAnAccountWithNoHistoryStartsFromTheDefault() {
-        let editor = editor(recent: [])
-        XCTAssertEqual(editor.current, LabelStore.fallback)
-    }
-
-    /// Text typed into the field is a draft: it survives picking a chip, because retyping a
-    /// label is exactly the mistake that derives a different password.
-    func testADraftSurvivesPickingAChip() {
-        let editor = editor(recent: ["work"])
+    func testHistorySelectionReplacesDraftAndEscapeRestoresIt() {
+        let editor = editor()
         editor.setEditing(true)
-        editor.draftChanged("something-new")
-        XCTAssertEqual(editor.current, "something-new")
-
+        editor.draftChanged("new")
         editor.set("work")
+        editor.setEditing(true)
+        XCTAssertEqual(editor.draft, "work")
+        editor.draftChanged("other")
+        XCTAssertTrue(editor.escape())
         XCTAssertEqual(editor.current, "work")
-        XCTAssertFalse(editor.isEditing)
-        XCTAssertEqual(editor.draft, "something-new", "the text is still there for the next visit")
-
-        editor.setEditing(true)
-        XCTAssertEqual(editor.current, "something-new", "stepping back into the field goes back to what was typed")
+        XCTAssertEqual(editor.draft, "work")
+        XCTAssertFalse(editor.escape())
     }
 
-    /// Whitespace around a label would derive a different password from the one the user
-    /// meant, and an empty field is not a label at all.
-    func testTypingTrimsAndIgnoresEmptiness() {
-        let editor = editor(recent: ["work"])
+    func testEmptyDraftNeverUsesPreviousLabelEvenAfterLosingFocus() {
+        let editor = editor()
         editor.setEditing(true)
+        editor.draftChanged("")
+        editor.setEditing(false)
+        XCTAssertEqual(editor.current, "")
+        XCTAssertFalse(editor.canGenerate)
+        XCTAssertTrue(editor.escape(), "Escape also restores an unfinished draft after focus moves")
+        XCTAssertEqual(editor.current, "work")
+    }
+
+    func testWhitespaceRequiresExplicitCompatibilityChoice() {
+        let editor = editor()
         editor.draftChanged("  vault  ")
-        XCTAssertEqual(editor.current, "vault")
-
-        editor.draftChanged("   ")
-        XCTAssertEqual(editor.current, "vault", "clearing the field does not make the label empty")
+        XCTAssertFalse(editor.canGenerate)
+        XCTAssertEqual(editor.current, "  vault  ")
+        editor.useTrimmedLabel()
+        XCTAssertEqual(editor.current, "vault", "the explicit choice preserves the earlier UI contract")
+        XCTAssertTrue(editor.canGenerate)
+        editor.draftChanged("  vault  ")
+        editor.keepExactLabel()
+        XCTAssertTrue(editor.canGenerate)
+        XCTAssertTrue(editor.current.utf8.elementsEqual("  vault  ".utf8))
+        editor.draftChanged("  vault   ")
+        XCTAssertFalse(editor.canGenerate, "editing requires a new choice")
     }
 
-    /// Switching account switches history, and the draft belongs to the account it was
-    /// typed for.
+    func testNBSPControlsAndWhitespaceOnlyHaveExplicitOutcomes() {
+        let editor = editor()
+        for label in ["\u{00A0}vault", "vault\u{00A0}backup", "   "] {
+            editor.draftChanged(label)
+            XCTAssertFalse(editor.canGenerate)
+            editor.keepExactLabel()
+            XCTAssertTrue(editor.canGenerate)
+            XCTAssertTrue(editor.current.utf8.elementsEqual(label.utf8))
+        }
+        for label in ["vault\t", "vault\n", "va\u{200B}ult"] {
+            editor.draftChanged(label)
+            editor.keepExactLabel()
+            XCTAssertFalse(editor.canGenerate)
+        }
+        editor.draftChanged("   ")
+        editor.useTrimmedLabel()
+        XCTAssertFalse(editor.canGenerate)
+    }
+
+    func testHistoryBytesAreTrustedWithoutNewNormalization() {
+        for label in [" vault ", "vault\t", "caf\u{00E9}", "cafe\u{0301}", "Vault"] {
+            let editor = editor(recent: [label])
+            XCTAssertTrue(editor.canGenerate)
+            XCTAssertTrue(editor.current.utf8.elementsEqual(label.utf8))
+        }
+    }
+
     func testFocusingAnotherAccountDropsTheDraft() {
-        let editor = editor(recent: ["work"])
+        let editor = editor()
         editor.setEditing(true)
         editor.draftChanged("custom")
-        editor.setEditing(false)
-
         editor.focus(nil)
-
-        XCTAssertEqual(editor.current, LabelStore.fallback)
-        XCTAssertEqual(editor.draft, "")
-    }
-
-    func testEscapeLeavesTheFieldAndReportsIt() {
-        let editor = editor(recent: ["work"])
-        XCTAssertFalse(editor.escape(), "nothing to leave")
-        editor.setEditing(true)
-        XCTAssertTrue(editor.escape())
+        XCTAssertEqual(editor.current, "default")
+        XCTAssertEqual(editor.draft, "default")
         XCTAssertFalse(editor.isEditing)
     }
 }

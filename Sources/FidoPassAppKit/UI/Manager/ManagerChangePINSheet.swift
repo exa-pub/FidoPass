@@ -1,12 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// Replacing the key's PIN.
-///
-/// Lives in the manager rather than the panel: it is a rare, deliberate operation on the key
-/// itself, which is what this window is for. It works on a locked key — proving knowledge of
-/// the old PIN is the same proof unlocking asks for — and on a key that is demanding a change,
-/// which is the one case where the user has no choice but to be here.
+/// Manager PIN-change form, also available when the key requires a PIN change.
 struct ManagerChangePINSheet: View {
     @ObservedObject var store: ManagerStore
     @ObservedObject private var form: PinFormModel
@@ -25,7 +20,7 @@ struct ManagerChangePINSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Change PIN").font(.system(size: 15, weight: .semibold))
+            Text("Change PIN — \(store.device?.displayName ?? "Key")").font(.system(size: 15, weight: .semibold))
 
             if forced {
                 Label("This key requires a new PIN. It will refuse everything else until the PIN is changed.",
@@ -55,7 +50,7 @@ struct ManagerChangePINSheet: View {
             PinRuleFooter(form: form)
             if let retries { PinAttemptsLabel(remaining: retries) }
             if let error = store.pinError {
-                Text(error.fullText(retriesRemaining: retries))
+                Text(error.fullText())
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -73,6 +68,7 @@ struct ManagerChangePINSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+        .onChange(of: form.currentFocusRequest) { currentFocused = true }
         .onAppear {
             currentFocused = true
             KeyboardLayoutService.preferEnglishLayoutIfNeeded()

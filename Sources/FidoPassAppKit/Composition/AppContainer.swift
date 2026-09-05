@@ -2,12 +2,7 @@ import Combine
 import Foundation
 import FidoPassCore
 
-/// The application's object graph, built once.
-///
-/// Everything that used to be assembled inside the panel's store lives here: one key worker,
-/// the stores, the coordinators, and the reactions that cross store boundaries — a key
-/// going away has to reach the account list, the generated result, the manager's inventory
-/// and the receiving window, and none of those belongs to the panel.
+/// Owns the shared services, stores and cross-store reactions for one application.
 @MainActor
 final class AppContainer {
 
@@ -23,6 +18,9 @@ final class AppContainer {
     let decryptor: DecryptorCoordinator
     let router: WindowRouter
     let reset: ResetCoordinator
+    let temporaryUV: TemporaryUVStore
+    /// The in-app updater. Inert in every build but a signed release.
+    let updates: any UpdateService
     /// The menu-bar panel's store.
     let panel: PanelStore
     /// The manager window's store. Reads nothing until that window opens.
@@ -36,17 +34,22 @@ final class AppContainer {
          router: WindowRouter,
          preferences: Preferences? = nil,
          labels: LabelStore? = nil,
+         clipboard: ClipboardService? = nil,
+         updates: (any UpdateService)? = nil,
+         temporaryUVDuration: Duration = .seconds(60),
          emptyConfirmationDelay: Duration = .milliseconds(700),
-         enableMonitors: Bool = true) {
+         enableMonitors: Bool = true,
+         enableDeviceMonitor: Bool = true) {
         let settings = preferences ?? Preferences()
         // One worker for the whole app: a security key is exclusive, and serialising every
         // call through a single object is what keeps two windows from reaching for it at once.
         let worker = KeyWorker(backend: backend)
-        let clipboard = ClipboardService()
+        let clipboard = clipboard ?? ClipboardService()
         let deviceStore = DeviceStore(worker: worker,
                                       pinTTL: settings.lockTimeout,
                                       emptyConfirmationDelay: emptyConfirmationDelay,
-                                      enableMonitors: enableMonitors)
+                                      enableMonitors: enableMonitors,
+                                      enableDeviceMonitor: enableDeviceMonitor)
         let accountStore = AccountStore(worker: worker,
                                         pin: { [weak deviceStore] path in deviceStore?.pin(for: path) },
                                         pinProvider: { [weak deviceStore] path in deviceStore?.pinProvider(for: path) })
@@ -57,7 +60,10 @@ final class AppContainer {
                                             pin: { [weak deviceStore] path in deviceStore?.pin(for: path) })
         let labelStore = labels ?? LabelStore()
         let touchGate = TouchGate()
+        let temporaryUV = TemporaryUVStore(devices: deviceStore, gate: touchGate,
+                                            duration: temporaryUVDuration)
         let decryptor = DecryptorCoordinator(router: router)
+        let updateService = updates ?? UnavailableUpdateService()
         let reset = ResetCoordinator(devices: deviceStore,
                                      accounts: accountStore,
                                      labels: labelStore,
@@ -72,6 +78,8 @@ final class AppContainer {
         self.labels = labelStore
         self.clipboard = clipboard
         self.touchGate = touchGate
+        self.temporaryUV = temporaryUV
+        self.updates = updateService
         self.decryptor = decryptor
         self.router = router
         self.reset = reset
@@ -79,6 +87,7 @@ final class AppContainer {
                                     inventory: inventoryStore,
                                     touchGate: touchGate,
                                     reset: reset,
+                                    temporaryUV: temporaryUV,
                                     router: router)
         self.panel = PanelStore(devices: deviceStore,
                               accounts: accountStore,
@@ -88,16 +97,56 @@ final class AppContainer {
                               preferences: settings,
                               touchGate: touchGate,
                               decryptor: decryptor,
+                              temporaryUV: temporaryUV,
                               router: router)
+
+        temporaryUV.canBegin = { [weak self] in
+            guard let self else { return false }
+            return !self.manager.hasPendingForm && !self.reset.isResetting
+        }
+        temporaryUV.onConfigurationChanged = { [weak inventoryStore, weak deviceStore] device in
+            // Only refresh a manager snapshot that already exists; the HUD needs no extra read.
+            guard inventoryStore?.reading(for: device.path).info != nil else { return }
+            await inventoryStore?.refreshInfo(device)
+            if let info = inventoryStore?.reading(for: device.path).info {
+                deviceStore?.adoptInfo(info, for: device.path)
+            }
+        }
+        // A relaunch for an update waits for the key: an operation in flight would be
+        // abandoned half-way, with the touch it is waiting for landing in nothing.
+        updateService.canRelaunchNow = { [weak touchGate] in !(touchGate?.isWorking ?? false) }
+        touchGate.$isWorking
+            .dropFirst()
+            .filter { !$0 }
+            .sink { [weak temporaryUV, weak updateService] _ in
+                updateService?.relaunchGateDidOpen()
+                Task { await temporaryUV?.restoreIfDue() }
+            }
+            .store(in: &subscriptions)
+
+        labelStore.onCleared = { [weak self] in
+            guard let self else { return }
+            self.preferences.forgetLastUsed()
+            self.panel.labelEditor.focus(self.panel.labelTarget(for: self.panel.selection))
+            self.generation.clearResult()
+        }
 
         settings.$lockTimeout
             .dropFirst()
             .sink { [weak deviceStore] ttl in deviceStore?.setPinTTL(ttl) }
             .store(in: &subscriptions)
+        inventoryStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
+        generationStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
+        accountStore.onMutation = { [weak inventoryStore] path in inventoryStore?.invalidateCapacity(on: path) }
+        accountStore.onAuthenticationFailure = { [weak deviceStore] path in deviceStore?.lock(path: path) }
         deviceStore.onKeyClosed = { [weak self] path in self?.keyDidClose(path) }
         deviceStore.onSessionLocked = { [weak self] in self?.sessionDidLock() }
         deviceStore.onArmedKeyAppeared = { [weak reset] device in reset?.armedKeyAppeared(device) }
-        reset.onCompleted = { [weak self] in self?.panel.resetDidComplete() }
+        deviceStore.onResetArmingExpired = { [weak reset] in reset?.armingExpired() }
+        reset.onCompleted = { [weak self] device in
+            self?.panel.resetDidComplete()
+            self?.manager.resetDidComplete(on: device)
+        }
     }
 
     // MARK: - Reactions that cross store boundaries
@@ -107,6 +156,7 @@ final class AppContainer {
     /// Order matters: the panel is told last, once every store it reads from has already
     /// dropped what it held for this key.
     private func keyDidClose(_ path: String) {
+        temporaryUV.stop(for: path)
         // The wizard first: it is waiting for exactly this.
         reset.keyDidClose(path)
         // An open receiving window holds derived keys for this key's accounts. Locking has
@@ -124,6 +174,7 @@ final class AppContainer {
         } else {
             inventory.dropInventory(devicePath: path)
         }
+        manager.keyDidClose(path)
         panel.keyDidClose(path)
     }
 
@@ -145,10 +196,14 @@ final class AppContainer {
     /// A `fidopass://` link the user clicked somewhere. Read off the main actor — a key link
     /// costs an argon2id — then handed to the panel, which opens a window with it and
     /// touches nothing. See `IncomingLink`.
+    private var incomingLink: Task<Void, Never>?
+
     func openLink(_ url: URL) {
+        incomingLink?.cancel()
         let sealer = accounts.messages
-        Task { [weak self] in
+        incomingLink = Task { [weak self] in
             let link = await IncomingLink.classify(url.absoluteString, sealer: sealer)
+            guard !Task.isCancelled else { return }
             self?.panel.handleLink(link)
         }
     }

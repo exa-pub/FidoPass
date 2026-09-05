@@ -1,13 +1,7 @@
 import Foundation
 
-/// base64url without padding (RFC 4648 §5), for the binary fields of `fidopass://` URLs.
-///
-/// Standard base64 carries `+`, `/` and `=`, all three of which mail clients and chat apps
-/// have their own ideas about. The URL alphabet has none of them, and the padding is
-/// redundant when the length is known.
-///
-/// Decoding is strict: one character outside the alphabet, a stray `=`, or a length that no
-/// byte string can produce, and the answer is nil — a URL is either canonical or not ours.
+/// Strict RFC 4648 §5 base64url without padding. Invalid alphabets, lengths and
+/// noncanonical encodings are rejected.
 enum Base64URL {
     private static let alphabet = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".unicodeScalars)
 

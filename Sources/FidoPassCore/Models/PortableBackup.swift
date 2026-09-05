@@ -1,17 +1,7 @@
 import Foundation
 
-/// What leaves the key when a portable account is backed up, and what comes back on import.
-///
-/// The master key is the secret: with it, every password of the account can be derived
-/// without any security key. The identity travels with it so that the account this is
-/// imported into shows the same fingerprint as the one it was exported from. A backup made
-/// by a version that predates identities has none (`isLegacy`) and is still accepted —
-/// people keep these on paper for years, and refusing one would strand exactly the person
-/// the portable kind exists for.
-///
-/// Deliberately not `Codable` and without a description: this value must not be able to
-/// reach a JSON export or a log by accident. It is shown on one screen and copied by one
-/// button, both of which know what they are handling.
+/// Secret portable master key and optional account identity. Legacy backups without an
+/// identity remain readable. Intentionally not Codable or printable through a description.
 public struct PortableBackup: Hashable, Sendable {
     public static let masterKeyByteCount = 32
 

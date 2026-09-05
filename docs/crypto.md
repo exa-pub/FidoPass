@@ -4,19 +4,10 @@ Normative definition of every value FidoPass derives, stores and shows. 2026-09-
 
 ## §0 Status of this document
 
-This document defines bytes. Every statement in it is normative unless marked `Note`. An
-implementation that reproduces every vector in Appendix A conforms to this document; an
-implementation that differs from it in a single byte does not.
-
-What has shipped does not change. A value marked `Status: frozen` already exists in the
-world: passwords people open their vaults with, links in other people's conversations,
-records on other people's keys. Such a value cannot be changed; a new one can be introduced
-under a new identifier and described in a new section. Where an implementation and this
-document disagree about a frozen value, the document is wrong, because the fact has already
-happened. Where they disagree about a value that is not frozen, the implementation is wrong.
-
-Section numbers are stable. New material is added as a new subsection or appendix; existing
-numbers do not move, so that a reference to "§5.3" means the same thing forever.
+This document specifies byte formats and derivations. Released formats are immutable;
+changes require a new version. Appendix A records compatibility vectors, not an exhaustive
+conformance test. Resolve disagreements using the released implementation and its vectors.
+Keep section numbers stable for existing references.
 
 ## §1 Conventions
 
@@ -110,8 +101,8 @@ and a WebAuthn client talking through `prf` ask the credential the same question
 | fixed component, v2 | `"fidopass\|fixed\|v2"` |
 | message, both layouts | `"fidopass\|hpke\|secret\|v1\|" ‖ nonce` |
 
-The salts of layout v1 (§4.4, §5.1) are not wrapped. They are computed as written and
-wrapped in nothing.
+The v1 fixed-component and local-password salts (§4.4, §5.1) are not wrapped.
+Message salts are wrapped for both layouts (§6.1).
 
 Vector: `wrap("fidopass|fixed|v2") = 5d267585fe91a12df6e27959f2be9e38fc12c0f55b4077826211f36b161af4fd`.
 
@@ -466,8 +457,8 @@ and the fragment never leaves the client: the server `fidopass.org` receives nei
 messages. The `fidopass://` carrier is the form the operating system delivers to the
 application.
 
-Reading. Whitespace is removed everywhere before parsing. The carrier is compared without
-regard to the case of ASCII letters. `keyfp` is read in either case. Everything else is
+Reading. Whitespace is removed everywhere before parsing. The carrier’s scheme and host
+are case-insensitive; its path is case-sensitive. `keyfp` is read in either case. Everything else is
 compared byte for byte with what this document would write: the order of the fields,
 `b64url` without padding, the absence of any other character. A link that fails this
 comparison is not a FidoPass link. A `#` inside the payload makes the link not a FidoPass
@@ -523,14 +514,15 @@ Public: the identity, `nonce`, `pk`, `idfp`, `keyfp`, both links in full, `mask`
 Secret: the PIN, the credential's internal key, `master`, `secret`, `ikm`, `sk`, the
 passwords, the backup.
 
-What a loss means:
+Loss and disclosure:
 
-| Lost | Local account | Portable account |
+| Event | Local account | Portable account |
 |---|---|---|
-| the authenticator | every password and every message of the account is unrecoverable | nothing, given the backup |
-| the backup | does not exist | every password of the account and every message ever sealed under any of its keys is computable without the authenticator |
-| a label | the password under it cannot be reproduced | the same |
-| a key link | nothing: the holder can only seal | the same |
+| authenticator lost or reset | every password and every message of the account is unrecoverable | nothing, given the backup |
+| backup lost | does not exist | recoverable while the account remains usable on a key; export another backup |
+| backup disclosed | does not exist | every password of the account and every message ever sealed under any of its keys is computable without the authenticator |
+| label lost | the password under it cannot be reproduced | the same |
+| public key link disclosed | nothing: the holder can only seal | the same |
 
 Limits:
 
@@ -542,8 +534,8 @@ Limits:
 - Messages under one key are linked by their shared `nonce` and `idfp` (§6.7).
 - The presence of every character class in a password is not guaranteed (§5.4).
 - The separator `|` in `salt_v1` is not escaped (§5.6).
-- A FIDO2 authenticator locks itself permanently after eight wrong PINs in a row. That is a
-  property of the authenticator; every `PRF` in this document requires the correct PIN.
+- Incorrect PIN attempts can block the authenticator. A reset erases credentials and does
+  not recover their passwords. Every `PRF` in this document requires user verification.
 
 ## §10 Version registry
 

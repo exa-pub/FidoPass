@@ -1,0 +1,10 @@
+[package]
+name = "fidopass-test-authenticator"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+opensk = { path = "../../.build/test-authenticator/opensk/libraries/opensk", default-features = false, features = ["std"] }
+rand = "0.8"
+sk-cbor = { path = "../../.build/test-authenticator/opensk/libraries/cbor" }

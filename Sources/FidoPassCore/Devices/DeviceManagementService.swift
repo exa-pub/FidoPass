@@ -14,6 +14,7 @@ final class DeviceManagementService: DeviceManaging, Sendable {
     }
 
     func setInitialPIN(devicePath: String, newPIN: String) throws {
+        if let issue = PinPolicy().validate(newPIN) { throw FidoPassError.invalidState(issue.message) }
         try deviceRepository.withOpenedDevice(path: devicePath) { device, _ in
             try PinScope.withPIN(newPIN) { pin in
                 // A nil old PIN is what makes this "set" rather than "change". The two are
@@ -26,7 +27,13 @@ final class DeviceManagementService: DeviceManaging, Sendable {
     }
 
     func changePIN(devicePath: String, oldPIN: String, newPIN: String) throws {
+        if let issue = PinPolicy.validateExisting(oldPIN) { throw FidoPassError.invalidState(issue.message) }
+        if let issue = PinPolicy().validate(newPIN, oldPIN: oldPIN) { throw FidoPassError.invalidState(issue.message) }
         try deviceRepository.withOpenedDevice(path: devicePath) { device, _ in
+            let minimum = try CborInfo.with(device: device) { $0.minPINLength ?? PinPolicy.ctapFloor }
+            if let issue = PinPolicy(minimumCodePoints: minimum).validate(newPIN, oldPIN: oldPIN) {
+                throw FidoPassError.invalidState(issue.message)
+            }
             // Nested rather than a two-argument helper: `PinScope` already guarantees the
             // heap copy is wiped, and the new PIN needs that guarantee exactly as much as the
             // old one does.

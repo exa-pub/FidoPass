@@ -1,18 +1,8 @@
 import Foundation
 
-/// The strict reader behind `EncryptionKeyURL` and `SealedMessageURL`.
-///
-/// A link is a carrier (`LinkCarrier`) followed by a payload, and the payload is either
-/// canonical or not ours: parameters in one fixed order, base64url without padding, nothing
-/// extra. The carrier's scheme and host are matched without regard to case — they are
-/// case-insensitive, and mail clients do write `Https://` — its path and the payload byte
-/// for byte. The only other leniency is whitespace — mail clients wrap long links — which
-/// is removed before anything is looked at.
-///
-/// What it is careful about is the difference between *wrong* and *not finished*: someone
-/// pasting or typing a link passes through many prefixes of a valid one, and every one of
-/// those is reported as `.incomplete` rather than as a failure, so a field being typed into
-/// does not shout at its user.
+/// Strict link reader: fixed field order, unpadded base64url, no extra fields.
+/// Ignores whitespace and ASCII case in scheme/host and checksum hex; paths remain exact.
+/// Prefixes are .incomplete rather than malformed.
 enum FidoPassLinkParser {
     /// Every host this build knows, so that a link of the other kind can be named as such.
     static let knownHosts = [EncryptionKeyURL.host, SealedMessageURL.host]
@@ -65,6 +55,10 @@ enum FidoPassLinkParser {
     }
 
     static func parse(_ text: String, host expectedHost: String, fields: [Field]) throws -> Parsed {
+        let limit = expectedHost == EncryptionKeyURL.host ? MessageLimits.maxKeyLinkBytes : MessageLimits.maxLinkBytes
+        guard text.utf8.prefix(MessageLimits.maxLinkBytes + 1).count <= MessageLimits.maxLinkBytes else {
+            throw FidoPassError.invalidState("Link exceeds the supported input size")
+        }
         let stripped = strip(text)
         guard !stripped.isEmpty else { throw MessageCryptoError.incomplete }
 
@@ -81,6 +75,9 @@ enum FidoPassLinkParser {
             throw classify(host: host, expected: expectedHost)
         }
         if host != expectedHost { throw classify(host: host, expected: expectedHost) }
+        guard text.utf8.prefix(limit + 1).count <= limit else {
+            throw FidoPassError.invalidState("Link exceeds the supported input size")
+        }
 
         let pairs = hostAndQuery[1].split(separator: "&", maxSplits: fields.count, omittingEmptySubsequences: false)
         guard pairs.count <= fields.count else { throw MessageCryptoError.notFidoPassURL }
@@ -152,12 +149,8 @@ enum FidoPassLinkParser {
         throw MessageCryptoError.notFidoPassURL
     }
 
-    /// How many leading scalars of `text` the carrier accounts for: all of its prefix for a
-    /// link, all of `text` for one still being typed.
-    ///
-    /// The scheme and host (`LinkCarrier.caseInsensitiveHead`) compare without regard to
-    /// case — for ASCII letters only: a carrier is ASCII, and Unicode case folding (the
-    /// Kelvin sign is a `k`) has no business in a link. The path compares exactly.
+    /// Matches the carrier prefix, including partial input. Scheme/host comparison folds
+    /// ASCII case only; Unicode lookalikes and differing path case are rejected.
     private static func matchedCount(of text: [Unicode.Scalar], against carrier: LinkCarrier) -> Int {
         let head = carrier.caseInsensitiveHead.unicodeScalars.count
         var matched = 0

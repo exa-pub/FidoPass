@@ -5,7 +5,7 @@ import TestSupport
 
 /// A `fidopass://` link from the system is untrusted input; it is sorted with the same
 /// strict readers a pasted one goes through, and nothing else.
-final class IncomingLinkTests: XCTestCase {
+final class IncomingLinkTests: AppTestCase {
 
     private let backend = MockKeyBackend()
     private let vault = AccountHandle.fixture(id: "vault", devicePath: "/dev/one")
@@ -61,5 +61,38 @@ final class IncomingLinkTests: XCTestCase {
         let message = try backend.sealedMessage("hello", for: vault)
         XCTAssertEqual(try XCTUnwrap(URL(string: message.absoluteString)).absoluteString, message.absoluteString)
         XCTAssertEqual(try XCTUnwrap(URL(string: message.absoluteString(carrier: .app))).host, "hpkeblobv1")
+    }
+}
+
+@MainActor
+extension IncomingLinkTests {
+    func testMessageArrivingWithoutKeyMustSurviveConnection() async throws {
+        let backend = MockKeyBackend()
+        let panel = AppTestFactory.makeStore(backend: backend)
+        await panel.prepareForDisplay()
+        let device = MockKeyBackend.device()
+        let account = Account.fixture(id: "vault", kind: .local)
+        let handle = AccountHandle(account: account, devicePath: device.path)
+        let message = try backend.sealedMessage("public sample", for: handle)
+        panel.handleLink(.sealedMessage(message))
+        backend.devices = [device]
+        backend.accountsByPath[device.path] = [account]
+        backend.pins[device.path] = "1234"
+        await panel.prepareForDisplay()
+        panel.pinDraft = "1234"
+        await panel.submitPin()
+        let router = panel.router as! RecordingWindowRouter
+        XCTAssertTrue(router.openedDecryptors.last?.message == message, "The clicked message was lost before the key arrived")
+    }
+}
+
+@MainActor
+extension IncomingLinkTests {
+    func testLargeMessageLinkIsClassifiedWithoutKeyLinkSizeLimit() async throws {
+        let backend = MockKeyBackend()
+        let handle = AccountHandle.fixture(id: "vault")
+        let message = try backend.sealedMessage(String(repeating: "x", count: 8_000), for: handle)
+        let link = await IncomingLink.classify(message.absoluteString, sealer: backend.messages)
+        if case .sealedMessage = link {} else { XCTFail("A message must not inherit the smaller key-link limit") }
     }
 }

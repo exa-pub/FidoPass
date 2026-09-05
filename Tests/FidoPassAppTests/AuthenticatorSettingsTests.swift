@@ -9,7 +9,7 @@ import TestSupport
 /// happen: nothing is attempted on a locked key, and nothing is offered for a subcommand the
 /// key never advertised — a control that can only fail is worse than no control.
 @MainActor
-final class AuthenticatorSettingsTests: XCTestCase {
+final class AuthenticatorSettingsTests: AppTestCase {
 
     private func makeStore() -> (PanelStore, MockKeyBackend, FidoDevice) {
         let backend = MockKeyBackend()
@@ -92,7 +92,7 @@ final class AuthenticatorSettingsTests: XCTestCase {
 
         XCTAssertEqual(backend.configCalls, ["setMinimumPINLength(8)"])
         XCTAssertEqual(store.devices.state(for: device.path)?.minPINLength, 8)
-        XCTAssertEqual(store.devices.state(for: device.path)?.pinPolicy.minLengthBytes, 8,
+        XCTAssertEqual(store.devices.state(for: device.path)?.pinPolicy.minimumCodePoints, 8,
                        "the PIN field must enforce what the key now demands")
     }
 

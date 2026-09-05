@@ -5,7 +5,7 @@ import SwiftUI
 /// The strip under the panel's content shows a status for four seconds, then the keyboard
 /// hints again. The panel hangs from the menu bar, so any difference in height between the
 /// two moves its bottom edge in front of the user, right after they copied a password.
-final class PanelFooterTests: XCTestCase {
+final class PanelFooterTests: AppTestCase {
 
     @MainActor
     private func height<V: View>(of view: V) -> CGFloat {

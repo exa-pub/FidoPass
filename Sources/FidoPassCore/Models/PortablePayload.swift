@@ -1,16 +1,7 @@
 import Foundation
 
-/// The `user.name` of a portable account in the v1 layout: its masked master key, base64.
-///
-/// `external` is the imported master key XOR-ed with a component derived from the
-/// credential, so it is useless without the key that produced it. Recombining the two
-/// yields the master key, which is what lets a second authenticator reproduce the same
-/// passwords.
-///
-/// Read only. The v2 layout keeps the same 32 bytes in the account's record instead
-/// (`AccountRecord.mask`), and nothing writes this layout any more; it is kept so that every
-/// account written by a released version still reads, and so that the manager can tell key
-/// material from a name and withhold it.
+/// Read-only v1 portable mask: base64(master XOR credential fixed component).
+/// V2 stores these 32 bytes in AccountRecord instead.
 public struct PortablePayload: Hashable, Codable, Sendable {
     public static let externalByteCount = 32
 

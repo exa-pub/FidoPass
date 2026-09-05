@@ -1,11 +1,7 @@
 import SwiftUI
 import FidoPassCore
 
-/// Giving a key its first PIN.
-///
-/// This screen exists because without it a brand-new key is a brick inside FidoPass: the app
-/// would send the user to the PIN field, the key would answer `FIDO_ERR_PIN_NOT_SET`, and the
-/// resulting message advised setting a PIN with no way to do so.
+/// Sets the initial PIN required before a new key can enroll accounts.
 struct SetPINView: View {
     @ObservedObject var store: PanelStore
     @ObservedObject private var form: PinFormModel
@@ -26,14 +22,12 @@ struct SetPINView: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 PanelWarningBox(title: "This PIN belongs to the key, not to FidoPass",
-                              message: "It is not your Mac password and it cannot be reset. Eight wrong entries in a row lock the key permanently, and every account on it goes with it. Choose something you will not have to guess at.")
+                              message: "Choose a PIN for this security key. Too many wrong attempts block it. Resetting the key erases every account and does not recover its passwords.")
 
                 SecureField("New PIN", text: $form.new)
                     .textFieldStyle(.roundedBorder)
                     .focused($focus, equals: .new)
 
-                // A typo in a single field would produce a key whose PIN its owner does not
-                // know — which is a dead key. That is what the second field is for.
                 SecureField("Repeat PIN", text: $form.confirm)
                     .textFieldStyle(.roundedBorder)
                     .focused($focus, equals: .confirm)
