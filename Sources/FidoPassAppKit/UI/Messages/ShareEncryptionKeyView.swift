@@ -5,6 +5,7 @@ import FidoPassCore
 struct ShareEncryptionKeyView: View {
     let key: EncryptionKeyURL
     let account: Account
+    let onEncrypt: () -> Void
     @Environment(\.clipboard) private var clipboard
     @State private var copied = false
 
@@ -27,8 +28,11 @@ struct ShareEncryptionKeyView: View {
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Text("Previously issued links stay valid.").font(.caption).foregroundStyle(.secondary)
             HStack {
-                Text("Previously issued links stay valid.").font(.caption).foregroundStyle(.secondary)
+                Button("Encrypt a message…", action: onEncrypt)
+                    .help("Use this key as the recipient of an encrypted message.")
+                    .accessibilityIdentifier("share-key.encrypt")
                 Spacer()
                 Button(copied ? "Copied" : "Copy encryption key") {
                     clipboard?.copySecret(key.absoluteString, clearAfter: 0)

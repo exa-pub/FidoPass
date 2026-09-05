@@ -34,7 +34,10 @@ final class AuxiliaryWindows {
 
     func showEncryptionKey(_ key: EncryptionKeyURL, for account: Account) {
         encryptionKeyWindow?.close()
-        let view = ShareEncryptionKeyView(key: key, account: account)
+        let view = ShareEncryptionKeyView(key: key, account: account) { [weak self] in
+            self?.encryptionKeyWindow?.close()
+            self?.showEncryptor(key: key)
+        }
             .environment(\.clipboard, container.clipboard)
         let window = makeWindow(title: "Share encryption key", content: AnyView(view), size: nil, resizable: false)
         onClose(of: window) { [weak self] in self?.encryptionKeyWindow = nil }
@@ -42,7 +45,7 @@ final class AuxiliaryWindows {
         present(window)
     }
 
-    /// A clicked recipient key fills the sender; issuing our own key never touches it.
+    /// Explicitly choosing a key fills the sender; issuing a key alone never touches it.
     func showEncryptor(key: EncryptionKeyURL?) {
         if let encryptorWindow, let encryptStore {
             if let key { encryptStore.adopt(key) }
